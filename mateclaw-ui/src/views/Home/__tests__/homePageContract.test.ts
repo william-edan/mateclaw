@@ -20,4 +20,10 @@ describe('home page contract', () => {
     expect(home).toContain("action: 'newChat'")
     expect(home).toContain('agentId')
   })
+
+  it('keeps the home content inset balanced inside the page frame', () => {
+    expect(home).toContain('--home-page-gutter')
+    expect(home).toContain('padding-inline: var(--home-page-gutter)')
+    expect(home).not.toContain('padding-right: 4px')
+  })
 })

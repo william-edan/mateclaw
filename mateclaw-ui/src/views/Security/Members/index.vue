@@ -124,7 +124,7 @@
           </div>
           <div class="modal-body business-modal-body">
             <p>{{ t('security.members.limitModal.desc') }}</p>
-            <img src="/business-qr.svg" :alt="t('security.members.limitModal.desc')" class="business-qr" />
+            <img :src="wechatBusinessQr" :alt="t('security.members.limitModal.desc')" class="business-qr" />
           </div>
           <div class="modal-footer">
             <button class="btn-primary" @click="showLimitDialog = false">
@@ -143,6 +143,7 @@ import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
 import { workspaceTeamApi } from '@/api/index'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import wechatBusinessQr from '@/assets/qrcode/wechat.png'
 import { isMemberLimitError } from './memberLimitError'
 
 const { t } = useI18n()

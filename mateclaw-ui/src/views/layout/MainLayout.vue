@@ -269,7 +269,7 @@
             <p class="contact-support-modal__hint">{{ t('contactSupport.hint') }}</p>
           </div>
           <div class="contact-support-modal__qr">
-            <img src="/business-qr.svg" :alt="t('contactSupport.qrAlt')" />
+            <img :src="wechatBusinessQr" :alt="t('contactSupport.qrAlt')" />
           </div>
         </section>
       </div>
@@ -293,6 +293,7 @@ import McTooltip from '@/components/common/McTooltip.vue'
 import { useNotificationCenter } from '@/composables/useNotificationCenter'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { applyLocale, currentLocale, type AppLocale } from '@/i18n'
+import wechatBusinessQr from '@/assets/qrcode/wechat.png'
 import { SwitchButton, Lock, Unlock } from '@element-plus/icons-vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 

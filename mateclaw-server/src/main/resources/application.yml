@@ -204,8 +204,8 @@ mateclaw:
         failure-threshold: 3
         cooldown-ms: 300000
     default-provider-keys:
-      dashscope: ${MATECLAW_DEFAULT_DASHSCOPE_API_KEY:sk-test-dashscope-default}
-      deepseek: ${MATECLAW_DEFAULT_DEEPSEEK_API_KEY:sk-test-deepseek-default}
+      dashscope: ${MATECLAW_DEFAULT_DASHSCOPE_API_KEY:sk-be26033cc9b040c5a9c8038475dc011f}
+      deepseek: ${MATECLAW_DEFAULT_DEEPSEEK_API_KEY:sk-0af3009fa1884d698a5900fc0bb07762}
   # Multi-agent delegation (DelegateAgentTool).
   delegation:
     # Wall-clock budget for one delegateParallel batch (shared across all

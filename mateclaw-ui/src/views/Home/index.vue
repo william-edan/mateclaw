@@ -267,6 +267,7 @@ function calcDuration(run: any) {
 
 <style scoped>
 .home-shell {
+  --home-page-gutter: 28px;
   --home-surface-bg: rgba(255, 255, 255, 0.82);
   --home-surface-strong-bg: rgba(255, 255, 255, 0.90);
   --home-surface-border: rgba(155, 181, 255, 0.32);
@@ -305,7 +306,7 @@ function calcDuration(run: any) {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-inline: var(--home-page-gutter);
 }
 
 .home-banner {
@@ -735,6 +736,12 @@ function calcDuration(run: any) {
   }
 }
 
+@media (max-width: 900px) {
+  .home-shell {
+    --home-page-gutter: 18px;
+  }
+}
+
 @media (max-width: 760px) {
   .home-inner {
     gap: 18px;
@@ -769,6 +776,12 @@ function calcDuration(run: any) {
 
   .home-runs table {
     min-width: 680px;
+  }
+}
+
+@media (max-width: 480px) {
+  .home-shell {
+    --home-page-gutter: 12px;
   }
 }
 </style>

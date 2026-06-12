@@ -8,7 +8,8 @@ describe('contact support sidebar entry', () => {
     expect(layout).toContain("action: 'contactSupport'")
     expect(layout).toContain("t('nav.contactSupport')")
     expect(layout).toContain('showContactSupport')
-    expect(layout).toContain('/business-qr.svg')
+    expect(layout).toContain("import wechatBusinessQr from '@/assets/qrcode/wechat.png'")
+    expect(layout).toContain('<img :src="wechatBusinessQr" :alt="t(\'contactSupport.qrAlt\')" />')
   })
 
   it('defines localized contact support copy', () => {
