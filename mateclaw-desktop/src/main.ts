@@ -28,7 +28,7 @@ function localServerUrl(port: number): string {
 }
 
 function appRoot(): string {
-  return app.isPackaged ? process.resourcesPath : path.resolve(__dirname, '..')
+  return app.isPackaged ? process.resourcesPath : path.resolve(__dirname, '..', 'resources')
 }
 
 function appContentRoot(): string {
@@ -150,7 +150,7 @@ async function waitForServer(port: number): Promise<void> {
     if (await ping(url)) return
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
-  throw new Error(`MateClaw backend did not become ready within ${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.`)
+  throw new Error(`化帆AI backend did not become ready within ${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.`)
 }
 
 function startBackend(port: number): void {
@@ -201,10 +201,10 @@ async function ensureBackend(port: number): Promise<void> {
 function installMenu(port: number): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'MateClaw',
+      label: '化帆AI',
       submenu: [
         {
-          label: 'Open MateClaw',
+          label: '打开 化帆AI',
           click: () => {
             mainWindow?.focus()
             void mainWindow?.loadURL(localServerUrl(port))

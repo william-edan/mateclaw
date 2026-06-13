@@ -72,7 +72,7 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
     private String callModel(ChatModel chatModel, List<CommentMatchRule> rules, List<CommentMatchResult> batch)
             throws JsonProcessingException {
         String system = """
-                你是 MateClaw 抖音获客评论筛选器。你的任务是判断每条评论是否符合用户给出的获客匹配规则。
+                你是 化帆AI 抖音获客评论筛选器。你的任务是判断每条评论是否符合用户给出的获客匹配规则。
                 只根据评论正文判断，不要因为作者名、头像或主页信息而命中。
                 不要扩大为泛泛兴趣用户；只有评论表达了与规则一致的需求、痛点、抱怨、购买/咨询意图或明确观点时才命中。
                 输出必须是严格 JSON，不要 Markdown，不要解释。格式：

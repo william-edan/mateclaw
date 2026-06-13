@@ -2,8 +2,8 @@
   "name": "mateclaw-desktop",
   "version": "1.5.0",
   "private": true,
-  "description": "MateClaw desktop shell",
-  "author": "MateClaw",
+  "description": "化帆AI desktop shell",
+  "author": "化帆AI",
   "main": "dist/main.js",
   "type": "module",
   "scripts": {
@@ -20,10 +20,15 @@
     "electron-builder": "^26.0.12",
     "typescript": "^5.7.2"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  },
   "build": {
     "appId": "vip.mate.mateclaw",
-    "productName": "MateClaw",
-    "copyright": "Copyright © 2026 MateClaw",
+    "productName": "化帆AI",
+    "copyright": "Copyright © 2026 化帆AI",
     "directories": {
       "output": "release"
     },
@@ -60,8 +65,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "MateClaw",
-      "artifactName": "MateClaw_${version}_${arch}_Setup.${ext}"
+      "shortcutName": "化帆AI",
+      "artifactName": "化帆AI_${version}_${arch}_Setup.${ext}"
     }
   }
 }

@@ -53,7 +53,7 @@ public class WorkflowDraftGenerator {
      *  text block so the file is the canonical version (no resource
      *  loading, no separate prompt-management infra in v0). */
     static final String SYSTEM_PROMPT = """
-            你是 MateClaw 的工作流草稿生成器。你的任务是把用户用自然语言描述的业务流程，转换成 MateClaw RFC-29 v0 workflow JSON 草稿。
+            你是 化帆AI 的工作流草稿生成器。你的任务是把用户用自然语言描述的业务流程，转换成 化帆AI RFC-29 v0 workflow JSON 草稿。
 
             你只输出 JSON，不输出 Markdown，不输出解释，不输出代码块。
 
