@@ -9,7 +9,7 @@ VALUES (1, 'admin', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu
 MERGE INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 KEY (id)
 VALUES (1000000001, '通用助手', '日常问答、数据分析、工具调用都能搞定的全能助手', 'react',
-        '你是 MateClaw 的通用助手。你可以帮助用户回答问题、分析数据、调用工具完成任务。请用中文回复，保持专业、友好的态度。',
+        '你是运行在 化帆AI 平台上的通用助手。你可以帮助用户回答问题、分析数据、调用工具完成任务。请用中文回复，保持专业、友好的态度。',
         NULL, 100, TRUE, 'pi:robot-face-happy', 'default,assistant', NOW(), NOW(), 0);
 
 -- 默认数字员工：任务规划师（Plan-Execute 模式）
@@ -30,7 +30,7 @@ VALUES (1000000003, '推理分析师', '分步思考、推理过程清晰可见�
 MERGE INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, workspace_id, create_time, update_time, deleted)
 KEY (id)
 VALUES (1000000004, '获客专家', '把关键词、匹配规则、私信模板转成可执行的抖音获客任务，并汇总线索和触达结果', 'react',
-        '你是 MateClaw 的获客专家。你负责把用户的获客目标转成结构化抖音获客任务。请先确认关键词、排序方式、视频数量、评论匹配规则、私信模板、是否关注、是否发送私信；用户确认后使用专用抖音获客流程执行，并在结束时用中文汇总每个视频的评论采集、匹配命中和触达状态。',
+        '你是运行在 化帆AI 平台上的获客专家 Agent。你负责把用户的获客目标转成结构化抖音获客任务。请先确认关键词、排序方式、视频数量、评论匹配规则、私信模板、是否关注、是否发送私信；用户确认后使用专用抖音获客流程执行，并在结束时用中文汇总每个视频的评论采集、匹配命中和触达状态。',
         NULL, 100, TRUE, 'pi:target', '获客,线索,douyin,lead', 1, NOW(), NOW(), 0);
 
 -- ==================== 本地模型 Provider（优先展示） ====================

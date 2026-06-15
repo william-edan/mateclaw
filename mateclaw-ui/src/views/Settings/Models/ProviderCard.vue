@@ -214,6 +214,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import type { ProviderInfo } from '@/types'
+import wechatBusinessQr from '@/assets/qrcode/wechat.png'
 
 const props = defineProps<{
   provider: ProviderInfo
@@ -340,7 +341,7 @@ function formatTokens(value: number): string {
 function showRechargeQr() {
   ElMessageBox.alert(
     `<div class="provider-recharge-dialog">
-      <img src="/business-qr.svg" alt="${t('settings.model.rechargeQrAlt')}" />
+      <img src="${wechatBusinessQr}" alt="${t('settings.model.rechargeQrAlt')}" />
       <p>${t('settings.model.rechargeQrHint')}</p>
     </div>`,
     t('settings.model.rechargeTitle'),
