@@ -311,6 +311,95 @@ class ExtensionDouyinBrowserAdapterSafetyTest {
     }
 
     @Test
+    void followAndDraftRetriesAuthorOpenAfterDeadlineExceeded() {
+        ExtensionBrowserTool browser = mock(ExtensionBrowserTool.class);
+        ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
+                browser,
+                new ObjectMapper(),
+                mock(DouyinCommentCollector.class));
+        DouyinCommentItem comment = new DouyinCommentItem(
+                "video",
+                "comment",
+                null,
+                "霞姐一百岁",
+                "https://www.douyin.com/user/MS4w",
+                null,
+                "不建议大家用易企秀，慢出心脏病了。",
+                null,
+                null,
+                null,
+                null);
+        String profile = profilePage("霞姐一百岁");
+        String dmPage = dmPage("霞姐一百岁", "你好");
+        String video = videoPage();
+
+        when(browser.service_open_author_from_comment_main(
+                eq(comment.text()), eq(comment.authorName()), eq(comment.authorProfileUrl())))
+                .thenReturn(
+                        "{\"ok\":false,\"code\":\"DEADLINE_EXCEEDED\",\"message\":\"open author timed out\"}",
+                        openAuthorResult(102L));
+        when(browser.service_observe_tab(102L, "all")).thenReturn(profile, dmPage, dmPage);
+        when(browser.service_click_profile_action_tab(102L, List.of("私信", "发私信", "Message", "发消息")))
+                .thenReturn(okResult());
+        when(browser.service_type_dm_draft_tab(102L, "你好", false)).thenReturn(okResult());
+        when(browser.service_close_tab(102L)).thenReturn(okResult());
+        when(browser.service_observe_main("all")).thenReturn(video);
+
+        EngagementResult result = adapter.followAndDraft(comment, "你好", false);
+
+        assertThat(result.status()).isEqualTo("succeeded");
+        assertThat(result.draftTyped()).isTrue();
+        verify(browser, times(2)).service_open_author_from_comment_main(
+                eq(comment.text()), eq(comment.authorName()), eq(comment.authorProfileUrl()));
+        verify(browser).service_close_tab(102L);
+    }
+
+    @Test
+    void followAndDraftClosesUnconfirmedAuthorTabBeforeRetrying() {
+        ExtensionBrowserTool browser = mock(ExtensionBrowserTool.class);
+        ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
+                browser,
+                new ObjectMapper(),
+                mock(DouyinCommentCollector.class));
+        DouyinCommentItem comment = new DouyinCommentItem(
+                "video",
+                "comment",
+                null,
+                "霞姐一百岁",
+                "https://www.douyin.com/user/MS4w",
+                null,
+                "不建议大家用易企秀，慢出心脏病了。",
+                null,
+                null,
+                null,
+                null);
+        String profile = profilePage("霞姐一百岁");
+        String dmPage = dmPage("霞姐一百岁", "你好");
+        String video = videoPage();
+
+        when(browser.service_open_author_from_comment_main(
+                eq(comment.text()), eq(comment.authorName()), eq(comment.authorProfileUrl())))
+                .thenReturn(openAuthorResult(101L), openAuthorResult(102L));
+        when(browser.service_observe_tab(101L, "all"))
+                .thenReturn("{\"ok\":false,\"code\":\"NO_TARGET_TAB\",\"message\":\"could not resolve tab_ref\"}");
+        when(browser.service_close_tab(101L)).thenReturn(okResult());
+        when(browser.service_observe_tab(102L, "all")).thenReturn(profile, dmPage, dmPage);
+        when(browser.service_click_profile_action_tab(102L, List.of("私信", "发私信", "Message", "发消息")))
+                .thenReturn(okResult());
+        when(browser.service_type_dm_draft_tab(102L, "你好", false)).thenReturn(okResult());
+        when(browser.service_close_tab(102L)).thenReturn(okResult());
+        when(browser.service_observe_main("all")).thenReturn(video);
+
+        EngagementResult result = adapter.followAndDraft(comment, "你好", false);
+
+        assertThat(result.status()).isEqualTo("succeeded");
+        verify(browser).service_close_tab(101L);
+        verify(browser).service_close_tab(102L);
+        verify(browser, times(2)).service_open_author_from_comment_main(
+                eq(comment.text()), eq(comment.authorName()), eq(comment.authorProfileUrl()));
+    }
+
+    @Test
     void topSearchSubmitButtonRejectsAiSearchAndUsesHeaderSearchButton() {
         ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
                 mock(ExtensionBrowserTool.class),
@@ -328,6 +417,32 @@ class ExtensionDouyinBrowserAdapterSafetyTest {
         assertThat(point).isNotNull();
         assertThat(point.x()).isEqualTo(822d);
         assertThat(point.y()).isEqualTo(38d);
+    }
+
+    private static String okResult() {
+        return "{\"ok\":true}";
+    }
+
+    private static String openAuthorResult(long tabId) {
+        return "{\"ok\":true,\"results\":[{\"payload\":{\"tabId\":" + tabId + "}}]}";
+    }
+
+    private static String videoPage() {
+        return """
+                {"ok":true,"url":"https://www.douyin.com/jingxuan/search/易企秀?modal_id=6689257066038676740","title":"易企秀 - 抖音","viewport":{"w":1280,"h":800},"tree":"Button[ref=ref_1, frame=0]: 评论 @{1180,320 80x44}"}
+                """;
+    }
+
+    private static String profilePage(String author) {
+        return """
+                {"ok":true,"url":"https://www.douyin.com/user/MS4w","title":"%s - 抖音","viewport":{"w":1280,"h":800},"tree":"Heading[ref=ref_1, frame=0]: %s @{520,90 180x36}\\nStaticText[ref=ref_2, frame=0]: 已关注 @{912,224 86x36}\\nStaticText[ref=ref_3, frame=0]: 粉丝 32 @{520,150 90x24}"}
+                """.formatted(author, author);
+    }
+
+    private static String dmPage(String author, String draft) {
+        return """
+                {"ok":true,"url":"https://www.douyin.com/im/%s","title":"私信 - 抖音","viewport":{"w":1280,"h":800},"tree":"StaticText[ref=ref_1, frame=0]: 私信 @{420,80 80x28}\\nStaticText[ref=ref_2, frame=0]: 发送消息 @{520,140 120x28}\\nTextbox[ref=ref_3, frame=0]: %s @{520,700 360x44}"}
+                """.formatted(author, draft);
     }
 
     @Test
@@ -1591,15 +1706,55 @@ class ExtensionDouyinBrowserAdapterSafetyTest {
         assertThat(result.comments().getFirst().text()).isEqualTo("支持");
         assertThat(result.comments().getFirst().authorName()).isEqualTo("Ly");
         assertThat(result.complete()).isTrue();
-        assertThat(result.stopReason()).isEqualTo("END_OF_LIST");
+        assertThat(result.stopReason()).isEqualTo("NETWORK_HAS_MORE_FALSE");
         assertThat(result.metadata()).containsEntry("networkObservedComments", 1L);
+        assertThat(result.metadata()).containsEntry("networkObservedPages", 1);
+        assertThat(result.metadata()).containsEntry("networkHasMoreFalseObserved", true);
         assertThat(result.metadata()).containsEntry("primaryCollectionSource", "network_observed");
-        verify(browser, atLeastOnce()).service_scroll_region_main(
+        verify(browser, never()).service_scroll_region_main(
                 eq("douyin.comments"), eq("down"), anyDouble(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test
-    void collectAllCommentsPrefersUiDeclaredCountOverNetworkAggregateTotal() {
+    void collectAllCommentsDoesNotMixDomItemsAfterNetworkTerminalPage() {
+        ExtensionBrowserTool browser = mock(ExtensionBrowserTool.class);
+        ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
+                browser,
+                new ObjectMapper(),
+                new DouyinCommentCollector());
+        DouyinBrowserAdapter.RegionInfo region = DouyinBrowserAdapter.RegionInfo.comments(
+                960d, 80d, 520d, 760d, "test");
+        String page = """
+                {"ok":true,"url":"https://www.douyin.com/video/6689257066038676740","title":"易企秀 - 抖音","viewport":{"w":1920,"h":855},"tree":"StaticText[ref=ref_1, frame=0]: 全部评论 1 @{980,88 140x28}\\nTextbox[ref=ref_2, frame=0]: 说点什么 @{980,800 280x44}"}
+                """;
+        when(browser.service_observe_main("all")).thenReturn(page);
+        when(browser.service_douyin_comment_network_main("drain", null, null, null)).thenReturn("""
+                {"ok":true,"results":[{"payload":{"pages":[
+                  {"url":"https://www-hj.douyin.com/aweme/v1/web/comment/list/?aweme_id=6689257066038676740&cursor=0","requestId":"r1","status":200,"base64Encoded":false,"body":"{\\"aweme_id\\":\\"6689257066038676740\\",\\"total\\":1,\\"has_more\\":false,\\"comments\\":[{\\"cid\\":\\"c1\\",\\"text\\":\\"网络评论\\",\\"user\\":{\\"nickname\\":\\"网络用户\\",\\"sec_uid\\":\\"MS4w\\"}}]}"}
+                ]}}]}
+                """);
+        when(browser.service_extract_region_main(
+                eq("douyin.comments"),
+                eq(80),
+                org.mockito.ArgumentMatchers.anyInt())).thenReturn("""
+                {"ok":true,"results":[{"payload":{"items":[{"author":"DOM用户","text":"DOM评论"}]}}]}
+                """);
+
+        var result = adapter.collectAllComments(region);
+
+        assertThat(result.comments()).hasSize(1);
+        assertThat(result.comments().getFirst().text()).isEqualTo("网络评论");
+        assertThat(result.metadata()).containsEntry("networkObservedComments", 1L);
+        assertThat(result.metadata()).containsEntry("extractedRegionComments", 0L);
+        assertThat(result.metadata()).containsEntry("primaryCollectionSource", "network_observed");
+        verify(browser, never()).service_extract_region_main(
+                eq("douyin.comments"),
+                eq(80),
+                org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void collectAllCommentsUsesNetworkDeclaredCountOverUiTextWhenNetworkIsAvailable() {
         ExtensionBrowserTool browser = mock(ExtensionBrowserTool.class);
         ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
                 browser,
@@ -1628,14 +1783,15 @@ class ExtensionDouyinBrowserAdapterSafetyTest {
 
         var result = adapter.collectAllComments(region);
 
-        assertThat(result.declaredCommentCount()).isEqualTo(90);
-        assertThat(result.complete()).isFalse();
-        assertThat(result.stopReason()).isEqualTo("END_OF_LIST_DECLARED_MISMATCH");
-        assertThat(result.metadata()).containsEntry("remainingDeclaredComments", 89);
+        assertThat(result.declaredCommentCount()).isEqualTo(144);
+        assertThat(result.complete()).isTrue();
+        assertThat(result.stopReason()).isEqualTo("NETWORK_HAS_MORE_FALSE");
+        assertThat(result.metadata()).containsEntry("remainingDeclaredComments", 143);
+        assertThat(result.metadata()).containsEntry("declaredCountMismatchReason", "declared_count_may_include_collapsed_replies");
     }
 
     @Test
-    void collectAllCommentsUsesA11yVisibleCommentsWhenDomExtractionIsEmpty() {
+    void collectAllCommentsDoesNotUseA11yFallbackWhenNetworkPagesAreUnavailable() {
         ExtensionBrowserTool browser = mock(ExtensionBrowserTool.class);
         ExtensionDouyinBrowserAdapter adapter = new ExtensionDouyinBrowserAdapter(
                 browser,
@@ -1659,16 +1815,12 @@ class ExtensionDouyinBrowserAdapterSafetyTest {
 
         var result = adapter.collectAllComments(region);
 
-        assertThat(result.comments()).hasSize(2);
-        assertThat(result.comments()).extracting(DouyinCommentItem::text)
-                .containsExactly(
-                        "听了半天就是在卖广告",
-                        "又是转折点，又是财富！你们这些博主天天的服了");
+        assertThat(result.comments()).isEmpty();
         assertThat(result.complete()).isFalse();
-        assertThat(result.stopReason()).isEqualTo("END_OF_LIST_A11Y_ONLY");
-        assertThat(result.metadata()).containsEntry("a11yTreeComments", 2L);
+        assertThat(result.stopReason()).isEqualTo("NETWORK_PAGES_NOT_OBSERVED");
+        assertThat(result.metadata()).containsEntry("a11yTreeComments", 0L);
         assertThat(result.metadata()).containsEntry("primaryCollectionSource", "a11y_tree");
-        assertThat(result.metadata()).containsEntry("domExtractionUnavailable", true);
+        assertThat(result.metadata()).containsEntry("networkOnlyCollection", true);
         verify(browser, atLeastOnce()).service_scroll_region_main(
                 eq("douyin.comments"), eq("down"), anyDouble(), org.mockito.ArgumentMatchers.anyLong());
     }

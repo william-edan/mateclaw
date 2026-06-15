@@ -249,14 +249,16 @@ public class DouyinCommentCollector {
         if (body == null || body.isMissingNode() || body.isNull()) {
             return NetworkCommentPage.empty();
         }
-        String videoKey = firstTextValue(body, "aweme_id", "awemeId", "group_id", "groupId", "item_id", "itemId");
+        String videoKey = firstTextValueDeep(body, "aweme_id", "awemeId", "group_id", "groupId", "item_id", "itemId");
         if (videoKey.isBlank()) {
             videoKey = fallbackVideoKey;
         }
-        String cursor = firstTextValue(body, "cursor", "current_cursor", "currentCursor", "offset");
-        String nextCursor = firstTextValue(body, "next_cursor", "nextCursor", "cursor", "offset");
-        boolean hasMore = firstBooleanValue(body, "has_more", "hasMore", "has_next", "hasNext", "more");
-        int declared = firstIntValue(body, "total", "total_count", "totalCount", "comment_total", "commentTotal");
+        String cursor = firstTextValueDeep(body, "cursor", "current_cursor", "currentCursor", "offset");
+        String nextCursor = firstTextValueDeep(body, "next_cursor", "nextCursor", "cursor", "offset");
+        boolean hasMoreKnown = firstFieldExistsDeep(body, "has_more", "hasMore", "has_next", "hasNext", "more");
+        boolean hasMore = hasMoreKnown
+                && firstBooleanValueDeep(body, "has_more", "hasMore", "has_next", "hasNext", "more");
+        int declared = firstIntValueDeep(body, "total", "total_count", "totalCount", "comment_total", "commentTotal");
 
         LinkedHashMap<String, DouyinCommentItem> out = new LinkedHashMap<>();
         Set<String> visited = new HashSet<>();
@@ -267,6 +269,7 @@ public class DouyinCommentCollector {
                 cursor,
                 nextCursor,
                 hasMore,
+                hasMoreKnown,
                 page == null ? "" : page.path("url").asText(""));
     }
 
@@ -428,6 +431,14 @@ public class DouyinCommentCollector {
         return "";
     }
 
+    private String firstTextValueDeep(JsonNode node, String... names) {
+        JsonNode value = firstValueDeep(node, List.of(names), 0);
+        if (value != null && value.isValueNode() && !value.asText("").isBlank()) {
+            return clean(value.asText(""));
+        }
+        return "";
+    }
+
     private boolean firstBooleanValue(JsonNode node, String... names) {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return false;
@@ -447,6 +458,39 @@ public class DouyinCommentCollector {
         return false;
     }
 
+    private boolean firstFieldExists(JsonNode node, String... names) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return false;
+        }
+        for (String name : names) {
+            if (node.has(name) && !node.path(name).isMissingNode() && !node.path(name).isNull()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean firstFieldExistsDeep(JsonNode node, String... names) {
+        return firstValueDeep(node, List.of(names), 0) != null;
+    }
+
+    private boolean firstBooleanValueDeep(JsonNode node, String... names) {
+        JsonNode value = firstValueDeep(node, List.of(names), 0);
+        if (value == null || value.isMissingNode() || value.isNull()) {
+            return false;
+        }
+        if (value.isBoolean()) {
+            return value.asBoolean(false);
+        }
+        if (value.isNumber()) {
+            return value.asInt(0) > 0;
+        }
+        if (value.isTextual() && !value.asText("").isBlank()) {
+            return "true".equalsIgnoreCase(value.asText("")) || "1".equals(value.asText(""));
+        }
+        return false;
+    }
+
     private int firstIntValue(JsonNode node, String... names) {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return 0;
@@ -461,6 +505,51 @@ public class DouyinCommentCollector {
             }
         }
         return 0;
+    }
+
+    private int firstIntValueDeep(JsonNode node, String... names) {
+        JsonNode value = firstValueDeep(node, List.of(names), 0);
+        if (value == null || value.isMissingNode() || value.isNull()) {
+            return 0;
+        }
+        if (value.isNumber()) {
+            return value.asInt(0);
+        }
+        if (value.isTextual() && value.asText("").matches("\\d+")) {
+            return Integer.parseInt(value.asText(""));
+        }
+        return 0;
+    }
+
+    private JsonNode firstValueDeep(JsonNode node, List<String> names, int depth) {
+        if (node == null || node.isMissingNode() || node.isNull() || depth > 5) {
+            return null;
+        }
+        if (node.isObject()) {
+            for (String name : names) {
+                JsonNode direct = node.path(name);
+                if (!direct.isMissingNode() && !direct.isNull()) {
+                    return direct;
+                }
+            }
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                JsonNode found = firstValueDeep(fields.next().getValue(), names, depth + 1);
+                if (found != null) {
+                    return found;
+                }
+            }
+            return null;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                JsonNode found = firstValueDeep(child, names, depth + 1);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private String firstUrlFromNode(JsonNode node) {
@@ -1012,6 +1101,7 @@ public class DouyinCommentCollector {
             String cursor,
             String nextCursor,
             boolean hasMore,
+            boolean hasMoreKnown,
             String sourceUrl) {
         public NetworkCommentPage {
             comments = comments == null ? List.of() : List.copyOf(comments);
@@ -1021,7 +1111,7 @@ public class DouyinCommentCollector {
         }
 
         static NetworkCommentPage empty() {
-            return new NetworkCommentPage(List.of(), 0, "", "", false, "");
+            return new NetworkCommentPage(List.of(), 0, "", "", false, false, "");
         }
     }
 

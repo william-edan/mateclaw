@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import leadPage from '../LeadAcquisition/index.vue?raw'
 import livePanel from '../../components/lead/LeadRunLivePanel.vue?raw'
+import finalSummary from '../../components/lead/LeadRunFinalSummary.vue?raw'
 import runResult from '../../components/lead/DouyinLeadRunResult.vue?raw'
 import api from '../../api/index.ts?raw'
 import chatConsole from '../ChatConsole.vue?raw'
@@ -19,7 +20,13 @@ describe('lead acquisition experience', () => {
     expect(leadPage).toContain('loadTemplates')
     expect(leadPage).toContain('saveCurrentTemplate')
     expect(leadPage).toContain('deleteTemplate')
-    expect(leadPage).toContain('执行环境')
+    expect(leadPage).toContain('评论匹配目标')
+    expect(leadPage).toContain('描述匹配哪些评论')
+    expect(leadPage).toContain('有意向的客户')
+    expect(leadPage).toContain('体验不好的用户')
+    expect(leadPage).toContain('matchDescription')
+    expect(leadPage).toContain('matchExamples')
+    expect(leadPage).not.toContain('执行环境')
     expect(leadPage).toContain('最近任务')
     expect(leadPage).toContain('线索池')
     expect(leadPage).toContain('统计看板')
@@ -45,8 +52,8 @@ describe('lead acquisition experience', () => {
     expect(leadPage).toContain('<BrowserPairingPanel embedded compact />')
     expect(leadPage).toContain('const browserPanelOpen = ref(false)')
     expect(leadPage).toContain('v-if="browserPanelOpen"')
-    expect(leadPage).toContain('function toggleBrowserPanel')
-    expect(leadPage).toContain('function focusBrowserPanel')
+    expect(leadPage).toContain('function openBrowserPanel')
+    expect(leadPage).toContain('function closeBrowserPanel')
     expect(leadPage).toContain('<LeadRunLivePanel')
     expect(leadPage).toContain('@update:run="handleLiveRunUpdate"')
     expect(leadPage).toContain("mcToast.success('抖音获客任务已启动')")
@@ -87,8 +94,9 @@ describe('lead acquisition experience', () => {
     expect(livePanel).toContain('实时连接恢复中，已切换为 2 秒刷新一次。')
     expect(livePanel).toContain('window.setInterval')
     expect(livePanel).toContain('leadAcquisitionApi.getDouyinRun')
-    expect(livePanel).toContain('最终汇总')
-    expect(livePanel).toContain('技术明细')
+    expect(livePanel).toContain('LeadRunFinalSummary')
+    expect(finalSummary).toContain('最终汇总')
+    expect(finalSummary).not.toContain('技术明细')
     expect(runResult).toContain('展开评论明细')
     expect(runResult).toContain('panel-scroll-body')
   })

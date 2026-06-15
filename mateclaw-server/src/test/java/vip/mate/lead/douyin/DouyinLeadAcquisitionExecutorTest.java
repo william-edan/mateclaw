@@ -310,6 +310,72 @@ class DouyinLeadAcquisitionExecutorTest {
     }
 
     @Test
+    void duplicateMatchedAuthorIsEngagedOncePerVideo() {
+        FakeDouyinBrowserAdapter browser = new FakeDouyinBrowserAdapter();
+        DouyinCommentItem first = FakeDouyinBrowserAdapter.comment("dup-1", "同一个作者", "目标评论 第一条");
+        DouyinCommentItem second = FakeDouyinBrowserAdapter.comment("dup-2", "同一个作者", "目标评论 第二条");
+        browser.collection = new CommentCollectionResult(
+                List.of(first, second),
+                2,
+                true,
+                "END_OF_LIST",
+                1);
+        LeadPersistenceService persistence = mock(LeadPersistenceService.class);
+        AgentRunKernel runKernel = mock(AgentRunKernel.class);
+        StepLedgerService steps = mock(StepLedgerService.class);
+        RunEventPublisher events = mock(RunEventPublisher.class);
+        RunCancellationService cancellation = mock(RunCancellationService.class);
+        AtomicLong stepIds = new AtomicLong(1);
+        when(cancellation.isCancellationRequested(10L)).thenReturn(false);
+        when(steps.openStep(any(AgentStepRequest.class))).thenAnswer(invocation -> {
+            AgentStepEntity step = new AgentStepEntity();
+            step.setId(stepIds.getAndIncrement());
+            step.setRunId(10L);
+            step.setStepKey(invocation.getArgument(0, AgentStepRequest.class).stepKey());
+            return step;
+        });
+        LeadProfileEntity profile = new LeadProfileEntity();
+        profile.setId(33L);
+        when(persistence.saveProfile(eq(20L), eq(10L), any())).thenReturn(profile);
+        when(persistence.findCommentId(eq(20L), eq("dup-1"))).thenReturn(44L);
+
+        DouyinLeadAcquisitionExecutor executor = new DouyinLeadAcquisitionExecutor(
+                browser,
+                new CommentMatcher(),
+                persistence,
+                runKernel,
+                steps,
+                events,
+                cancellation);
+
+        executor.execute(10L, 20L, new DouyinLeadAcquisitionInput(
+                "易企秀",
+                "most_liked",
+                1,
+                List.of(CommentMatchRule.keyword("目标评论")),
+                "你好",
+                false,
+                true));
+
+        assertThat(browser.calls).containsExactly(
+                "search",
+                "sort",
+                "open_video:0",
+                "open_comments",
+                "detect_region",
+                "collect_comments",
+                "engage:同一个作者");
+        verify(persistence).markMatches(eq(20L),
+                argThat(matches -> matches != null && matches.size() == 2));
+        verify(persistence).saveEngagement(eq(20L), eq(10L), eq(33L), eq(44L),
+                eq("dm_draft"), any(), eq("你好"));
+        verify(persistence).completeTask(eq(20L), eq("succeeded"),
+                argThat((DouyinLeadRunSummary summary) -> summary != null
+                        && summary.matchedComments() == 2
+                        && summary.engagementsCreated() == 1));
+    }
+
+    @Test
     void collectionOnlyDebugRunSkipsMatchingWhenNoRuleProvided() {
         FakeDouyinBrowserAdapter browser = new FakeDouyinBrowserAdapter();
         LeadPersistenceService persistence = mock(LeadPersistenceService.class);
@@ -365,7 +431,7 @@ class DouyinLeadAcquisitionExecutorTest {
     }
 
     @Test
-    void sendDmRunFailsWhenDraftTypedButSendIsNotConfirmed() {
+    void sendDmFailureIsRecordedWithoutBlockingVideoOrRun() {
         FakeDouyinBrowserAdapter browser = new FakeDouyinBrowserAdapter();
         browser.engagement = new EngagementResult(
                 browser.exact,
@@ -429,17 +495,90 @@ class DouyinLeadAcquisitionExecutorTest {
                 argThat(result -> "failed".equals(result.status())
                         && "DM_SEND_NOT_CONFIRMED".equals(result.failureCode())),
                 eq("你好"));
-        verify(persistence).completeTask(eq(20L), eq("failed"),
+        verify(persistence).completeTask(eq(20L), eq("succeeded"),
                 argThat((DouyinLeadRunSummary summary) -> summary != null
                         && summary.requestedVideoLimit() == 1
                         && summary.processedVideos() == 1
-                        && summary.succeededVideos() == 0
-                        && summary.failedVideos() == 1
+                        && summary.succeededVideos() == 1
+                        && summary.failedVideos() == 0
                         && summary.engagementsCreated() == 1
-                        && "DM_SEND_NOT_CONFIRMED".equals(summary.videoResults().getFirst().get("failureCode"))));
-        verify(runKernel).finishFailed(eq(10L), eq("DM_SEND_NOT_CONFIRMED"),
-                eq("DM_SEND_NOT_CONFIRMED: 未能确认私信已发送"));
-        verify(runKernel, never()).finishSucceeded(eq(10L), any());
+                        && "".equals(summary.videoResults().getFirst().get("failureCode"))));
+        verify(runKernel).finishSucceeded(eq(10L), eq("lead-task:20"));
+        verify(runKernel, never()).finishFailed(eq(10L), any(), any());
+    }
+
+    @Test
+    void incompleteCollectionStillMatchesAndEngagesCollectedCommentsWhenRulesExist() {
+        FakeDouyinBrowserAdapter browser = new FakeDouyinBrowserAdapter();
+        browser.collection = new CommentCollectionResult(
+                List.of(browser.exact),
+                50,
+                false,
+                "NETWORK_NOT_ADVANCING",
+                12,
+                Map.of("partialCollection", true));
+        LeadPersistenceService persistence = mock(LeadPersistenceService.class);
+        AgentRunKernel runKernel = mock(AgentRunKernel.class);
+        StepLedgerService steps = mock(StepLedgerService.class);
+        RunEventPublisher events = mock(RunEventPublisher.class);
+        RunCancellationService cancellation = mock(RunCancellationService.class);
+        AtomicLong stepIds = new AtomicLong(1);
+        when(cancellation.isCancellationRequested(10L)).thenReturn(false);
+        when(steps.openStep(any(AgentStepRequest.class))).thenAnswer(invocation -> {
+            AgentStepEntity step = new AgentStepEntity();
+            step.setId(stepIds.getAndIncrement());
+            step.setRunId(10L);
+            step.setStepKey(invocation.getArgument(0, AgentStepRequest.class).stepKey());
+            return step;
+        });
+        LeadProfileEntity profile = new LeadProfileEntity();
+        profile.setId(33L);
+        when(persistence.saveProfile(eq(20L), eq(10L), any())).thenReturn(profile);
+        when(persistence.findCommentId(eq(20L), eq("exact"))).thenReturn(44L);
+
+        DouyinLeadAcquisitionExecutor executor = new DouyinLeadAcquisitionExecutor(
+                browser,
+                new CommentMatcher(),
+                persistence,
+                runKernel,
+                steps,
+                events,
+                cancellation);
+
+        executor.execute(10L, 20L, new DouyinLeadAcquisitionInput(
+                "openclaw",
+                "most_liked",
+                1,
+                List.of(CommentMatchRule.keyword("对于99%的人用豆包就行了。")),
+                "你好",
+                false,
+                true));
+
+        assertThat(browser.calls).containsExactly(
+                "search",
+                "sort",
+                "open_video:0",
+                "open_comments",
+                "detect_region",
+                "collect_comments",
+                "engage:Ly");
+        verify(persistence).saveComments(eq(20L), eq(10L), any());
+        verify(persistence).markMatches(eq(20L),
+                argThat(matches -> matches != null && matches.size() == 1
+                        && "exact".equals(matches.getFirst().comment().commentKey())));
+        verify(persistence).saveEngagement(eq(20L), eq(10L), eq(33L), eq(44L),
+                eq("dm_draft"), any(), eq("你好"));
+        verify(persistence).completeTask(eq(20L), eq("succeeded"),
+                argThat((DouyinLeadRunSummary summary) -> summary != null
+                        && summary.requestedVideoLimit() == 1
+                        && summary.processedVideos() == 1
+                        && summary.succeededVideos() == 1
+                        && summary.failedVideos() == 0
+                        && summary.matchedComments() == 1
+                        && "COMMENT_COLLECTION_PARTIAL".equals(
+                                summary.videoResults().getFirst().get("warningCode"))));
+        verify(runKernel).finishSucceeded(eq(10L), eq("lead-task:20"));
+        verify(runKernel, never()).finishFailed(eq(10L), any(), any());
     }
 
     @Test

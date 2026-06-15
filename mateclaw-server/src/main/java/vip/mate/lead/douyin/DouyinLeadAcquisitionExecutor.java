@@ -24,9 +24,11 @@ import vip.mate.os.run.runtime.StepCloseRequest;
 import vip.mate.os.run.runtime.StepLedgerService;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 @Service
@@ -61,25 +63,31 @@ public class DouyinLeadAcquisitionExecutor {
         DouyinLeadRunSummary summary = DouyinLeadRunSummary.empty(input.videoLimit());
         try {
             runKernel.startRun(runId);
-            events.publish(new RunEvent(runId, null, "lead.search.started", "info", payload(
-                    "keyword", input.keyword(),
-                    "requestedVideoLimit", input.videoLimit()), null));
-            DouyinBrowserAdapter.BrowserObservation searchObservation = step(runId, "open_douyin_search", "browser.act",
-                    () -> browser.openDouyinAndSearch(input));
-            events.publish(new RunEvent(runId, null, "lead.search.completed", "info", payload(
-                    "keyword", input.keyword(),
-                    "url", searchObservation.url(),
-                    "title", searchObservation.title()), null));
+            if (input.startFromCurrentVideo()) {
+                events.publish(new RunEvent(runId, null, "lead.current_video.started", "info", payload(
+                        "keyword", input.keyword(),
+                        "requestedVideoLimit", input.videoLimit()), null));
+            } else {
+                events.publish(new RunEvent(runId, null, "lead.search.started", "info", payload(
+                        "keyword", input.keyword(),
+                        "requestedVideoLimit", input.videoLimit()), null));
+                DouyinBrowserAdapter.BrowserObservation searchObservation = step(runId, "open_douyin_search", "browser.act",
+                        () -> browser.openDouyinAndSearch(input));
+                events.publish(new RunEvent(runId, null, "lead.search.completed", "info", payload(
+                        "keyword", input.keyword(),
+                        "url", searchObservation.url(),
+                        "title", searchObservation.title()), null));
 
-            events.publish(new RunEvent(runId, null, "lead.sort.started", "info", payload(
-                    "sort", input.sort(),
-                    "keyword", input.keyword()), null));
-            DouyinBrowserAdapter.BrowserObservation sortObservation = step(runId, "apply_sort", "browser.act",
-                    () -> browser.applySort(input));
-            events.publish(new RunEvent(runId, null, "lead.sort.completed", "info", payload(
-                    "sort", input.sort(),
-                    "url", sortObservation.url(),
-                    "title", sortObservation.title()), null));
+                events.publish(new RunEvent(runId, null, "lead.sort.started", "info", payload(
+                        "sort", input.sort(),
+                        "keyword", input.keyword()), null));
+                DouyinBrowserAdapter.BrowserObservation sortObservation = step(runId, "apply_sort", "browser.act",
+                        () -> browser.applySort(input));
+                events.publish(new RunEvent(runId, null, "lead.sort.completed", "info", payload(
+                        "sort", input.sort(),
+                        "url", sortObservation.url(),
+                        "title", sortObservation.title()), null));
+            }
 
             for (int videoIndex = 0; videoIndex < input.videoLimit(); videoIndex++) {
                 assertNotCancelled(runId);
@@ -90,7 +98,8 @@ public class DouyinLeadAcquisitionExecutor {
                         "videoNumber", videoIndex + 1,
                         "requestedVideoLimit", input.videoLimit()), null));
                 try {
-                    executeVideo(runId, taskId, input, video);
+                    int commentsBeforeVideo = collectedComments(videos);
+                    executeVideo(runId, taskId, input, video, commentsBeforeVideo);
                     video.status = "succeeded";
                     events.publish(new RunEvent(runId, null, "lead.video.completed", "info",
                             video.toPayload(), null));
@@ -140,7 +149,8 @@ public class DouyinLeadAcquisitionExecutor {
     }
 
     private void executeVideo(Long runId, Long taskId, DouyinLeadAcquisitionInput input,
-                              VideoRunState video) throws Exception {
+                              VideoRunState video,
+                              int commentsBeforeVideo) throws Exception {
         DouyinBrowserAdapter.BrowserObservation openedVideo = step(runId,
                 video.stepKey("open_first_video"),
                 "browser.act",
@@ -187,18 +197,43 @@ public class DouyinLeadAcquisitionExecutor {
                             "videoIndex", video.index,
                             "regionKey", region.regionKey(),
                             "source", region.source()), null));
-                    return browser.collectAllComments(region);
+                    return browser.collectAllComments(region, progress -> events.publish(new RunEvent(
+                            runId,
+                            null,
+                            "lead.comments.progress",
+                            "info",
+                            payload(
+                                    "videoIndex", video.index,
+                                    "videoNumber", video.index + 1,
+                                    "commentsCollected", commentsBeforeVideo + progress.commentsCollected(),
+                                    "currentVideoComments", progress.commentsCollected(),
+                                    "declaredCommentCount", progress.declaredCommentCount(),
+                                    "scrollAttempts", progress.scrollAttempts(),
+                                    "networkObservedPages", progress.networkObservedPages(),
+                                    "networkHasMoreFalseObserved", progress.networkHasMoreFalseObserved(),
+                                    "primaryCollectionSource", progress.primaryCollectionSource(),
+                                    "stopReason", progress.stopReason()),
+                            null)));
                 });
         video.collection = collection;
         persistence.saveComments(taskId, runId, collection.comments());
         events.publish(new RunEvent(runId, null, "lead.comments.collected", "info",
                 collectionPayload(video.index, collection), null));
+        boolean collectionIncomplete = !collection.complete();
+        if (collectionIncomplete) {
+            video.warningCode = "COMMENT_COLLECTION_PARTIAL";
+            video.warningMessage = incompleteCollectionMessage(video.index, collection);
+            events.publish(new RunEvent(runId, null, "lead.comments.partial", "warn", payload(
+                    "videoIndex", video.index,
+                    "commentsCollected", collection.comments().size(),
+                    "declaredCommentCount", collection.declaredCommentCount(),
+                    "stopReason", collection.stopReason(),
+                    "message", video.warningMessage), null));
+        }
         if (!collection.complete()) {
-            throw new DouyinBrowserException("COMMENT_COLLECTION_INCOMPLETE",
-                    "评论未完整采集: videoIndex=" + video.index
-                            + ", declared=" + collection.declaredCommentCount()
-                            + ", collected=" + collection.comments().size()
-                            + ", stopReason=" + collection.stopReason());
+            if (collection.comments().isEmpty()) {
+                throw new DouyinBrowserException("COMMENT_COLLECTION_INCOMPLETE", video.warningMessage);
+            }
         }
 
         List<CommentMatchRule> matchRules = input.matchRules();
@@ -210,6 +245,9 @@ public class DouyinLeadAcquisitionExecutor {
                     "videoIndex", video.index,
                     "reason", "no_match_rules",
                     "matchedComments", 0), null));
+            if (collectionIncomplete) {
+                throw new DouyinBrowserException("COMMENT_COLLECTION_INCOMPLETE", video.warningMessage);
+            }
             return;
         }
 
@@ -242,19 +280,44 @@ public class DouyinLeadAcquisitionExecutor {
         executeEngagementsForVideo(runId, taskId, input, video);
     }
 
+    private String incompleteCollectionMessage(int videoIndex, CommentCollectionResult collection) {
+        return "评论未完整采集: videoIndex=" + videoIndex
+                + ", declared=" + collection.declaredCommentCount()
+                + ", collected=" + collection.comments().size()
+                + ", stopReason=" + collection.stopReason();
+    }
+
     private void executeEngagementsForVideo(Long runId, Long taskId, DouyinLeadAcquisitionInput input,
-                                            VideoRunState video) throws Exception {
+                                            VideoRunState video) {
+        Set<String> engagedAuthorKeys = new HashSet<>();
         for (CommentMatchResult match : video.matches) {
             assertNotCancelled(runId);
+            String authorKey = engagementAuthorKey(match.comment());
+            if (!authorKey.isBlank() && !engagedAuthorKeys.add(authorKey)) {
+                events.publish(new RunEvent(runId, null, "lead.engagement.skipped", "info", payload(
+                        "videoIndex", video.index,
+                        "reason", "duplicate_author",
+                        "author", match.comment().authorName(),
+                        "commentKey", match.comment().commentKey()), null));
+                continue;
+            }
             events.publish(new RunEvent(runId, null, "lead.engagement.started", "info", payload(
                     "videoIndex", video.index,
                     "author", match.comment().authorName(),
                     "commentKey", match.comment().commentKey(),
                     "sendDm", input.sendDm()), null));
-            EngagementResult engagement = step(runId,
-                    video.stepKey("engage_matched_comment_author_" + safeKey(match.comment().commentKey())),
-                    "browser.act",
-                    () -> browser.followAndDraft(match.comment(), input.dmDraft(), input.sendDm()));
+            EngagementResult engagement;
+            try {
+                engagement = step(runId,
+                        video.stepKey("engage_matched_comment_author_" + safeKey(match.comment().commentKey())),
+                        "browser.act",
+                        () -> browser.followAndDraft(match.comment(), input.dmDraft(), input.sendDm()));
+            } catch (Exception e) {
+                engagement = EngagementResult.failed(
+                        match.comment(),
+                        e instanceof DouyinBrowserException dbe ? dbe.code() : "ENGAGEMENT_FAILED",
+                        e.getMessage() == null ? "触达执行失败" : e.getMessage());
+            }
             video.engagements.add(engagement);
             LeadProfileEntity profile = persistence.saveProfile(taskId, runId, engagement);
             Long commentId = persistence.findCommentId(taskId, match.comment().commentKey());
@@ -271,11 +334,26 @@ public class DouyinLeadAcquisitionExecutor {
                     "status", engagement.status()), null));
             boolean sendRequiredButNotConfirmed = input.sendDm() && !engagement.sent();
             if (!engagement.draftTyped() || sendRequiredButNotConfirmed) {
-                throw new DouyinBrowserException(
-                        engagement.failureCode() == null ? "ENGAGEMENT_FAILED" : engagement.failureCode(),
-                        engagement.failureMessage() == null ? "互动执行未完成" : engagement.failureMessage());
+                events.publish(new RunEvent(runId, null, "lead.engagement.failed", "error", payload(
+                        "videoIndex", video.index,
+                        "author", engagement.author(),
+                        "commentKey", match.comment().commentKey(),
+                        "failureCode", engagement.failureCode() == null ? "ENGAGEMENT_FAILED" : engagement.failureCode(),
+                        "failureMessage", engagement.failureMessage() == null ? "互动执行未完成" : engagement.failureMessage()), null));
             }
         }
+    }
+
+    private String engagementAuthorKey(vip.mate.lead.douyin.model.DouyinCommentItem comment) {
+        if (comment == null) {
+            return "";
+        }
+        String profileUrl = comment.authorProfileUrl();
+        if (profileUrl != null && !profileUrl.isBlank()) {
+            return "url:" + profileUrl.trim().toLowerCase();
+        }
+        String author = comment.authorName();
+        return author == null || author.isBlank() ? "" : "name:" + author.trim().toLowerCase();
     }
 
     private <T> T step(Long runId, String key, String type, Callable<T> work) throws Exception {
@@ -401,6 +479,14 @@ public class DouyinLeadAcquisitionExecutor {
                 videoResults);
     }
 
+    private int collectedComments(List<VideoRunState> videos) {
+        int total = 0;
+        for (VideoRunState video : videos) {
+            total += video.commentsCollected();
+        }
+        return total;
+    }
+
     private VideoRunState firstFailure(List<VideoRunState> videos) {
         for (VideoRunState video : videos) {
             if ("failed".equals(video.status)) {
@@ -474,6 +560,8 @@ public class DouyinLeadAcquisitionExecutor {
         private final List<EngagementResult> engagements = new ArrayList<>();
         private String failureCode = "";
         private String failureMessage = "";
+        private String warningCode = "";
+        private String warningMessage = "";
 
         private VideoRunState(int index) {
             this.index = index;
@@ -513,6 +601,8 @@ public class DouyinLeadAcquisitionExecutor {
             out.put("engagementsCreated", engagements.size());
             out.put("failureCode", failureCode);
             out.put("failureMessage", failureMessage);
+            out.put("warningCode", warningCode);
+            out.put("warningMessage", warningMessage);
             return out;
         }
     }

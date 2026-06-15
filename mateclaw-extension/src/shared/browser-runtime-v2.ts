@@ -51,6 +51,7 @@ export interface ScrollRegionActionRequest {
 export interface ExtractRegionParams {
   regionKey: string
   maxItems?: number
+  startIndex?: number
 }
 
 export interface DetectRegionParams {

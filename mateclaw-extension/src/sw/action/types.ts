@@ -74,6 +74,7 @@ export interface DetectRegionParams {
 export interface ExtractRegionParams {
   regionKey: string
   maxItems?: number
+  startIndex?: number
 }
 
 export interface OpenAuthorFromCommentParams {

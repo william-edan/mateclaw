@@ -68,6 +68,16 @@ public class DouyinLeadAcquisitionTool {
             String keywordMatchRules,
             @ToolParam(description = "Optional semantic rules. Multiple natural-language lead intents can be separated by newline or semicolon. Semantic rules use the configured LLM.", required = false)
             String semanticMatchRules,
+            @ToolParam(description = "Optional label for the comment match target, for example 有意向的客户, 体验不好的用户, 求教程/功能咨询, 竞品替代需求, or 自定义.", required = false)
+            String matchProfile,
+            @ToolParam(description = "Describe which comment texts should be matched. When supplied, the workflow creates one semantic rule from this description and optional examples.", required = false)
+            String matchDescription,
+            @ToolParam(description = "Optional example phrases for the match target. Multiple phrases can be separated by newline, semicolon, comma, or slash.", required = false)
+            String matchExamples,
+            @ToolParam(description = "Whether to use the default high-intent lead classifier. Default true when no explicit rules are supplied.", required = false)
+            Boolean matchHighIntent,
+            @ToolParam(description = "Optional high-intent example phrases used as model guidance. Multiple phrases can be separated by newline, semicolon, comma, or slash.", required = false)
+            String highIntentExamples,
             @ToolParam(description = "DM draft to type after opening the matched author's DM. Default: 你好", required = false)
             String dmDraft,
             @ToolParam(description = "Whether to send the DM. Default false; false means type draft only.", required = false)
@@ -91,7 +101,7 @@ public class DouyinLeadAcquisitionTool {
                 keyword,
                 sort,
                 videoLimit == null ? DouyinLeadAcquisitionInput.DEFAULT_VIDEO_LIMIT : videoLimit,
-                buildMatchRules(keywordMatchRules, semanticMatchRules),
+                buildMatchRules(keywordMatchRules, semanticMatchRules, matchProfile, matchDescription, matchExamples, matchHighIntent, highIntentExamples),
                 dmDraft,
                 Boolean.TRUE.equals(sendDm),
                 engage == null || Boolean.TRUE.equals(engage));
@@ -108,6 +118,32 @@ public class DouyinLeadAcquisitionTool {
                 "input", inputMap(input),
                 "reportingGuidance", reportingGuidance(result),
                 "result", result));
+    }
+
+    public String douyinLeadAcquisitionRun(String keyword,
+                                           String sort,
+                                           Integer videoLimit,
+                                           String keywordMatchRules,
+                                           String semanticMatchRules,
+                                           String dmDraft,
+                                           Boolean sendDm,
+                                           Boolean engage,
+                                           @Nullable ToolContext ctx) {
+        return douyinLeadAcquisitionRun(
+                keyword,
+                sort,
+                videoLimit,
+                keywordMatchRules,
+                semanticMatchRules,
+                null,
+                null,
+                null,
+                null,
+                null,
+                dmDraft,
+                sendDm,
+                engage,
+                ctx);
     }
 
     private Map<String, Object> reportingGuidance(DouyinLeadAcquisitionRunResponse result) {
@@ -288,8 +324,39 @@ public class DouyinLeadAcquisitionTool {
                 "engage", input.engage());
     }
 
-    private List<CommentMatchRule> buildMatchRules(String keywordRules, String semanticRules) {
+    private List<CommentMatchRule> buildMatchRules(String keywordRules,
+                                                   String semanticRules,
+                                                   String matchProfile,
+                                                   String matchDescription,
+                                                   String matchExamples,
+                                                   Boolean matchHighIntent,
+                                                   String highIntentExamples) {
+        if (matchDescription != null && !matchDescription.isBlank()) {
+            List<CommentMatchRule> rules = new ArrayList<>(DouyinLeadAcquisitionInput.matchTargetRules(
+                    matchProfile,
+                    matchDescription,
+                    splitRules(matchExamples)));
+            for (String value : splitRules(keywordRules)) {
+                rules.add(CommentMatchRule.keyword(value));
+            }
+            for (String value : splitRules(semanticRules)) {
+                rules.add(CommentMatchRule.semantic(value));
+            }
+            return rules;
+        }
+        List<String> examples = highIntentExamples == null || highIntentExamples.isBlank()
+                ? DouyinLeadAcquisitionInput.DEFAULT_HIGH_INTENT_EXAMPLES
+                : splitRules(highIntentExamples);
+        if ((keywordRules == null || keywordRules.isBlank())
+                && (semanticRules == null || semanticRules.isBlank())) {
+            return Boolean.FALSE.equals(matchHighIntent)
+                    ? List.of()
+                    : DouyinLeadAcquisitionInput.defaultMatchRules(examples);
+        }
         List<CommentMatchRule> rules = new ArrayList<>();
+        if (Boolean.TRUE.equals(matchHighIntent)) {
+            rules.addAll(DouyinLeadAcquisitionInput.defaultMatchRules(examples));
+        }
         for (String value : splitRules(keywordRules)) {
             rules.add(CommentMatchRule.keyword(value));
         }

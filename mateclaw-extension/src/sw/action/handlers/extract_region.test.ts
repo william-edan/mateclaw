@@ -202,6 +202,98 @@ describe('extract_region handler', () => {
     expect(comments.map(comment => comment.text)).not.toContain('暂时没有更多评论')
   })
 
+  it('starts Douyin comment extraction from the requested slot index', async () => {
+    document.body.innerHTML = `
+      <div data-e2e="comment-list" id="list">
+        <div id="slot-1">
+          <a id="author-1" href="//www.douyin.com/user/one"><span data-click-from="title">用户一</span></a>
+          <div id="body-1"><span>第一条旧评论</span></div>
+        </div>
+        <div id="slot-2">
+          <a id="author-2" href="//www.douyin.com/user/two"><span data-click-from="title">用户二</span></a>
+          <div id="body-2"><span>第二条新评论</span></div>
+        </div>
+        <div id="slot-3">
+          <a id="author-3" href="//www.douyin.com/user/three"><span data-click-from="title">用户三</span></a>
+          <div id="body-3"><span>第三条新评论</span></div>
+        </div>
+      </div>
+    `
+    mockRect(document.querySelector('#list')!, { x: 1000, y: 80, width: 520, height: 700 })
+    for (let index = 1; index <= 3; index += 1) {
+      mockRect(document.querySelector(`#slot-${index}`)!, { x: 1010, y: 120 + index * 90, width: 500, height: 80 })
+      mockRect(document.querySelector(`#author-${index}`)!, { x: 1070, y: 126 + index * 90, width: 90, height: 24 })
+      mockRect(document.querySelector(`#body-${index}`)!, { x: 1070, y: 160 + index * 90, width: 220, height: 28 })
+    }
+
+    const regions = new RegionRegistry()
+    regions.register({ key: 'douyin.comments', tabId: 9, rect: { x: 980, y: 60, width: 560, height: 740 } })
+    const handler = extractRegionHandler({ regions, chrome: chromeWithIsolatedDomExecution() })
+
+    const result = await handler(9, { regionKey: 'douyin.comments', startIndex: 1 }, 1000)
+
+    expect(result.ok).toBe(true)
+    const comments = result.ok ? (result.payload.items as any[]).filter(item => item.itemType === 'douyin_comment') : []
+    const diagnostics = result.ok ? result.payload.diagnostics as any : {}
+    expect(diagnostics).toEqual(expect.objectContaining({
+      startIndex: 1,
+      skippedSlots: 1,
+      slotCount: 3,
+      scannedSlots: 2,
+      nextStartIndex: 3,
+      slotAccessMode: 'indexed_children',
+      extractedDomCommentCount: 2,
+    }))
+    expect(comments.map(comment => comment.text)).toEqual(['第二条新评论', '第三条新评论'])
+  })
+
+  it('advances Douyin comment cursor by scanned DOM slots instead of matched comments', async () => {
+    document.body.innerHTML = `
+      <div data-e2e="comment-list" id="list">
+        <div id="slot-1">
+          <a id="author-1" href="//www.douyin.com/user/one"><span data-click-from="title">用户一</span></a>
+          <div id="body-1"><span>第一条旧评论</span></div>
+        </div>
+        <div id="slot-2">加载中</div>
+        <div id="slot-3">
+          <a id="author-3" href="//www.douyin.com/user/three"><span data-click-from="title">用户三</span></a>
+          <div id="body-3"><span>第三条新评论</span></div>
+        </div>
+        <div id="slot-4">
+          <a id="author-4" href="//www.douyin.com/user/four"><span data-click-from="title">用户四</span></a>
+          <div id="body-4"><span>第四条新评论</span></div>
+        </div>
+      </div>
+    `
+    mockRect(document.querySelector('#list')!, { x: 1000, y: 80, width: 520, height: 700 })
+    for (const index of [1, 2, 3, 4]) {
+      mockRect(document.querySelector(`#slot-${index}`)!, { x: 1010, y: 120 + index * 90, width: 500, height: 80 })
+    }
+    for (const index of [1, 3, 4]) {
+      mockRect(document.querySelector(`#author-${index}`)!, { x: 1070, y: 126 + index * 90, width: 90, height: 24 })
+      mockRect(document.querySelector(`#body-${index}`)!, { x: 1070, y: 160 + index * 90, width: 220, height: 28 })
+    }
+
+    const regions = new RegionRegistry()
+    regions.register({ key: 'douyin.comments', tabId: 9, rect: { x: 980, y: 60, width: 560, height: 740 } })
+    const handler = extractRegionHandler({ regions, chrome: chromeWithIsolatedDomExecution() })
+
+    const result = await handler(9, { regionKey: 'douyin.comments', maxItems: 1, startIndex: 1 }, 1000)
+
+    expect(result.ok).toBe(true)
+    const comments = result.ok ? (result.payload.items as any[]).filter(item => item.itemType === 'douyin_comment') : []
+    const diagnostics = result.ok ? result.payload.diagnostics as any : {}
+    expect(diagnostics).toEqual(expect.objectContaining({
+      startIndex: 1,
+      skippedSlots: 1,
+      slotCount: 4,
+      scannedSlots: 2,
+      nextStartIndex: 3,
+      extractedDomCommentCount: 1,
+    }))
+    expect(comments.map(comment => comment.text)).toEqual(['第三条新评论'])
+  })
+
   it('extracts Douyin comments from direct comment-list div slots without comment-item markers', async () => {
     document.body.innerHTML = `
       <div id="merge-all-comment-container">

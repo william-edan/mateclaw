@@ -65,6 +65,18 @@ export interface CDP {
       base64Encoded: boolean
     }
   }
+  'Target.setAutoAttach': {
+    params: {
+      autoAttach: boolean
+      waitForDebuggerOnStart: boolean
+      flatten?: boolean
+      filter?: Array<{
+        type?: string
+        exclude?: boolean
+      }>
+    }
+    result: Record<string, never>
+  }
   'Page.captureScreenshot': {
     params: {
       format?: 'jpeg' | 'png' | 'webp'
@@ -168,9 +180,27 @@ export interface CDP {
 }
 
 export interface CDPEvents {
+  'Network.requestWillBeSent': NetworkRequestWillBeSentEvent
   'Network.responseReceived': NetworkResponseReceivedEvent
   'Network.loadingFinished': NetworkLoadingFinishedEvent
   'Network.loadingFailed': NetworkLoadingFailedEvent
+  'Target.attachedToTarget': TargetAttachedToTargetEvent
+  'Target.detachedFromTarget': TargetDetachedFromTargetEvent
+}
+
+export interface NetworkRequestWillBeSentEvent {
+  requestId: string
+  loaderId?: string
+  documentURL?: string
+  type?: string
+  request: {
+    url: string
+    method?: string
+    headers?: Record<string, string | number | boolean>
+    postData?: string
+  }
+  timestamp?: number
+  wallTime?: number
 }
 
 export interface NetworkResponseReceivedEvent {
@@ -204,6 +234,25 @@ export interface NetworkLoadingFailedEvent {
   type?: string
   errorText?: string
   canceled?: boolean
+}
+
+export interface TargetAttachedToTargetEvent {
+  sessionId: string
+  targetInfo: {
+    targetId: string
+    type: string
+    title?: string
+    url?: string
+    attached?: boolean
+    openerId?: string
+    browserContextId?: string
+  }
+  waitingForDebugger?: boolean
+}
+
+export interface TargetDetachedFromTargetEvent {
+  sessionId: string
+  targetId?: string
 }
 
 /** A single property attached to an {@link AXNode} (state/relation/etc.). */

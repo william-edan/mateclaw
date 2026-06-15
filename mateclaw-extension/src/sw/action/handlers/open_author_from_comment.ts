@@ -1,8 +1,11 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { OpenAuthorFromCommentParams } from '../types'
+import type { TabGroupManager } from '../../tab-group-manager'
 
 export interface OpenAuthorFromCommentHandlerDeps {
   chrome?: typeof globalThis.chrome
+  tabGroupManager?: Pick<TabGroupManager, 'addTab' | 'joinChromeGroup'>
+  subject?: string
 }
 
 export const openAuthorFromCommentHandler = (
@@ -41,11 +44,29 @@ export const openAuthorFromCommentHandler = (
     if (!chromeApi.tabs?.create) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.tabs.create is unavailable', true)
     }
-    const created = await chromeApi.tabs.create({
+    const createProps: chrome.tabs.CreateProperties = {
       url: payload.href,
       active: true,
       openerTabId: tabId,
-    })
+    }
+    let created: chrome.tabs.Tab
+    try {
+      created = await chromeApi.tabs.create(createProps)
+    } catch (error) {
+      if (!String((error as Error)?.message || error).includes('opener')) {
+        throw error
+      }
+      const fallbackProps = { ...createProps }
+      delete fallbackProps.openerTabId
+      created = await chromeApi.tabs.create(fallbackProps)
+    }
+    if (typeof created?.id === 'number' && deps.tabGroupManager && deps.subject) {
+      await deps.tabGroupManager.addTab(deps.subject, created.id)
+      await deps.tabGroupManager.joinChromeGroup(deps.subject, created.id)
+    }
+    const readyTab = typeof created?.id === 'number'
+      ? await waitForCreatedProfileTabReady(chromeApi, created.id, payload.href, _deadlineMs)
+      : undefined
     return {
       ok: true,
       elapsed_ms: 0,
@@ -53,9 +74,114 @@ export const openAuthorFromCommentHandler = (
         href: payload.href,
         author: payload.author || params.authorName || '',
         tabId: created?.id ?? null,
+        readyUrl: readyTab?.url ?? created?.url ?? '',
+        readyStatus: readyTab?.status ?? created?.status ?? '',
       },
     }
   }
+}
+
+async function waitForCreatedProfileTabReady(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  expectedHref: string,
+  deadlineMs?: number,
+): Promise<chrome.tabs.Tab | undefined> {
+  if (!chromeApi.tabs?.get) {
+    return undefined
+  }
+  const startedAt = Date.now()
+  const budget = Math.max(1000, Math.min(8000, (deadlineMs ?? 6000) - 250))
+  let last: chrome.tabs.Tab | undefined
+  while (Date.now() - startedAt < budget) {
+    try {
+      last = await chromeApi.tabs.get(tabId)
+      const url = String(last?.url || last?.pendingUrl || '')
+      if (last?.status === 'complete' && profileUrlMatches(url, expectedHref)
+        && await canInjectProfileReadyProbe(chromeApi, tabId, expectedHref)) {
+        return last
+      }
+      if (last?.status === 'complete' && looksLikeProfileHref(url)
+        && await canInjectProfileReadyProbe(chromeApi, tabId, expectedHref)) {
+        return last
+      }
+    } catch {
+      return last
+    }
+    await sleep(250)
+  }
+  return last
+}
+
+async function canInjectProfileReadyProbe(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  expectedHref: string,
+): Promise<boolean> {
+  if (!chromeApi.scripting?.executeScript) {
+    return false
+  }
+  try {
+    const result = await chromeApi.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: profileReadyProbeInPage,
+      args: [expectedHref],
+    })
+    return result?.[0]?.result === true
+  } catch {
+    return false
+  }
+}
+
+function profileReadyProbeInPage(expectedHref: string): boolean {
+  const href = location.href
+  const ready = document.readyState === 'interactive' || document.readyState === 'complete'
+  const hasBody = !!document.body
+  return ready && hasBody && (profileUrlMatchesInPage(href, expectedHref) || href.includes('/user/'))
+
+  function profileUrlMatchesInPage(actual: string, expected: string): boolean {
+    const actualToken = profileTokenInPage(actual)
+    const expectedToken = profileTokenInPage(expected)
+    return !!actualToken && !!expectedToken && actualToken === expectedToken
+  }
+
+  function profileTokenInPage(value: string): string {
+    try {
+      const url = new URL(value, 'https://www.douyin.com')
+      const parts = url.pathname.split('/').filter(Boolean)
+      const userIndex = parts.findIndex(part => part === 'user')
+      if (userIndex >= 0 && parts[userIndex + 1]) {
+        return decodeURIComponent(parts[userIndex + 1]).toLowerCase()
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+function profileUrlMatches(actual: string, expected: string): boolean {
+  const actualToken = profileToken(actual)
+  const expectedToken = profileToken(expected)
+  return !!actualToken && !!expectedToken && actualToken === expectedToken
+}
+
+function profileToken(href: string): string {
+  try {
+    const url = new URL(href, 'https://www.douyin.com')
+    const parts = url.pathname.split('/').filter(Boolean)
+    const userIndex = parts.findIndex(part => part === 'user')
+    if (userIndex >= 0 && parts[userIndex + 1]) {
+      return decodeURIComponent(parts[userIndex + 1]).toLowerCase()
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function normalizeProfileHref(value: string): string {

@@ -168,11 +168,13 @@ const sseEventNames = [
   'lead.comments.opened',
   'lead.comments.region_detected',
   'lead.comments.collecting',
+  'lead.comments.progress',
   'lead.comments.collected',
   'lead.comment.matched',
   'lead.comment.match_skipped',
   'lead.engagement.started',
   'lead.engagement.completed',
+  'lead.engagement.failed',
   'lead.engagement.skipped',
   'lead.video.completed',
   'lead.video.failed',
@@ -220,6 +222,22 @@ const videoRows = computed<DouyinLeadRunVideoResult[]>(() => {
 
 const engagementRows = computed<DouyinLeadEngagement[]>(() => displayRun.value?.engagements ?? [])
 
+const latestVideoPayload = computed<JsonRecord>(() => latestEventPayload([
+  'lead.video.started',
+  'lead.video.opened',
+  'lead.comments.collecting',
+  'lead.comments.progress',
+  'lead.comments.collected',
+  'lead.video.completed',
+  'lead.video.failed',
+]))
+
+const latestCommentPayload = computed<JsonRecord>(() => latestEventPayload([
+  'lead.comments.progress',
+  'lead.comments.collected',
+  'lead.run.summary',
+]))
+
 const runMetrics = computed(() => ({
   requestedVideos: firstNumber(
     displayRun.value?.requestedVideoLimit,
@@ -228,30 +246,37 @@ const runMetrics = computed(() => ({
     summaryPayload.value.videoLimit,
   ),
   processedVideos: firstNumber(
+    maxVideoNumberFromEvents(),
     displayRun.value?.processedVideos,
     structuredSummary.value.processedVideos,
     summaryPayload.value.processedVideos,
     videoRows.value.length,
   ),
   commentsCollected: firstNumber(
+    maxCumulativeCommentProgress(),
+    sumLatestCommentsByVideo(),
+    latestCommentPayload.value.commentsCollected,
     displayRun.value?.commentsCollected,
     structuredSummary.value.commentsCollected,
     summaryPayload.value.commentsCollected,
     displayRun.value?.comments?.length,
   ),
   matchedComments: firstNumber(
+    sumLatestNumericByVideo('lead.comment.matched', 'matchedComments'),
     displayRun.value?.matchedComments,
     structuredSummary.value.matchedComments,
     summaryPayload.value.matchedComments,
     displayRun.value?.matches?.length,
   ),
   engagementsCreated: firstNumber(
+    countEvents('lead.engagement.completed'),
     displayRun.value?.engagementsCreated,
     structuredSummary.value.engagementsCreated,
     summaryPayload.value.engagementsCreated,
     engagementRows.value.length,
   ),
   failedVideos: firstNumber(
+    countEvents('lead.video.failed'),
     displayRun.value?.failedVideos,
     structuredSummary.value.failedVideos,
     summaryPayload.value.failedVideos,
@@ -271,6 +296,7 @@ const currentVideoPayload = computed<JsonRecord>(() => {
     'lead.video.started',
     'lead.video.opened',
     'lead.comments.collecting',
+    'lead.comments.progress',
     'lead.comments.collected',
   ].includes(item.type))
   return parsePayload(event?.payloadJson)
@@ -289,7 +315,11 @@ const currentVideoMeta = computed(() => {
     currentVideoPayload.value.videoIndex,
     currentVideoPayload.value.index,
   )
-  const comments = firstNumber(currentVideoPayload.value.commentsCollected, currentVideoPayload.value.commentsInWindow)
+  const comments = firstNumber(
+    currentVideoPayload.value.currentVideoComments,
+    currentVideoPayload.value.commentsCollected,
+    currentVideoPayload.value.commentsInWindow,
+  )
   const pieces = [
     index != null ? `第 ${index} 个视频` : '',
     comments != null ? `已采集 ${comments} 条评论` : '',
@@ -317,9 +347,9 @@ const progressGroups = computed(() => {
   const groups = [
     { key: 'search', title: '搜索与排序', types: ['lead.search.started', 'lead.search.completed', 'lead.sort.started', 'lead.sort.completed'] },
     { key: 'video', title: '视频处理', types: ['lead.video.started', 'lead.video.opened', 'lead.video.completed', 'lead.video.failed'] },
-    { key: 'comments', title: '评论采集', types: ['lead.comments.opened', 'lead.comments.region_detected', 'lead.comments.collecting', 'lead.comments.collected'] },
+    { key: 'comments', title: '评论采集', types: ['lead.comments.opened', 'lead.comments.region_detected', 'lead.comments.collecting', 'lead.comments.progress', 'lead.comments.collected'] },
     { key: 'match', title: '评论匹配', types: ['lead.comment.matched', 'lead.comment.match_skipped'] },
-    { key: 'engagement', title: '线索触达', types: ['lead.engagement.started', 'lead.engagement.completed', 'lead.engagement.skipped'] },
+    { key: 'engagement', title: '线索触达', types: ['lead.engagement.started', 'lead.engagement.completed', 'lead.engagement.failed', 'lead.engagement.skipped'] },
     { key: 'summary', title: '任务收尾', types: ['lead.run.summary', 'lead.run.failed', 'run_snapshot', 'done'] },
   ]
   return groups
@@ -674,6 +704,94 @@ function firstNumber(...values: unknown[]): number | null {
   return null
 }
 
+function latestEventPayload(types: string | string[]): JsonRecord {
+  const wanted = Array.isArray(types) ? types : [types]
+  const event = [...events.value].reverse().find(item => wanted.includes(item.type))
+  return parsePayload(event?.payloadJson)
+}
+
+function countEvents(type: string): number {
+  return events.value.filter(item => item.type === type).length
+}
+
+function sumLatestNumericByVideo(type: string, key: string): number {
+  const byVideo = new Map<string, number>()
+  for (const event of events.value) {
+    if (event.type !== type) continue
+    const payload = parsePayload(event.payloadJson)
+    const videoKey = stringValue(payload.videoNumber)
+      || stringValue(payload.videoIndex)
+      || stringValue(payload.videoKey)
+      || event.id
+    const value = firstNumber(payload[key])
+    if (value != null) byVideo.set(videoKey, value)
+  }
+  let total = 0
+  for (const value of byVideo.values()) total += value
+  return total
+}
+
+function maxVideoNumberFromEvents(): number | null {
+  let maxNumber: number | null = null
+  for (const event of events.value) {
+    if (![
+      'lead.video.started',
+      'lead.video.opened',
+      'lead.comments.collecting',
+      'lead.comments.progress',
+      'lead.comments.collected',
+      'lead.comment.matched',
+      'lead.engagement.started',
+      'lead.engagement.completed',
+      'lead.engagement.failed',
+      'lead.engagement.skipped',
+      'lead.video.completed',
+      'lead.video.failed',
+    ].includes(event.type)) {
+      continue
+    }
+    const payload = parsePayload(event.payloadJson)
+    const number = displayVideoNumber(payload.videoNumber, payload.videoIndex, payload.index)
+    if (number != null && (maxNumber == null || number > maxNumber)) maxNumber = number
+  }
+  return maxNumber
+}
+
+function sumLatestCommentsByVideo(): number | null {
+  const byVideo = new Map<string, number>()
+  for (const event of events.value) {
+    if (!['lead.comments.progress', 'lead.comments.collected'].includes(event.type)) continue
+    const payload = parsePayload(event.payloadJson)
+    const videoKey = stringValue(payload.videoNumber)
+      || stringValue(payload.videoIndex)
+      || stringValue(payload.videoKey)
+      || ''
+    if (!videoKey) continue
+    const perVideo = firstNumber(
+      payload.currentVideoComments,
+      payload.commentsInPage,
+      payload.commentsInWindow,
+      payload.commentsCollected,
+    )
+    if (perVideo != null) byVideo.set(videoKey, perVideo)
+  }
+  if (!byVideo.size) return null
+  let total = 0
+  for (const value of byVideo.values()) total += value
+  return total
+}
+
+function maxCumulativeCommentProgress(): number | null {
+  let maxValue: number | null = null
+  for (const event of events.value) {
+    if (event.type !== 'lead.comments.progress') continue
+    const payload = parsePayload(event.payloadJson)
+    const value = firstNumber(payload.commentsCollected)
+    if (value != null && (maxValue == null || value > maxValue)) maxValue = value
+  }
+  return maxValue
+}
+
 function countLabel(value: unknown): string {
   const num = numeric(value)
   return num == null ? '-' : num.toLocaleString()
@@ -709,6 +827,14 @@ function reasonLabel(value?: string | null): string {
     COMMENTS_TRIGGER_NOT_FOUND: '未找到评论入口',
     DM_BUTTON_NOT_FOUND: '未找到私信入口',
     DM_PAGE_NOT_CONFIRMED: '未确认进入私信页',
+    FOLLOW_BUTTON_NOT_FOUND: '未找到关注入口',
+    FOLLOW_NOT_CONFIRMED: '未确认关注成功',
+    PROFILE_TAB_NOT_CONTROLLED: '主页标签页未受浏览器扩展控制',
+    DM_TAB_NOT_CONTROLLED: '私信标签页未受浏览器扩展控制',
+    DEADLINE_EXCEEDED: '执行超时',
+    PROFILE_OPEN_FAILED: '用户主页打开失败',
+    VIDEO_RESULT_NOT_FOUND: '未找到视频结果',
+    DRAFT_NOT_OBSERVED: '未检测到私信草稿',
     RUN_CANCELLED: '任务已取消',
     VIDEO_FAILED: '视频处理失败',
     ALL_VIDEOS_FAILED: '所有视频均失败',
@@ -727,7 +853,7 @@ function eventTone(event: DouyinLeadTimelineEvent): 'success' | 'danger' | 'warn
   if (severity === 'error' || event.type.endsWith('.failed') || event.type === 'lead.run.failed') return 'danger'
   if (severity === 'warn' || severity === 'warning') return 'warning'
   if (event.type.endsWith('.completed') || event.type === 'lead.run.summary') return 'success'
-  if (event.type.endsWith('.started') || event.type === 'run_started' || event.type === 'lead.comments.collecting') return 'running'
+  if (event.type.endsWith('.started') || event.type === 'run_started' || event.type === 'lead.comments.collecting' || event.type === 'lead.comments.progress') return 'running'
   return 'neutral'
 }
 
@@ -745,11 +871,13 @@ function businessTitle(type: string): string {
     'lead.comments.opened': '评论区已打开',
     'lead.comments.region_detected': '评论区已定位',
     'lead.comments.collecting': '正在采集评论',
+    'lead.comments.progress': '评论采集中',
     'lead.comments.collected': '评论采集完成',
     'lead.comment.matched': '命中匹配评论',
     'lead.comment.match_skipped': '跳过评论匹配',
     'lead.engagement.started': '开始触达线索',
     'lead.engagement.completed': '触达完成',
+    'lead.engagement.failed': '触达失败',
     'lead.engagement.skipped': '跳过触达',
     'lead.video.completed': '视频处理完成',
     'lead.video.failed': '视频处理失败',
@@ -764,10 +892,15 @@ function businessTitle(type: string): string {
 function eventSummary(type: string, payload: JsonRecord): string {
   const message = stringValue(payload.message)
   if (message) return reasonLabel(message)
-  if (type === 'lead.comments.collected') {
-    const comments = firstNumber(payload.commentsCollected, payload.commentsInPage, payload.newComments)
+  if (type === 'lead.comments.progress' || type === 'lead.comments.collected') {
+    const comments = firstNumber(payload.commentsCollected, payload.currentVideoComments, payload.commentsInPage, payload.newComments)
     const declared = firstNumber(payload.declaredCommentCount)
-    return `已采集 ${countLabel(comments)} 条评论${declared != null ? `，页面声明 ${countLabel(declared)} 条` : ''}`
+    const pages = firstNumber(payload.networkObservedPages)
+    const parts = [`已采集 ${countLabel(comments)} 条评论`]
+    if (declared != null) parts.push(`网络声明 ${countLabel(declared)} 条`)
+    if (pages != null) parts.push(`已观察 ${countLabel(pages)} 页网络响应`)
+    if (payload.networkHasMoreFalseObserved === true) parts.push('已收到无更多响应')
+    return parts.join('，')
   }
   if (type === 'lead.comment.matched') {
     const author = stringValue(payload.authorName) || stringValue(payload.author)
@@ -792,7 +925,7 @@ function eventSummary(type: string, payload: JsonRecord): string {
 function eventFields(type: string, payload: JsonRecord): Array<{ key: string; label: string; value: string }> {
   const keys = type === 'lead.run.summary'
     ? ['requestedVideoLimit', 'processedVideos', 'succeededVideos', 'failedVideos', 'commentsCollected', 'matchedComments', 'engagementsCreated']
-    : ['videoNumber', 'videoIndex', 'commentsCollected', 'declaredCommentCount', 'matchedComments', 'status', 'stopReason', 'failureCode']
+    : ['videoNumber', 'videoIndex', 'commentsCollected', 'currentVideoComments', 'declaredCommentCount', 'networkObservedPages', 'matchedComments', 'status', 'stopReason', 'failureCode']
   return keys
     .filter(key => payload[key] != null && payload[key] !== '')
     .slice(0, 5)
@@ -810,7 +943,9 @@ function fieldLabel(key: string): string {
     succeededVideos: '成功视频',
     failedVideos: '失败视频',
     commentsCollected: '评论数',
+    currentVideoComments: '当前视频评论',
     declaredCommentCount: '声明评论',
+    networkObservedPages: '网络页数',
     matchedComments: '匹配数',
     engagementsCreated: '触达数',
     videoNumber: '视频',

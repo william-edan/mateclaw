@@ -59,7 +59,7 @@ export const extractRegionHandler = (deps: ExtractRegionHandlerDeps): ActionHand
     const results = await chromeApi.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: pageFunc,
-      args: [region, parsed.regionKey, parsed.maxItems],
+      args: [region, parsed.regionKey, parsed.maxItems, parsed.startIndex],
     })
     const pageResult = results?.[0]?.result as ExtractedRegionItem[] | ExtractRegionPageResult | undefined
     const items = Array.isArray(pageResult)
@@ -79,16 +79,18 @@ export const extractRegionHandler = (deps: ExtractRegionHandlerDeps): ActionHand
   }
 }
 
-function parseExtractRegionParams(params: ExtractRegionParams): { regionKey: string; maxItems: number } | null {
+function parseExtractRegionParams(params: ExtractRegionParams): { regionKey: string; maxItems: number; startIndex: number } | null {
   if (!params || typeof params.regionKey !== 'string' || params.regionKey.trim().length === 0) return null
   if (params.maxItems !== undefined && (!Number.isInteger(params.maxItems) || params.maxItems < 1)) return null
+  if (params.startIndex !== undefined && (!Number.isInteger(params.startIndex) || params.startIndex < 0)) return null
   return {
     regionKey: params.regionKey,
     maxItems: Math.min(params.maxItems ?? 80, 500),
+    startIndex: Math.max(0, params.startIndex ?? 0),
   }
 }
 
-function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, maxItems: number): ExtractRegionPageResult {
+function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, maxItems: number, startIndex = 0): ExtractRegionPageResult {
   const probe = 'douyin_comments_self_contained_v1'
   try {
     const effectiveRegionKey = typeof region.key === 'string' && region.key.trim().length > 0
@@ -101,7 +103,8 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
       bottom: region.y + region.height,
     }
     const max = Math.min(Math.max(Math.floor(maxItems || 80), 1), 500)
-    const listEntries = commentLists(regionRect)
+    const start = Math.max(0, Math.floor(startIndex || 0))
+    const listEntries = commentLists(regionRect, start)
     const selectedList = listEntries[0]?.el ?? null
     const selectedListRect = selectedList?.getBoundingClientRect()
     const listClip = selectedListRect
@@ -115,12 +118,17 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
     const end = commentEndItem(selectedList, listClip)
     const comments: ExtractedRegionItem[] = []
     const seen = new Set<string>()
-    const slots = selectedList
-      ? directCommentSlots(selectedList)
+    const fallbackSlots = selectedList
+      ? []
       : Array.from(document.querySelectorAll<HTMLElement>('[data-e2e="comment-item"]'))
+    const slotCount = selectedList ? directChildSlotCount(selectedList) : fallbackSlots.length
+    const boundedStart = Math.min(start, slotCount)
+    let scannedUntil = boundedStart
 
-    for (let index = 0; index < slots.length && comments.length < max; index += 1) {
-      const slot = slots[index]
+    for (let index = boundedStart; index < slotCount && comments.length < max; index += 1) {
+      scannedUntil = index + 1
+      const slot = selectedList ? directCommentSlotAt(selectedList, index) : fallbackSlots[index]
+      if (!slot) continue
       const item = commentItemFromSlot(slot)
       if (!item) continue
       const candidate = parseCommentItem(item, index, listClip)
@@ -131,6 +139,7 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
       comments.push(candidate)
     }
 
+    const nextStartIndex = Math.min(scannedUntil, slotCount)
     const items = [
       declared,
       end,
@@ -139,7 +148,7 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
     const diagnostics = diagnosticsFor(items)
     return { items, diagnostics }
 
-    function commentLists(clip: { left: number; top: number; right: number; bottom: number }): Array<{
+    function commentLists(clip: { left: number; top: number; right: number; bottom: number }, startHint: number): Array<{
       el: HTMLElement
       rect: DOMRect
       index: number
@@ -153,21 +162,22 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
         '#merge-all-comment-container [data-e2e="comment-list"]',
         '[data-e2e="comment-list"]',
       ]) {
-        for (const el of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
+        for (const el of document.querySelectorAll<HTMLElement>(selector)) {
           listSet.add(el)
         }
       }
       return Array.from(listSet)
         .map((el, index) => {
-          const directDivSlots = directCommentSlots(el)
+          const directDivs = directChildSlotCount(el)
+          const insidePanel = Boolean(el.closest('#merge-all-comment-container'))
           return {
             el,
             rect: el.getBoundingClientRect(),
             index,
-            commentItems: el.querySelectorAll('[data-e2e="comment-item"]').length,
-            directDivs: directDivSlots.length,
-            signalSlots: directDivSlots.filter(hasCommentSlotSignals).length,
-            insidePanel: Boolean(el.closest('#merge-all-comment-container')),
+            commentItems: el.querySelector('[data-e2e="comment-item"]') ? 1 : 0,
+            directDivs,
+            signalSlots: insidePanel && directDivs > 0 ? 1 : countSignalSlots(el, startHint, 24),
+            insidePanel,
           }
         })
         .filter(entry => entry.commentItems > 0 || entry.signalSlots > 0 || (entry.insidePanel && entry.directDivs > 0))
@@ -188,9 +198,34 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
         })
     }
 
-    function directCommentSlots(list: HTMLElement): HTMLElement[] {
-      return Array.from(list.children)
-        .filter((child): child is HTMLElement => child instanceof HTMLElement && child.tagName.toLowerCase() === 'div')
+    function directChildSlotCount(list: HTMLElement): number {
+      return list.children.length
+    }
+
+    function directCommentSlotAt(list: HTMLElement, slotIndex: number): HTMLElement | null {
+      const direct = list.children.item(slotIndex)
+      return direct instanceof HTMLElement ? direct : null
+    }
+
+    function countSignalSlots(list: HTMLElement, startHint: number, maxScanned: number): number {
+      const total = directChildSlotCount(list)
+      if (total <= 0) return 0
+      let count = 0
+      for (const index of sampledSlotIndexes(total, startHint, maxScanned)) {
+        const slot = directCommentSlotAt(list, index)
+        if (slot && hasCommentSlotSignals(slot)) count += 1
+      }
+      return count
+    }
+
+    function sampledSlotIndexes(total: number, startHint: number, maxScanned: number): number[] {
+      if (total <= 0) return []
+      const indexes = new Set<number>()
+      for (let index = 0; index < Math.min(total, 8); index += 1) indexes.add(index)
+      const from = Math.max(0, Math.min(startHint, total - 1) - 8)
+      const to = Math.min(total, from + maxScanned)
+      for (let index = from; index < to; index += 1) indexes.add(index)
+      return Array.from(indexes).sort((a, b) => a - b)
     }
 
     function commentItemFromSlot(slot: HTMLElement): HTMLElement | null {
@@ -377,7 +412,7 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
     }
 
     function declaredCommentCount(root: HTMLElement, clip: { left: number; top: number; right: number; bottom: number }): ExtractedRegionItem | null {
-      const candidates = Array.from(root.querySelectorAll<HTMLElement>('span, h1, h2, h3, div'))
+      const candidates = boundedElementScan(root, 240)
         .map(el => ({ el, rect: el.getBoundingClientRect(), text: cleanText(el.innerText || el.textContent || '') }))
         .filter(entry => entry.text.includes('全部评论'))
         .filter(entry => entry.rect.width > 0 && entry.rect.height > 0)
@@ -396,9 +431,19 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
 
     function commentEndItem(list: HTMLElement | null, _clip: { left: number; top: number; right: number; bottom: number }): ExtractedRegionItem | null {
       if (!list) return null
-      const hit = Array.from(list.querySelectorAll<HTMLElement>('div, span, p'))
-        .map(el => ({ el, rect: el.getBoundingClientRect(), text: cleanText(el.innerText || el.textContent || '') }))
-        .filter(entry => entry.text.includes('暂时没有更多评论'))
+      const candidates: Array<{ el: HTMLElement; rect: DOMRect; text: string }> = []
+      const total = directChildSlotCount(list)
+      for (let index = Math.max(0, total - 40); index < total; index += 1) {
+        const slot = directCommentSlotAt(list, index)
+        if (!slot) continue
+        for (const el of [slot, ...Array.from(slot.querySelectorAll<HTMLElement>('div, span, p'))]) {
+          const text = cleanText(el.innerText || el.textContent || '')
+          if (text.includes('暂时没有更多评论')) {
+            candidates.push({ el, rect: el.getBoundingClientRect(), text })
+          }
+        }
+      }
+      const hit = candidates
         .filter(entry => entry.rect.width > 0 && entry.rect.height > 0)
         .sort((a, b) => b.rect.top - a.rect.top)[0]
       if (!hit) return null
@@ -419,15 +464,20 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
         runtimeRegionKey: region.key,
         effectiveRegionKey,
         commentListCount: listEntries.length,
-        selectedListCommentItems: selectedList?.querySelectorAll('[data-e2e="comment-item"]').length ?? 0,
-        selectedListDirectDivs: selectedList ? directCommentSlots(selectedList).length : 0,
-        selectedListSignalSlots: selectedList ? directCommentSlots(selectedList).filter(hasCommentSlotSignals).length : 0,
-        documentCommentItems: document.querySelectorAll('[data-e2e="comment-item"]').length,
-        titleLinkCount: selectedList?.querySelectorAll('[data-click-from="title"]').length ?? 0,
-        userLinkCount: selectedList?.querySelectorAll('a[href*="/user/"], a[href*="douyin.com/user"]').length ?? 0,
-        bodyClassCount: selectedList?.querySelectorAll('.Sbe6bqNb, .LqTo7UJT, .LvAtyU_f').length ?? 0,
-        endMarkerCount: selectedList ? Array.from(selectedList.querySelectorAll<HTMLElement>('*'))
-          .filter(el => cleanText(el.innerText || el.textContent || '').includes('暂时没有更多评论')).length : 0,
+        selectedListCommentItems: selectedList ? countSelectorsInSampledSlots(selectedList, '[data-e2e="comment-item"]', boundedStart, 32) : fallbackSlots.length,
+        selectedListDirectDivs: selectedList ? directChildSlotCount(selectedList) : 0,
+        selectedListSignalSlots: selectedList ? countSignalSlots(selectedList, boundedStart, 32) : 0,
+        documentCommentItems: selectedList ? countSelectorsInSampledSlots(selectedList, '[data-e2e="comment-item"]', 0, 32) : fallbackSlots.length,
+        startIndex: start,
+        skippedSlots: boundedStart,
+        slotCount,
+        scannedSlots: Math.max(0, nextStartIndex - boundedStart),
+        nextStartIndex,
+        slotAccessMode: selectedList ? 'indexed_children' : 'fallback_query',
+        titleLinkCount: selectedList ? countSelectorsInSampledSlots(selectedList, '[data-click-from="title"]', boundedStart, 32) : 0,
+        userLinkCount: selectedList ? countSelectorsInSampledSlots(selectedList, 'a[href*="/user/"], a[href*="douyin.com/user"]', boundedStart, 32) : 0,
+        bodyClassCount: selectedList ? countSelectorsInSampledSlots(selectedList, '.Sbe6bqNb, .LqTo7UJT, .LvAtyU_f', boundedStart, 32) : 0,
+        endMarkerCount: end ? 1 : 0,
         extractedDomCommentCount: comments.length,
         visibleInRegionCount: comments.filter(item => item.visibleInRegion).length,
         declaredCountItems: items.filter(item => item.itemType === 'comment_count').map(item => item.text),
@@ -435,6 +485,31 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
         firstAuthors: comments.slice(0, 5).map(item => item.author || ''),
         firstTexts: comments.slice(0, 5).map(item => item.text),
       }
+    }
+
+    function countSelectorsInSampledSlots(list: HTMLElement, selector: string, startHint: number, maxScanned: number): number {
+      let count = 0
+      for (const index of sampledSlotIndexes(directChildSlotCount(list), startHint, maxScanned)) {
+        const slot = directCommentSlotAt(list, index)
+        if (!slot) continue
+        if (slot.matches(selector)) count += 1
+        count += slot.querySelectorAll(selector).length
+      }
+      return count
+    }
+
+    function boundedElementScan(root: HTMLElement, maxElements: number): HTMLElement[] {
+      const elements: HTMLElement[] = []
+      if (root.matches('span, h1, h2, h3, div')) elements.push(root)
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+      let node = walker.nextNode()
+      while (node && elements.length < maxElements) {
+        if (node instanceof HTMLElement && node.matches('span, h1, h2, h3, div')) {
+          elements.push(node)
+        }
+        node = walker.nextNode()
+      }
+      return elements
     }
 
     function isEndOrLoadingSlot(slot: HTMLElement): boolean {
@@ -566,7 +641,7 @@ function extractDouyinCommentsInPage(region: RuntimeRegion, regionKey: string, m
   }
 }
 
-function extractRegionInPage(region: RuntimeRegion, regionKey: string, maxItems: number): ExtractRegionPageResult {
+function extractRegionInPage(region: RuntimeRegion, regionKey: string, maxItems: number, _startIndex = 0): ExtractRegionPageResult {
   const effectiveRegionKey = typeof region.key === 'string' && region.key.trim().length > 0
     ? region.key
     : regionKey

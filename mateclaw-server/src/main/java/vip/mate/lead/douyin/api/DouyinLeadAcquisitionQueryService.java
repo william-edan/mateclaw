@@ -257,7 +257,7 @@ public class DouyinLeadAcquisitionQueryService {
                 failureReasons);
     }
 
-    public List<DouyinLeadPoolItem> leadPool(Long workspaceId, int limit, String status, String keyword) {
+    public List<DouyinLeadPoolItem> leadPool(Long workspaceId, int limit, String status, String keyword, Long taskId) {
         int boundedLimit = Math.max(1, Math.min(100, limit));
         int taskScanLimit = Math.max(50, Math.min(250, boundedLimit * 5));
         int commentScanLimit = Math.max(boundedLimit, Math.min(500, boundedLimit * 5));
@@ -269,6 +269,9 @@ public class DouyinLeadAcquisitionQueryService {
                 .last("LIMIT " + taskScanLimit);
         if (workspaceId != null) {
             taskQuery.eq(LeadTaskEntity::getWorkspaceId, workspaceId);
+        }
+        if (taskId != null) {
+            taskQuery.eq(LeadTaskEntity::getId, taskId);
         }
         if (keyword != null && !keyword.isBlank()) {
             taskQuery.like(LeadTaskEntity::getKeyword, keyword.trim());

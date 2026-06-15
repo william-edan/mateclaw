@@ -245,7 +245,7 @@ class DouyinLeadAcquisitionQueryServiceTest {
         when(engagementMapper.selectList(any())).thenReturn(List.of(engagement));
         when(profileMapper.selectBatchIds(any())).thenReturn(List.of(profile));
 
-        List<DouyinLeadPoolItem> rows = service.leadPool(7L, 50, "sent", "易企秀");
+        List<DouyinLeadPoolItem> rows = service.leadPool(7L, 50, "sent", "易企秀", null);
 
         assertThat(rows).hasSize(1);
         DouyinLeadPoolItem row = rows.getFirst();

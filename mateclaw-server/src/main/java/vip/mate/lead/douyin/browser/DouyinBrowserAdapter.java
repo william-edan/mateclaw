@@ -6,6 +6,7 @@ import vip.mate.lead.douyin.model.DouyinLeadAcquisitionInput;
 import vip.mate.lead.douyin.model.EngagementResult;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 public interface DouyinBrowserAdapter {
 
@@ -20,6 +21,11 @@ public interface DouyinBrowserAdapter {
     RegionInfo detectCommentRegion();
 
     CommentCollectionResult collectAllComments(RegionInfo region);
+
+    default CommentCollectionResult collectAllComments(RegionInfo region,
+                                                       Consumer<CommentCollectionProgress> progressConsumer) {
+        return collectAllComments(region);
+    }
 
     BrowserObservation openAuthorProfile(DouyinCommentItem comment);
 
@@ -73,6 +79,21 @@ public interface DouyinBrowserAdapter {
     ) {
         public ExtractedRegion {
             comments = comments == null ? List.of() : List.copyOf(comments);
+        }
+    }
+
+    record CommentCollectionProgress(
+            int commentsCollected,
+            int declaredCommentCount,
+            int scrollAttempts,
+            int networkObservedPages,
+            boolean networkHasMoreFalseObserved,
+            String primaryCollectionSource,
+            String stopReason
+    ) {
+        public CommentCollectionProgress {
+            primaryCollectionSource = primaryCollectionSource == null ? "" : primaryCollectionSource;
+            stopReason = stopReason == null ? "" : stopReason;
         }
     }
 }

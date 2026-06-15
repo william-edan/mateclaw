@@ -28,6 +28,7 @@ export type DetachReason =
 
 export interface DebuggerEvent<M extends keyof CDPEvents = keyof CDPEvents> {
   tabId: number
+  sessionId?: string
   method: M
   params: CDPEvents[M]
 }
@@ -113,7 +114,12 @@ export class DebuggerManager {
    * Send a CDP command on the attached session. Throws SessionDetachedError if
    * the session is gone so action handlers can bail out cleanly.
    */
-  async send<M extends keyof CDP>(tabId: number, method: M, params: CDP[M]['params']): Promise<CDP[M]['result']> {
+  async send<M extends keyof CDP>(
+    tabId: number,
+    method: M,
+    params: CDP[M]['params'],
+    sessionId?: string,
+  ): Promise<CDP[M]['result']> {
     const session = this.sessions.get(tabId)
     if (!session) {
       throw new SessionDetachedError(tabId, this.detachedReasons.get(tabId) ?? 'unknown')
@@ -126,7 +132,8 @@ export class DebuggerManager {
       }
       session.pending.push(pending)
 
-      this.chrome.debugger.sendCommand({ tabId }, method as string, params, result => {
+      const target: chrome.debugger.Debuggee = sessionId ? { tabId, sessionId } : { tabId }
+      this.chrome.debugger.sendCommand(target, method as string, params, result => {
         removePending(session, pending)
 
         const lastError = this.chrome.runtime.lastError
@@ -180,6 +187,7 @@ export class DebuggerManager {
 
     const event = {
       tabId: source.tabId,
+      sessionId: typeof source.sessionId === 'string' ? source.sessionId : undefined,
       method,
       params: params ?? {},
     } as DebuggerEvent

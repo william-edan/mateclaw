@@ -16,11 +16,15 @@ describe('SkillMarket Douyin lead launch', () => {
   })
 
   it('uses the requested launch defaults and exposes returned ids', () => {
-    expect(skillMarket).toContain("sort: 'most_liked'")
+    expect(skillMarket).toContain("sort: 'comprehensive'")
     expect(skillMarket).toContain('videoLimit: 50')
-    expect(skillMarket).toContain("dmDraft: '你好'")
+    expect(skillMarket).toContain('preset.dmDraft')
     expect(skillMarket).toContain('engage: true')
     expect(skillMarket).toContain('sendDm: false')
+    expect(skillMarket).toContain('matchTarget')
+    expect(skillMarket).toContain('matchPresetBadExperience')
+    expect(skillMarket).toContain('matchDescription')
+    expect(skillMarket).toContain('matchExamples')
     expect(skillMarket).toContain('douyinLaunchResult.runId')
     expect(skillMarket).toContain('douyinLaunchResult.taskId')
   })

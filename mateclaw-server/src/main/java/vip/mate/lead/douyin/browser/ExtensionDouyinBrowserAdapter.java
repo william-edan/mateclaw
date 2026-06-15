@@ -2,6 +2,7 @@ package vip.mate.lead.douyin.browser;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;
@@ -19,13 +20,16 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 @Component
@@ -36,14 +40,33 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private static final int END_MARKER_STABLE_WINDOWS = 2;
     private static final int MAX_SCROLL_PROTECTION = 2_000;
     private static final long COMMENT_SCROLL_REGION_DEADLINE_MS = 15_000L;
-    private static final long COMMENT_WHEEL_SCROLL_DEADLINE_MS = 1_200L;
+    private static final long COMMENT_WHEEL_SCROLL_DEADLINE_MS = 4_000L;
+    private static final long COMMENT_NETWORK_WHEEL_SCROLL_DEADLINE_MS = 1_500L;
     private static final double COMMENT_SCROLL_STEP_PX = 520.0d;
+    private static final double COMMENT_NETWORK_SCROLL_STEP_PX = 680.0d;
     private static final long COMMENT_SCROLL_SETTLE_DELAY_MS = 450L;
+    private static final long COMMENT_NETWORK_SCROLL_SETTLE_DELAY_MS = 180L;
+    private static final long COMMENT_NETWORK_PAGE_TARGET_INTERVAL_MS = 1_000L;
     private static final long COMMENT_FINAL_SETTLE_DELAY_MS = 800L;
     private static final double COMMENT_COLLECTION_TARGET_COVERAGE = 1.0d;
     private static final long FILTER_PANEL_SETTLE_DELAY_MS = 600L;
     private static final long SORT_SELECT_SETTLE_DELAY_MS = 1_200L;
     private static final long SORTED_VIDEO_SNAPSHOT_TTL_MS = 30 * 60 * 1000L;
+    private static final int COMMENT_EXTRACT_REGION_MAX_ITEMS = 80;
+    private static final int COMMENT_DOM_INCREMENTAL_LOOKBACK = 8;
+    private static final int COMMENT_DOM_FALLBACK_INTERVAL = 12;
+    private static final int COMMENT_NETWORK_CAPTURE_MAX_PAGES = 200;
+    private static final int COMMENT_NETWORK_CAPTURE_MAX_BODY_BYTES = 512 * 1024;
+    private static final int COMMENT_NETWORK_CAPTURE_TTL_MS = 180_000;
+    private static final boolean COMMENT_NETWORK_ONLY_COLLECTION = true;
+    private static final int COMMENT_NETWORK_FALLBACK_GRACE_SCROLLS = 6;
+    private static final int COMMENT_NETWORK_ONLY_NO_PAGE_SCROLL_LIMIT = 35;
+    private static final int COMMENT_NETWORK_ONLY_STALE_WINDOW_LIMIT = 60;
+    private static final int AUTHOR_PROFILE_OPEN_MAX_ATTEMPTS = 2;
+    private static final int AUTHOR_PROFILE_CONFIRM_ATTEMPTS = 16;
+    private static final int AUTHOR_PROFILE_RETRY_CONFIRM_ATTEMPTS = 24;
+    private static final long AUTHOR_PROFILE_CONFIRM_WAIT_MS = 750L;
+    private static final long AUTHOR_PROFILE_RETRY_CONFIRM_WAIT_MS = 1_000L;
     private static final List<String> DOUYIN_COMPREHENSIVE_SORT_LABELS =
             List.of("综合排序", "综合", "默认排序");
     private static final List<String> DOUYIN_LIKE_SORT_LABELS =
@@ -60,6 +83,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private final ObjectMapper mapper;
     private final DouyinCommentCollector collector;
     private volatile SortedVideoSnapshot lastSortedVideoSnapshot = SortedVideoSnapshot.empty();
+    private volatile boolean commentNetworkCaptureActive = false;
+
+    private record OpenedAuthorProfile(BrowserObservation observation, @Nullable Long tabId) {
+    }
 
     public ExtensionDouyinBrowserAdapter(ExtensionBrowserTool browser,
                                          ObjectMapper mapper,
@@ -169,6 +196,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             try {
                 BrowserObservation observed = waitForSearchVerified(keyword, 4, 600L);
                 observed = ensurePlainSearchResultPage(observed, keyword);
+                if (sort.isComprehensive()) {
+                    rememberSortedVideoSnapshot(keyword, observed);
+                    return observed;
+                }
                 if (sortVerified(observed, keyword, sort)) {
                     rememberSortedVideoSnapshot(keyword, observed);
                     return observed;
@@ -195,6 +226,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public BrowserObservation openVideo(int zeroBasedIndex) {
+        startCommentNetworkCapture();
         BrowserObservation current = observeMain("all");
         if (looksLikeVideoOpenHard(current)) {
             if (zeroBasedIndex > 0) {
@@ -261,6 +293,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private BrowserObservation switchToNextVideoByKeyboard(BrowserObservation current, int zeroBasedIndex) {
         BrowserObservation before = closeCommentPanelBeforeVideoSwitch(current);
         for (int attempt = 0; attempt < 3; attempt++) {
+            startCommentNetworkCapture();
             if (!tryOk(browser.service_press_key_main("ArrowDown"))) {
                 waitMs(350L);
                 continue;
@@ -368,6 +401,9 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private boolean extractedCommentPanelReady(RegionInfo region, String videoKey) {
+        if (COMMENT_NETWORK_ONLY_COLLECTION) {
+            return false;
+        }
         if (region == null) {
             return false;
         }
@@ -535,6 +571,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public CommentCollectionResult collectAllComments(RegionInfo region) {
+        return collectAllComments(region, ignored -> {
+        });
+    }
+
+    @Override
+    public CommentCollectionResult collectAllComments(RegionInfo region,
+                                                      Consumer<CommentCollectionProgress> progressConsumer) {
         LinkedHashMap<String, DouyinCommentItem> seen = new LinkedHashMap<>();
         int stableNoNew = 0;
         int stableEndMarker = 0;
@@ -556,7 +599,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         int staleScrolls = 0;
         String lastWindowSignature = "";
         long lastLoopMs = 0L;
-        ensureCommentsPanelReady(region, "before_reset_top");
+        int domExtractCursor = 0;
+        int lastProgressComments = -1;
+        int lastProgressPages = -1;
+        NetworkCollectionState network = new NetworkCollectionState();
+        if (COMMENT_NETWORK_ONLY_COLLECTION && !commentNetworkCaptureActive) {
+            startCommentNetworkCapture();
+        }
         BrowserObservation current = observeMain("all");
         String collectionVideoIdentity = videoIdentity(current.url());
         ensureCommentsPanelReady(region, current, "before_collect_loop");
@@ -568,26 +617,34 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
-            if (shouldRunDeepPanelCheck(scrolls, stableNoNew, lastScrollEvidence)) {
+            if (!COMMENT_NETWORK_ONLY_COLLECTION && shouldRunDeepPanelCheck(scrolls, stableNoNew, lastScrollEvidence)) {
                 ensureCommentsPanelReady(region, current, "before_extract_" + scrolls);
             }
-            if (videoChangedDuringCollection(collectionVideoIdentity, current)) {
+            if (!COMMENT_NETWORK_ONLY_COLLECTION && videoChangedDuringCollection(collectionVideoIdentity, current)) {
                 return collectionResult(seen, declared, false, "VIDEO_CHANGED_DURING_COLLECTION", scrolls, stableNoNew,
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
-            if (!commentsPanelAvailable(current, region)) {
+            if (!COMMENT_NETWORK_ONLY_COLLECTION && !network.primaryActive() && !commentsPanelAvailable(current, region)) {
                 return collectionResult(seen, declared, false, "COMMENT_PANEL_LOST_DURING_COLLECTION", scrolls, stableNoNew,
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
-            CommentWindowHarvest harvest = harvestCommentWindow(seen, region, current, declared);
+            CommentWindowHarvest harvest = harvestCommentWindow(
+                    seen,
+                    region,
+                    current,
+                    declared,
+                    domExtractCursor,
+                    network,
+                    shouldUseDomFallback(network, scrolls, stableEndMarker));
+            domExtractCursor = harvest.nextDomStartIndex();
             declared = harvest.declaredCommentCount();
             lastWindowBeforeCount = harvest.beforeCount();
             lastWindowAfterCount = harvest.afterCount();
@@ -599,18 +656,75 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
             lastCollectionAdvanced = lastNewItems > 0;
             totalNewItems += lastNewItems;
             if (lastCollectionAdvanced) {
                 advancedWindows++;
             }
+            if (shouldPublishCommentProgress(seen.size(), network.pageCount(), lastProgressComments, lastProgressPages, scrolls)) {
+                publishCommentProgress(progressConsumer, seen.size(), declared, scrolls, network, "");
+                lastProgressComments = seen.size();
+                lastProgressPages = network.pageCount();
+            }
             boolean endReached = harvest.endReached();
+            if (harvest.networkHasMoreFalse()) {
+                waitMs(COMMENT_FINAL_SETTLE_DELAY_MS);
+                CommentWindowHarvest finalHarvest = harvestCommentWindow(
+                        seen,
+                        region,
+                        current,
+                        declared,
+                        domExtractCursor,
+                        network,
+                        false);
+                domExtractCursor = finalHarvest.nextDomStartIndex();
+                declared = finalHarvest.declaredCommentCount();
+                if (finalHarvest.newItems() > 0) {
+                    lastExtractedCount = finalHarvest.extractedCount();
+                    lastVisibleCount = finalHarvest.visibleCount();
+                    lastWindowBeforeCount = finalHarvest.beforeCount();
+                    lastWindowAfterCount = finalHarvest.afterCount();
+                    lastNewItems = finalHarvest.newItems();
+                    lastCollectionAdvanced = true;
+                    totalNewItems += finalHarvest.newItems();
+                    advancedWindows++;
+                }
+                return collectionResult(seen, declared, true,
+                        seen.isEmpty() ? "NO_COMMENTS" : "NETWORK_HAS_MORE_FALSE",
+                        scrolls, stableNoNew, stableEndMarker,
+                        lastExtractedCount, lastVisibleCount, lastNewItems,
+                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+            }
             if (!lastCollectionAdvanced) {
                 stableNoNew++;
             } else {
                 stableNoNew = 0;
+            }
+            if (COMMENT_NETWORK_ONLY_COLLECTION
+                    && !network.primaryActive()
+                    && scrolls >= COMMENT_NETWORK_ONLY_NO_PAGE_SCROLL_LIMIT) {
+                return collectionResult(seen, declared, false,
+                        "NETWORK_PAGES_NOT_OBSERVED",
+                        scrolls, stableNoNew, stableEndMarker,
+                        lastExtractedCount, lastVisibleCount, lastNewItems,
+                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+            }
+            if (COMMENT_NETWORK_ONLY_COLLECTION
+                    && network.primaryActive()
+                    && stableNoNew >= COMMENT_NETWORK_ONLY_STALE_WINDOW_LIMIT) {
+                return collectionResult(seen, declared, false,
+                        "NETWORK_NOT_ADVANCING",
+                        scrolls, stableNoNew, stableEndMarker,
+                        lastExtractedCount, lastVisibleCount, lastNewItems,
+                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
             if (endReached && !lastCollectionAdvanced) {
                 stableEndMarker++;
@@ -621,8 +735,16 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             }
             if (stableEndMarker >= END_MARKER_STABLE_WINDOWS) {
                 waitMs(COMMENT_FINAL_SETTLE_DELAY_MS);
-                current = observeMain("all");
-                CommentWindowHarvest finalHarvest = harvestCommentWindow(seen, region, current, declared);
+                current = observeForCommentCollection(network);
+                CommentWindowHarvest finalHarvest = harvestCommentWindow(
+                        seen,
+                        region,
+                        current,
+                        declared,
+                        domExtractCursor,
+                        network,
+                        shouldUseDomFallback(network, scrolls, stableEndMarker));
+                domExtractCursor = finalHarvest.nextDomStartIndex();
                 declared = finalHarvest.declaredCommentCount();
                 if (finalHarvest.newItems() > 0) {
                     lastExtractedCount = finalHarvest.extractedCount();
@@ -640,9 +762,9 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                        lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
             }
-            ScrollRegionEvidence scrollEvidence = scrollCommentRegion(region, scrolls);
+            ScrollRegionEvidence scrollEvidence = scrollCommentRegion(region, scrolls, COMMENT_NETWORK_ONLY_COLLECTION);
             lastScrollEvidence = scrollEvidence;
             if (scrollEvidence.forwardProgress()) {
                 effectiveScrolls++;
@@ -653,39 +775,77 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 staleScrolls++;
             }
             lastWindowSignature = scrollEvidence.afterWindowSignature();
-            waitMs(COMMENT_SCROLL_SETTLE_DELAY_MS);
-            current = observeMain("all");
-            if (videoChangedDuringCollection(collectionVideoIdentity, current)) {
-                return collectionResult(seen, declared, false, "VIDEO_CHANGED_DURING_SCROLL", scrolls + 1, stableNoNew,
-                        stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
-                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
-                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
+            waitMs(commentScrollSettleDelay(network));
+            if (!COMMENT_NETWORK_ONLY_COLLECTION) {
+                current = observeForCommentCollection(network);
+                if (videoChangedDuringCollection(collectionVideoIdentity, current)) {
+                    return collectionResult(seen, declared, false, "VIDEO_CHANGED_DURING_SCROLL", scrolls + 1, stableNoNew,
+                            stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
+                            lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                            effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                            lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+                }
+                boolean postScrollEndReached = !network.primaryActive()
+                        && commentsEndReached(current, region, ExtractedComments.empty());
+                boolean panelAvailableAfterScroll = network.primaryActive()
+                        || postScrollEndReached
+                        || commentsPanelAvailable(current, region);
+                if (!network.primaryActive()
+                        && scrollEvidence.panelLostSignal()
+                        && !postScrollEndReached
+                        && !panelAvailableAfterScroll) {
+                    return collectionResult(seen, declared, false, "COMMENT_PANEL_LOST_DURING_SCROLL", scrolls + 1, stableNoNew,
+                            stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
+                            lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                            effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                            lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+                }
+                if (!network.primaryActive() && !panelAvailableAfterScroll) {
+                    return collectionResult(seen, declared, false, "COMMENT_PANEL_LOST_AFTER_SCROLL", scrolls + 1, stableNoNew,
+                            stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
+                            lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
+                            effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
+                            lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+                }
             }
-            boolean postScrollEndReached = commentsEndReached(current, region, ExtractedComments.empty());
-            boolean panelAvailableAfterScroll = postScrollEndReached || commentsPanelAvailable(current, region);
-            if (scrollEvidence.panelLostSignal() && !postScrollEndReached && !panelAvailableAfterScroll) {
-                return collectionResult(seen, declared, false, "COMMENT_PANEL_LOST_DURING_SCROLL", scrolls + 1, stableNoNew,
-                        stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
-                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
-                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
-            }
-            if (!panelAvailableAfterScroll) {
-                return collectionResult(seen, declared, false, "COMMENT_PANEL_LOST_AFTER_SCROLL", scrolls + 1, stableNoNew,
-                        stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
-                        lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
-                        effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                        lastWindowSignature, lastLoopMs, lastScrollEvidence);
-            }
-            lastLoopMs = elapsedMs(loopStartedAt);
+            lastLoopMs = waitForNetworkCadenceIfNeeded(loopStartedAt, network);
         }
         stopReason = "PROTECTION_LIMIT";
         return collectionResult(seen, declared, complete, stopReason, MAX_SCROLL_PROTECTION, stableNoNew,
                 stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                 lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                 effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
-                lastWindowSignature, lastLoopMs, lastScrollEvidence);
+                lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+    }
+
+    private boolean shouldPublishCommentProgress(int commentsCollected,
+                                                 int networkPages,
+                                                 int lastProgressComments,
+                                                 int lastProgressPages,
+                                                 int scrolls) {
+        return commentsCollected != lastProgressComments
+                || networkPages != lastProgressPages
+                || scrolls == 0
+                || scrolls % 10 == 0;
+    }
+
+    private void publishCommentProgress(Consumer<CommentCollectionProgress> progressConsumer,
+                                        int commentsCollected,
+                                        int declared,
+                                        int scrolls,
+                                        NetworkCollectionState network,
+                                        String stopReason) {
+        if (progressConsumer == null) {
+            return;
+        }
+        progressConsumer.accept(new CommentCollectionProgress(
+                commentsCollected,
+                declared,
+                scrolls,
+                network == null ? 0 : network.pageCount(),
+                network != null && network.hasTerminalPage(),
+                network != null && network.primaryActive() ? "network_observed" : "dom_or_a11y",
+                stopReason));
     }
 
     private boolean shouldRunDeepPanelCheck(int scrolls, int stableNoNew, ScrollRegionEvidence evidence) {
@@ -696,6 +856,36 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return true;
         }
         return stableNoNew > 0 && scrolls % 40 == 0;
+    }
+
+    private BrowserObservation observeForCommentCollection(NetworkCollectionState network) {
+        if (network == null || !network.primaryActive()) {
+            return observeMain("all");
+        }
+        try {
+            return observeMain("default");
+        } catch (RuntimeException e) {
+            return observeMain("all");
+        }
+    }
+
+    private long commentScrollSettleDelay(NetworkCollectionState network) {
+        return network != null && network.primaryActive()
+                ? COMMENT_NETWORK_SCROLL_SETTLE_DELAY_MS
+                : COMMENT_SCROLL_SETTLE_DELAY_MS;
+    }
+
+    private long waitForNetworkCadenceIfNeeded(long loopStartedAt, NetworkCollectionState network) {
+        long elapsed = elapsedMs(loopStartedAt);
+        if (network == null || !network.primaryActive()) {
+            return elapsed;
+        }
+        long remaining = COMMENT_NETWORK_PAGE_TARGET_INTERVAL_MS - elapsed;
+        if (remaining > 0) {
+            waitMs(remaining);
+            return elapsedMs(loopStartedAt);
+        }
+        return elapsed;
     }
 
     private boolean commentsPanelAvailable(BrowserObservation observed, RegionInfo region) {
@@ -747,41 +937,97 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 || collector.commentsEmpty(observed.tree());
     }
 
+    private boolean shouldUseDomFallback(NetworkCollectionState network, int scrolls, int stableEndMarker) {
+        if (COMMENT_NETWORK_ONLY_COLLECTION) {
+            return false;
+        }
+        if (network != null && network.primaryActive()) {
+            return false;
+        }
+        if (stableEndMarker > 0) {
+            return true;
+        }
+        if (scrolls < COMMENT_NETWORK_FALLBACK_GRACE_SCROLLS) {
+            return false;
+        }
+        return scrolls == COMMENT_NETWORK_FALLBACK_GRACE_SCROLLS
+                || scrolls % COMMENT_DOM_FALLBACK_INTERVAL == 0;
+    }
+
     private CommentWindowHarvest harvestCommentWindow(
             LinkedHashMap<String, DouyinCommentItem> seen,
             RegionInfo region,
             BrowserObservation current,
-            int declared
+            int declared,
+            int domExtractCursor,
+            NetworkCollectionState network,
+            boolean useDomFallback
     ) {
         int before = seen.size();
         ExtractedComments networkResult = drainNetworkComments(current == null ? "" : current.url());
+        if (network != null) {
+            network.record(networkResult);
+        }
         for (DouyinCommentItem item : networkResult.comments()) {
             if (!item.text().isBlank()) {
                 mergeComment(seen, item);
             }
         }
-        ExtractedComments extractedResult = extractRegionComments(region, current == null ? "" : current.url());
+        boolean effectiveDomFallback = useDomFallback && !COMMENT_NETWORK_ONLY_COLLECTION;
+        int domStartIndex = Math.max(0, domExtractCursor - COMMENT_DOM_INCREMENTAL_LOOKBACK);
+        ExtractedComments extractedResult = effectiveDomFallback
+                ? extractRegionComments(region, current == null ? "" : current.url(), domStartIndex)
+                : ExtractedComments.empty();
+        boolean domFallbackUsed = false;
+        if (effectiveDomFallback
+                && domStartIndex > 0
+                && extractedResult.comments().isEmpty()
+                && !extractedResult.endReached()
+                && !extractedResult.emptyReached()) {
+            extractedResult = extractRegionComments(region, current == null ? "" : current.url(), 0);
+            domStartIndex = 0;
+            domFallbackUsed = true;
+        }
         for (DouyinCommentItem item : extractedResult.comments()) {
             if (!item.text().isBlank()) {
                 mergeComment(seen, item);
             }
         }
-        List<DouyinCommentItem> visibleTreeComments = current == null
+        boolean networkPrimaryActive = network != null && network.primaryActive();
+        List<DouyinCommentItem> visibleTreeComments = current == null || networkPrimaryActive || COMMENT_NETWORK_ONLY_COLLECTION
                 ? List.of()
                 : collector.visibleComments(current, region);
-        if (networkResult.comments().isEmpty() && extractedResult.comments().isEmpty()) {
+        if (!networkPrimaryActive && networkResult.comments().isEmpty() && extractedResult.comments().isEmpty()) {
             for (DouyinCommentItem item : visibleTreeComments) {
                 if (!item.text().isBlank()) {
                     mergeComment(seen, item);
                 }
             }
         }
-        int uiDeclared = current == null
+        int domDeclared = current == null
                 ? extractedResult.declaredCommentCount()
                 : Math.max(extractedResult.declaredCommentCount(), collector.declaredCommentCount(current.tree(), region));
+        int uiDeclared = COMMENT_NETWORK_ONLY_COLLECTION
+                ? networkResult.declaredCommentCount()
+                : Math.max(networkResult.declaredCommentCount(), domDeclared);
         int nextDeclared = uiDeclared > 0 ? Math.max(declared, uiDeclared) : declared;
-        boolean endReached = commentsEndReached(current, region, extractedResult);
-        boolean emptyReached = commentsEmpty(current, region, extractedResult);
+        boolean endReached = !networkPrimaryActive
+                && !COMMENT_NETWORK_ONLY_COLLECTION
+                && commentsEndReached(current, region, extractedResult);
+        boolean emptyReached = !networkPrimaryActive
+                && !COMMENT_NETWORK_ONLY_COLLECTION
+                && commentsEmpty(current, region, extractedResult);
+        int reportedNextDomStartIndex = extractedResult.nextDomStartIndex();
+        int nextDomStartIndex;
+        if (domFallbackUsed) {
+            nextDomStartIndex = reportedNextDomStartIndex >= 0
+                    ? reportedNextDomStartIndex
+                    : extractedResult.comments().size();
+        } else if (reportedNextDomStartIndex >= 0) {
+            nextDomStartIndex = Math.max(domExtractCursor, reportedNextDomStartIndex);
+        } else {
+            nextDomStartIndex = Math.max(domExtractCursor, domStartIndex + extractedResult.comments().size());
+        }
         return new CommentWindowHarvest(
                 before,
                 seen.size(),
@@ -789,8 +1035,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 networkResult.comments().size() + extractedResult.comments().size(),
                 visibleTreeComments.size(),
                 nextDeclared,
+                nextDomStartIndex,
                 endReached,
-                emptyReached);
+                emptyReached,
+                networkResult.networkPageCount(),
+                networkResult.networkHasMoreFalse());
     }
 
     private long elapsedMs(long startedAtNanos) {
@@ -827,9 +1076,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             int staleScrolls,
             String lastWindowSignature,
             long lastLoopMs,
-            ScrollRegionEvidence lastScrollEvidence
+            ScrollRegionEvidence lastScrollEvidence,
+            NetworkCollectionState network
     ) {
         ScrollRegionEvidence evidence = lastScrollEvidence == null ? ScrollRegionEvidence.none() : lastScrollEvidence;
+        NetworkCollectionState networkState = network == null ? new NetworkCollectionState() : network;
         double coverage = declared > 0
                 ? Math.min(1.0d, seen.size() / (double) declared)
                 : 0.0d;
@@ -879,6 +1130,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 .filter(item -> "a11y_tree".equals(String.valueOf(item.metadata().get("source"))))
                 .count();
         metadata.put("networkObservedComments", networkObservedComments);
+        metadata.put("networkOnlyCollection", COMMENT_NETWORK_ONLY_COLLECTION);
+        metadata.put("networkObservedPages", networkState.pageCount());
+        metadata.put("networkTerminalPages", networkState.terminalPageCount());
+        metadata.put("networkHasMoreFalseObserved", networkState.hasTerminalPage());
+        metadata.put("networkLastCursor", networkState.lastCursor());
+        metadata.put("networkLastNextCursor", networkState.lastNextCursor());
         metadata.put("extractedRegionComments", extractedRegionComments);
         metadata.put("a11yTreeComments", a11yTreeComments);
         boolean a11yOnlyCollection = a11yTreeComments > 0
@@ -886,11 +1143,15 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 && networkObservedComments == 0;
         boolean declaredCountMismatch = declared > 0 && seen.size() < declared;
         boolean endOfListStop = stopReason != null && stopReason.startsWith("END_OF_LIST");
+        boolean networkTerminalStop = stopReason != null && stopReason.startsWith("NETWORK_");
         boolean domTopLevelEndReached = endOfListStop
                 && declaredCountMismatch
                 && extractedRegionComments > 0
                 && !a11yOnlyCollection;
-        boolean effectiveComplete = complete || domTopLevelEndReached;
+        boolean networkTopLevelEndReached = networkTerminalStop
+                && networkObservedComments > 0
+                && networkState.hasTerminalPage();
+        boolean effectiveComplete = complete || domTopLevelEndReached || networkTopLevelEndReached;
         String effectiveStopReason = domTopLevelEndReached && !complete
                 ? "END_OF_LIST_TOP_LEVEL"
                 : stopReason;
@@ -898,16 +1159,18 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         String reportedStopReason = a11yOnlyCollection && "END_OF_LIST".equals(effectiveStopReason)
                 ? "END_OF_LIST_A11Y_ONLY"
                 : effectiveStopReason;
-        metadata.put("primaryCollectionSource", extractedRegionComments > 0
-                ? "extract_region"
-                : networkObservedComments > 0 ? "network_observed" : "a11y_tree");
+        metadata.put("primaryCollectionSource", networkObservedComments > 0
+                ? "network_observed"
+                : extractedRegionComments > 0 ? "extract_region" : "a11y_tree");
         metadata.put("domExtractionUnavailable", a11yOnlyCollection);
-        metadata.put("fullCollectionExpected", reportedComplete && declared > 0 && declared <= seen.size());
-        metadata.put("topLevelCollectionComplete", reportedComplete && endOfListStop);
-        metadata.put("declaredTotalMayIncludeReplies", domTopLevelEndReached);
-        metadata.put("partialCollection", a11yOnlyCollection || declaredCountMismatch && !domTopLevelEndReached);
+        metadata.put("fullCollectionExpected", reportedComplete
+                && (networkTopLevelEndReached || declared > 0 && declared <= seen.size()));
+        metadata.put("topLevelCollectionComplete", reportedComplete && (endOfListStop || networkTerminalStop));
+        metadata.put("declaredTotalMayIncludeReplies", domTopLevelEndReached || networkTopLevelEndReached && declaredCountMismatch);
+        metadata.put("partialCollection", a11yOnlyCollection
+                || declaredCountMismatch && !domTopLevelEndReached && !networkTopLevelEndReached);
         metadata.put("declaredCountMismatch", declaredCountMismatch);
-        if (domTopLevelEndReached) {
+        if (domTopLevelEndReached || networkTopLevelEndReached && declaredCountMismatch) {
             metadata.put("declaredCountMismatchReason", "declared_count_may_include_collapsed_replies");
         }
         metadata.put("replyExpansionEnabled", false);
@@ -979,60 +1242,152 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public BrowserObservation openAuthorProfile(DouyinCommentItem comment) {
+        return openAuthorProfileForEngagement(comment).observation();
+    }
+
+    private OpenedAuthorProfile openAuthorProfileForEngagement(DouyinCommentItem comment) {
         if (comment == null || !comment.hasAuthorOpenTarget()) {
             throw new DouyinBrowserException("AUTHOR_TARGET_MISSING", "匹配评论没有绑定作者入口");
         }
         List<String> attempts = new ArrayList<>();
-        attempts.add("new-tab:" + (comment.authorProfileUrl() == null ? "dom-comment-link" : comment.authorProfileUrl()));
-        if (tryOk(browser.service_open_author_from_comment_main(
-                comment.text(),
-                comment.authorName(),
-                comment.authorProfileUrl() == null ? "" : comment.authorProfileUrl()))) {
-            BrowserObservation opened = waitForAuthorProfileAnyTab(comment, 8, 700L);
-            if (looksLikeDouyinUserProfile(opened, comment)) {
-                return opened;
+        DouyinBrowserException lastFailure = null;
+        for (int attempt = 0; attempt < AUTHOR_PROFILE_OPEN_MAX_ATTEMPTS; attempt++) {
+            attempts.add("attempt-" + (attempt + 1) + ":new-tab:"
+                    + (comment.authorProfileUrl() == null ? "dom-comment-link" : comment.authorProfileUrl()));
+            JsonNode openAction = parse(browser.service_open_author_from_comment_main(
+                    comment.text(),
+                    comment.authorName(),
+                    comment.authorProfileUrl() == null ? "" : comment.authorProfileUrl()));
+            if (ok(openAction)) {
+                Long tabId = actionPayloadLong(openAction, "tabId");
+                int confirmAttempts = attempt == 0
+                        ? AUTHOR_PROFILE_CONFIRM_ATTEMPTS
+                        : AUTHOR_PROFILE_RETRY_CONFIRM_ATTEMPTS;
+                long confirmWaitMs = attempt == 0
+                        ? AUTHOR_PROFILE_CONFIRM_WAIT_MS
+                        : AUTHOR_PROFILE_RETRY_CONFIRM_WAIT_MS;
+                OpenedAuthorProfile opened = tabId == null
+                        ? new OpenedAuthorProfile(waitForAuthorProfileAnyTab(comment, confirmAttempts, confirmWaitMs), null)
+                        : waitForAuthorProfileTabOrActive(tabId, comment, confirmAttempts, confirmWaitMs);
+                if (looksLikeDouyinUserProfile(opened.observation(), comment)) {
+                    return opened;
+                }
+                cleanupUnconfirmedAuthorProfileTab(comment, opened.tabId(), opened.observation());
+                lastFailure = new DouyinBrowserException("PROFILE_TAB_NOT_CONTROLLED",
+                        profileTabNotControlledMessage(comment, attempts, tabId, opened));
+            } else {
+                lastFailure = new DouyinBrowserException("PROFILE_OPEN_FAILED",
+                        "作者主页打开动作失败。code=" + openAction.path("code").asText("")
+                                + ", message=" + openAction.path("message").asText("")
+                                + ", author=" + comment.authorName()
+                                + ", attempts=" + attempts);
             }
+            if (!retryableProfileOpenFailure(lastFailure) || attempt >= AUTHOR_PROFILE_OPEN_MAX_ATTEMPTS - 1) {
+                break;
+            }
+            waitMs(700L + attempt * 500L);
         }
-        BrowserObservation active = observeActive("all");
-        throw new DouyinBrowserException("PROFILE_TAB_NOT_CONTROLLED",
-                "作者主页没有在新标签页中打开或未确认。activeUrl=" + active.url()
-                        + ", activeTitle=" + active.title()
-                        + ", author=" + comment.authorName()
-                        + ", attempts=" + attempts
-                        + ", tree=" + treeExcerpt(active.tree()));
+        throw lastFailure == null
+                ? new DouyinBrowserException("PROFILE_OPEN_FAILED", "作者主页打开失败: " + comment.authorName())
+                : lastFailure;
+    }
+
+    private String profileTabNotControlledMessage(DouyinCommentItem comment,
+                                                  List<String> attempts,
+                                                  @Nullable Long requestedTabId,
+                                                  OpenedAuthorProfile opened) {
+        BrowserObservation observation = opened.observation();
+        return "作者主页没有在新标签页中打开或未确认。tabId=" + requestedTabId
+                + ", effectiveTabId=" + opened.tabId()
+                + ", observedOk=" + observation.ok()
+                + ", observedCode=" + observation.code()
+                + ", observedMessage=" + observation.message()
+                + ", observedUrl=" + observation.url()
+                + ", observedTitle=" + observation.title()
+                + ", author=" + comment.authorName()
+                + ", expectedProfileUrl=" + comment.authorProfileUrl()
+                + ", attempts=" + attempts
+                + ", tree=" + treeExcerpt(observation.tree());
+    }
+
+    private boolean retryableProfileOpenFailure(DouyinBrowserException failure) {
+        if (failure == null) {
+            return false;
+        }
+        String code = failure.code();
+        return "PROFILE_OPEN_FAILED".equals(code)
+                || "PROFILE_TAB_NOT_CONTROLLED".equals(code)
+                || "DEADLINE_EXCEEDED".equals(code)
+                || "SESSION_DETACHED".equals(code);
+    }
+
+    private void cleanupUnconfirmedAuthorProfileTab(DouyinCommentItem comment,
+                                                    @Nullable Long tabId,
+                                                    @Nullable BrowserObservation observed) {
+        try {
+            if (tabId != null && tryOk(browser.service_close_tab(tabId))) {
+                waitMs(350L);
+                log.info("[douyin.lead] closed unconfirmed author profile tab: author={}, tabId={}",
+                        comment.authorName(), tabId);
+                return;
+            }
+            BrowserObservation active = observeActive("all");
+            BrowserObservation main = observeMain("all");
+            boolean activeLooksLikeTemporaryEngagementTab = isDouyinPage(active.url())
+                    && !sameUrl(active.url(), main.url())
+                    && (looksLikeDouyinUserProfile(active, comment)
+                    || looksLikeDouyinDmPage(active)
+                    || active.url().contains("/user/"));
+            if (activeLooksLikeTemporaryEngagementTab && tryOk(browser.service_close_tab_active())) {
+                waitMs(350L);
+                log.info("[douyin.lead] closed active unconfirmed author profile tab: author={}, url={}",
+                        comment.authorName(), active.url());
+            } else if (observed != null) {
+                log.warn("[douyin.lead] unconfirmed author profile tab was not closed: author={}, tabId={}, url={}, title={}",
+                        comment.authorName(), tabId, observed.url(), observed.title());
+            }
+        } catch (RuntimeException e) {
+            log.warn("[douyin.lead] failed to cleanup unconfirmed author profile tab: author={}, tabId={}, error={}",
+                    comment.authorName(), tabId, e.getMessage());
+        }
     }
 
     @Override
     public EngagementResult followAndDraft(DouyinCommentItem comment, String dmDraft, boolean sendDm) {
-        BrowserObservation videoBeforeEngagement = observeMain("all");
         boolean profileOpened = false;
+        Long engagementTabId = null;
         try {
-        BrowserObservation profile = openAuthorProfile(comment);
+        OpenedAuthorProfile openedProfile = openAuthorProfileForEngagement(comment);
+        engagementTabId = openedProfile.tabId();
+        BrowserObservation profile = openedProfile.observation();
         profileOpened = true;
         if (!isDouyinPage(profile.url())) {
             return EngagementResult.failed(comment, "NOT_DOUYIN_PROFILE", "当前活动页不是抖音作者主页");
         }
+        String resultProfileUrl = firstNonBlank(comment.authorProfileUrl(), profile.url());
 
-        boolean alreadyFollowed = profile.tree().contains("已关注")
-                || profile.tree().contains("互相关注")
-                || profile.tree().toLowerCase(Locale.ROOT).contains("following");
-        if (!alreadyFollowed && clickProfileAction(profile, "follow", List.of("关注"))) {
-            waitMs(1000);
-            profile = observeActive("all");
+        boolean alreadyFollowed = profileFollowConfirmed(profile);
+        boolean followClicked = false;
+        if (!alreadyFollowed) {
+            followClicked = clickProfileAction(profile, "follow", List.of("关注", "回关", "Follow"), engagementTabId);
+            if (!followClicked) {
+                return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
+                        false, false, false, false, "failed", "FOLLOW_BUTTON_NOT_FOUND",
+                        "未找到可点击的关注入口，已跳过私信以避免未关注直达私信。");
+            }
+            profile = waitForFollowConfirmation(engagementTabId, profile, 6, 700L);
         }
-        boolean followConfirmed = profile.tree().contains("已关注")
-                || profile.tree().contains("互相关注")
-                || profile.tree().toLowerCase(Locale.ROOT).contains("following");
+        boolean followConfirmed = alreadyFollowed || profileFollowConfirmed(profile);
 
         List<String> dmLabels = List.of("私信", "发私信", "Message", "发消息");
-        if (!clickProfileAction(profile, "dm", dmLabels)) {
-            return new EngagementResult(comment, comment.authorName(), profile.url(), true,
+        if (!clickProfileAction(profile, "dm", dmLabels, engagementTabId)) {
+            return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
                     followConfirmed, false, false, false, "failed", "DM_BUTTON_NOT_FOUND",
                     "未找到私信入口：A11y 与 DOM 均未命中");
         }
-        BrowserObservation dmPage = waitForDmPage(8, 650L);
+        BrowserObservation dmPage = waitForDmPage(engagementTabId, 8, 650L);
         if (!looksLikeDouyinDmPage(dmPage)) {
-            dmPage = retryDmDomActionAfterUnconfirmedPage(comment, profile, dmPage, dmLabels);
+            dmPage = retryDmDomActionAfterUnconfirmedPage(comment, profile, dmPage, dmLabels, engagementTabId);
         }
         if (!isDouyinPage(dmPage.url())) {
             return EngagementResult.failed(comment, "DM_TAB_NOT_CONTROLLED", "私信页不是受控抖音标签页");
@@ -1040,15 +1395,18 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         if (!looksLikeDouyinDmPage(dmPage)) {
             log.warn("[douyin.lead] dm page not confirmed: url={}, title={}, signals={}, tree={}",
                     dmPage.url(), dmPage.title(), dmPageSignals(dmPage), treeExcerpt(dmPage.tree()));
-            return new EngagementResult(comment, comment.authorName(), dmPage.url(), true,
+            return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
                     followConfirmed, false, false, false, "failed", "DM_PAGE_NOT_CONFIRMED",
                     "未确认进入目标用户私信页，拒绝输入草稿。signals=" + dmPageSignals(dmPage));
         }
         JsonNode dmDraftAction = errorNode("NOT_RUN", "type_dm_draft not run");
         boolean typedByDmPrimitive = false;
+        boolean typedByGenericFallback = false;
         boolean sentByDmPrimitive = false;
         try {
-            dmDraftAction = parse(browser.service_type_dm_draft_active(dmDraft, sendDm));
+            dmDraftAction = parse(engagementTabId == null
+                    ? browser.service_type_dm_draft_active(dmDraft, sendDm)
+                    : browser.service_type_dm_draft_tab(engagementTabId, dmDraft, sendDm));
             typedByDmPrimitive = ok(dmDraftAction);
             sentByDmPrimitive = actionPayloadBoolean(dmDraftAction, "sent");
         } catch (RuntimeException e) {
@@ -1057,7 +1415,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             typedByDmPrimitive = false;
         }
         if (!typedByDmPrimitive) {
-            BrowserObservation afterDraftAttempt = observeActive("all");
+            BrowserObservation afterDraftAttempt = observeEngagementTab(engagementTabId, "all");
             if (looksLikeDouyinDmPage(afterDraftAttempt)
                     && (dmDraftVisibleInDmInputArea(afterDraftAttempt, dmDraft) || dmDraftVisibleInDmDom(afterDraftAttempt, dmDraft))) {
                 typedByDmPrimitive = true;
@@ -1071,18 +1429,24 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                             .orElse(null);
                 }
                 if (input == null) {
-                    return new EngagementResult(comment, comment.authorName(), dmPage.url(), true,
+                    return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
                             followConfirmed, true, false, false, "failed", "DM_INPUT_NOT_FOUND", "未找到私信输入框");
                 }
-                requireOk(browser.service_type_active(dmDraft, new TypePayload.FocusTarget(input.x(), input.y())), "type_dm_draft");
+                requireOk(engagementTabId == null
+                                ? browser.service_type_active(dmDraft, new TypePayload.FocusTarget(input.x(), input.y()))
+                                : browser.service_type_tab(engagementTabId, dmDraft, new TypePayload.FocusTarget(input.x(), input.y())),
+                        "type_dm_draft");
+                typedByGenericFallback = true;
             }
         }
         if (sendDm && !sentByDmPrimitive) {
-            BrowserObservation beforeSend = observeActive("all");
+            BrowserObservation beforeSend = observeEngagementTab(engagementTabId, "all");
             if (looksLikeDouyinDmPage(beforeSend)
                     && (dmDraftVisibleInDmInputArea(beforeSend, dmDraft) || dmDraftVisibleInDmDom(beforeSend, dmDraft))) {
                 try {
-                    JsonNode sendAction = parse(browser.service_send_dm_active(dmDraft));
+                    JsonNode sendAction = parse(engagementTabId == null
+                            ? browser.service_send_dm_active(dmDraft)
+                            : browser.service_send_dm_tab(engagementTabId, dmDraft));
                     sentByDmPrimitive = ok(sendAction) && actionPayloadBoolean(sendAction, "sent");
                     if (sentByDmPrimitive) {
                         log.info("[douyin.lead] sent existing dm draft by send-only primitive");
@@ -1093,8 +1457,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             }
         }
         waitMs(500);
-        BrowserObservation verify = observeActive("all");
+        BrowserObservation verify = observeEngagementTab(engagementTabId, "all");
         boolean draftTyped = sentByDmPrimitive
+                || typedByDmPrimitive
+                || typedByGenericFallback
                 || (looksLikeDouyinDmPage(verify)
                 && (dmDraftVisibleInDmInputArea(verify, dmDraft) || dmDraftVisibleInDmDom(verify, dmDraft)));
         boolean sent = sendDm && sentByDmPrimitive;
@@ -1107,42 +1473,55 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 : (!draftTyped ? "未能确认私信草稿已输入"
                 : (!followConfirmed && !dmPage.tree().contains("私信") ? "未能确认已关注目标作者"
                 : "未能确认私信已发送"));
-        return new EngagementResult(comment, comment.authorName(), verify.url(), true, followConfirmed,
+        return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true, followConfirmed,
                 true, draftTyped, sent, succeeded ? "succeeded" : "failed",
                 failureCode,
                 failureMessage);
         } finally {
-            if (profileOpened) {
-                restoreVideoContextAfterEngagement(videoBeforeEngagement, comment);
+            if (profileOpened || engagementTabId != null) {
+                restoreVideoContextAfterEngagement(comment, engagementTabId);
             }
         }
     }
 
-    private void restoreVideoContextAfterEngagement(BrowserObservation videoBeforeEngagement,
-                                                    DouyinCommentItem comment) {
+    private void restoreVideoContextAfterEngagement(DouyinCommentItem comment, @Nullable Long engagementTabId) {
         try {
-            BrowserObservation main = observeMain("all");
-            if (looksLikeVideoOpenHard(main)) {
-                if (tryOk(browser.service_close_tab_active())) {
-                    waitMs(500L);
-                    log.info("[douyin.lead] closed engagement active tab and returned to video: author={}",
-                            comment.authorName());
+            if (engagementTabId != null && tryOk(browser.service_close_tab(engagementTabId))) {
+                waitMs(700L);
+                BrowserObservation mainAfterClose = observeMain("all");
+                if (looksLikeVideoOpenHard(mainAfterClose)) {
+                    log.info("[douyin.lead] closed engagement tab by id and preserved current video: author={}, tabId={}",
+                            comment.authorName(), engagementTabId);
                     return;
                 }
-                if (tryOk(browser.service_press_key_active("Control+W"))) {
-                    waitMs(500L);
-                    log.info("[douyin.lead] closed engagement active tab by keyboard fallback: author={}",
+            }
+            BrowserObservation active = observeActive("all");
+            BrowserObservation mainBeforeClose = observeMain("all");
+            boolean activeLooksLikeEngagementTab = isDouyinPage(active.url())
+                    && !sameUrl(active.url(), mainBeforeClose.url())
+                    && (looksLikeDouyinUserProfile(active, comment) || looksLikeDouyinDmPage(active));
+            if (activeLooksLikeEngagementTab && tryOk(browser.service_close_tab_active())) {
+                waitMs(700L);
+                BrowserObservation mainAfterClose = observeMain("all");
+                if (looksLikeVideoOpenHard(mainAfterClose)) {
+                    log.info("[douyin.lead] closed engagement tab and preserved current video: author={}",
                             comment.authorName());
                     return;
                 }
             }
-            if (videoBeforeEngagement != null
-                    && looksLikeVideoOpenHard(videoBeforeEngagement)
-                    && isDouyinPage(videoBeforeEngagement.url())) {
-                log.info("[douyin.lead] restoring main tab to video after engagement: author={}, url={}",
-                        comment.authorName(), videoBeforeEngagement.url());
-                tryOk(browser.extension_browser_navigate(videoBeforeEngagement.url(), "domcontentloaded", null));
-                waitMs(900L);
+            if (activeLooksLikeEngagementTab && tryOk(browser.service_press_key_active("Control+W"))) {
+                waitMs(700L);
+                BrowserObservation mainAfterClose = observeMain("all");
+                if (looksLikeVideoOpenHard(mainAfterClose)) {
+                    log.info("[douyin.lead] closed engagement tab by keyboard and preserved current video: author={}",
+                            comment.authorName());
+                    return;
+                }
+            }
+            BrowserObservation main = observeMain("all");
+            if (!looksLikeVideoOpenHard(main)) {
+                log.warn("[douyin.lead] main video context not confirmed after engagement: author={}, mainUrl={}, activeUrl={}",
+                        comment.authorName(), main.url(), active.url());
             }
         } catch (RuntimeException e) {
             log.warn("[douyin.lead] failed to restore video context after engagement: author={}, error={}",
@@ -1150,12 +1529,20 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
     }
 
+    private boolean sameUrl(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return left.trim().equalsIgnoreCase(right.trim());
+    }
+
     private BrowserObservation retryDmDomActionAfterUnconfirmedPage(
             DouyinCommentItem comment,
             BrowserObservation profile,
             BrowserObservation unconfirmed,
-            List<String> dmLabels) {
-        BrowserObservation active = observeActive("all");
+            List<String> dmLabels,
+            @Nullable Long engagementTabId) {
+        BrowserObservation active = observeEngagementTab(engagementTabId, "all");
         BrowserObservation retryBase = looksLikeDouyinUserProfile(active, comment) ? active
                 : (looksLikeDouyinUserProfile(profile, comment) ? profile : unconfirmed);
         if (!looksLikeDouyinUserProfile(retryBase, comment)) {
@@ -1163,14 +1550,44 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     active.url(), active.title(), dmPageSignals(active));
             return unconfirmed;
         }
-        if (!tryOk(browser.service_click_profile_action_active(dmLabels))) {
+        if (!clickProfileActionByDom(engagementTabId, dmLabels)) {
             log.warn("[douyin.lead] dom dm retry did not find profile action: url={}, title={}, tree={}",
                     retryBase.url(), retryBase.title(), treeExcerpt(retryBase.tree()));
             return unconfirmed;
         }
         log.info("[douyin.lead] retried profile action by dom after unconfirmed dm page: labels={}, previousUrl={}, currentUrl={}",
                 dmLabels, unconfirmed == null ? "" : unconfirmed.url(), retryBase.url());
-        return waitForDmPage(8, 650L);
+        return waitForDmPage(engagementTabId, 8, 650L);
+    }
+
+    private BrowserObservation waitForFollowConfirmation(@Nullable Long engagementTabId,
+                                                         BrowserObservation fallback,
+                                                         int attempts,
+                                                         long waitMs) {
+        BrowserObservation observed = fallback;
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            waitMs(waitMs);
+            try {
+                observed = observeEngagementTab(engagementTabId, "all");
+                if (profileFollowConfirmed(observed)) {
+                    return observed;
+                }
+            } catch (RuntimeException e) {
+                log.warn("[douyin.lead] follow confirmation observe failed: {}", e.getMessage());
+                return observed == null ? fallback : observed;
+            }
+        }
+        return observed == null ? fallback : observed;
+    }
+
+    private boolean profileFollowConfirmed(@Nullable BrowserObservation profile) {
+        if (profile == null || profile.tree() == null) {
+            return false;
+        }
+        String tree = profile.tree();
+        return tree.contains("已关注")
+                || tree.contains("互相关注")
+                || tree.toLowerCase(Locale.ROOT).contains("following");
     }
 
     private boolean actionPayloadBoolean(JsonNode root, String fieldName) {
@@ -1192,22 +1609,126 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return false;
     }
 
-    private boolean clickProfileAction(BrowserObservation profile, String actionName, List<String> labels) {
+    @Nullable
+    private Long actionPayloadLong(JsonNode root, String fieldName) {
+        if (root == null || fieldName == null || fieldName.isBlank()) {
+            return null;
+        }
+        JsonNode direct = root.path(fieldName);
+        if (direct.isNumber()) {
+            return direct.asLong();
+        }
+        if (direct.isTextual()) {
+            try {
+                return Long.parseLong(direct.asText());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        JsonNode results = root.path("results");
+        if (results.isArray()) {
+            for (JsonNode result : results) {
+                JsonNode payload = result.path("payload");
+                JsonNode value = payload.path(fieldName);
+                if (value.isNumber()) {
+                    return value.asLong();
+                }
+                if (value.isTextual()) {
+                    try {
+                        return Long.parseLong(value.asText());
+                    } catch (NumberFormatException ignored) {
+                        return null;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean clickProfileAction(BrowserObservation profile, String actionName, List<String> labels,
+                                       @Nullable Long engagementTabId) {
         ClickPoint a11y = findProfileActionPoint(profile, labels.toArray(String[]::new));
-        if (a11y != null && tryOk(browser.service_click_active(a11y.x(), a11y.y()))) {
+        if (a11y != null && clickEngagementPoint(engagementTabId, a11y)) {
             log.info("[douyin.lead] clicked profile action by a11y: action={}, labels={}, x={}, y={}",
                     actionName, labels, a11y.x(), a11y.y());
             return true;
         }
-        if (tryOk(browser.service_click_profile_action_active(labels))) {
+        if (clickProfileActionByDom(engagementTabId, labels)) {
             log.info("[douyin.lead] clicked profile action by dom: action={}, labels={}",
                     actionName, labels);
             return true;
+        }
+        if ("dm".equals(actionName) && openProfileMoreMenu(profile, engagementTabId)) {
+            waitMs(350L);
+            BrowserObservation afterMore = observeEngagementTab(engagementTabId, "all");
+            ClickPoint menuPoint = findProfileActionPoint(afterMore, labels.toArray(String[]::new));
+            if (menuPoint != null && clickEngagementPoint(engagementTabId, menuPoint)) {
+                log.info("[douyin.lead] clicked profile action from more menu by a11y: action={}, labels={}, x={}, y={}",
+                        actionName, labels, menuPoint.x(), menuPoint.y());
+                return true;
+            }
+            if (clickProfileActionByDom(engagementTabId, labels)) {
+                log.info("[douyin.lead] clicked profile action from more menu by dom: action={}, labels={}",
+                        actionName, labels);
+                return true;
+            }
         }
         log.warn("[douyin.lead] profile action not found: action={}, labels={}, url={}, tree={}",
                 actionName, labels, profile == null ? "" : profile.url(),
                 profile == null ? "" : treeExcerpt(profile.tree()));
         return false;
+    }
+
+    private boolean clickEngagementPoint(@Nullable Long engagementTabId, ClickPoint point) {
+        if (point == null) {
+            return false;
+        }
+        return tryOk(engagementTabId == null
+                ? browser.service_click_active(point.x(), point.y())
+                : browser.service_click_tab(engagementTabId, point.x(), point.y()));
+    }
+
+    private boolean clickProfileActionByDom(@Nullable Long engagementTabId, List<String> labels) {
+        return tryOk(engagementTabId == null
+                ? browser.service_click_profile_action_active(labels)
+                : browser.service_click_profile_action_tab(engagementTabId, labels));
+    }
+
+    private BrowserObservation observeEngagementTab(@Nullable Long engagementTabId, String filter) {
+        return engagementTabId == null ? observeActive(filter) : observeTab(engagementTabId, filter);
+    }
+
+    private boolean openProfileMoreMenu(BrowserObservation profile, @Nullable Long engagementTabId) {
+        if (profile == null) {
+            return false;
+        }
+        ClickPoint more = findProfileMoreActionPoint(profile);
+        if (more != null && clickEngagementPoint(engagementTabId, more)) {
+            log.info("[douyin.lead] opened profile more menu by a11y: x={}, y={}", more.x(), more.y());
+            return true;
+        }
+        return clickProfileActionByDom(engagementTabId, List.of("更多", "...", "…"));
+    }
+
+    @Nullable
+    private ClickPoint findProfileMoreActionPoint(BrowserObservation obs) {
+        if (obs == null || obs.tree() == null || obs.tree().isBlank()) {
+            return null;
+        }
+        int viewportW = Math.max(1, obs.viewportWidth());
+        int viewportH = Math.max(1, obs.viewportHeight());
+        double minContentX = Math.max(180.0d, viewportW * 0.16d);
+        return parseTreeLines(obs.tree()).stream()
+                .filter(line -> {
+                    String name = line.name().replaceAll("\\s+", "");
+                    return name.equals("更多") || name.equals("...") || name.equals("…") || name.contains("更多操作");
+                })
+                .filter(line -> line.x() >= minContentX)
+                .filter(line -> line.y() >= 70.0d && line.y() <= Math.max(360.0d, viewportH * 0.72d))
+                .filter(line -> !line.role().equalsIgnoreCase("Searchbox"))
+                .max(Comparator.comparingInt(line -> scoreProfileActionLine(line, "更多", "...", "…", "更多操作")))
+                .map(TreeLine::point)
+                .orElse(null);
     }
 
     private boolean looksLikeDouyinDmPage(BrowserObservation obs) {
@@ -1236,14 +1757,14 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 + ", hasReplyOrFollowGate=" + tree.contains("对方回复或关注你之前");
     }
 
-    private BrowserObservation waitForDmPage(int attempts, long waitMs) {
-        BrowserObservation observed = observeActive("all");
+    private BrowserObservation waitForDmPage(@Nullable Long engagementTabId, int attempts, long waitMs) {
+        BrowserObservation observed = observeEngagementTab(engagementTabId, "all");
         for (int i = 0; i < Math.max(1, attempts); i++) {
             if (looksLikeDouyinDmPage(observed)) {
                 return observed;
             }
             waitMs(waitMs);
-            observed = observeActive("all");
+            observed = observeEngagementTab(engagementTabId, "all");
         }
         return observed;
     }
@@ -1334,8 +1855,15 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private ExtractedComments extractRegionComments(RegionInfo region, String videoKey) {
+        return extractRegionComments(region, videoKey, 0);
+    }
+
+    private ExtractedComments extractRegionComments(RegionInfo region, String videoKey, int startIndex) {
         try {
-            JsonNode root = parse(browser.service_extract_region_main(region.regionKey(), 160));
+            JsonNode root = parse(browser.service_extract_region_main(
+                    region.regionKey(),
+                    COMMENT_EXTRACT_REGION_MAX_ITEMS,
+                    Math.max(0, startIndex)));
             if (!root.path("ok").asBoolean(false)) {
                 return ExtractedComments.empty();
             }
@@ -1343,7 +1871,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     collector.commentsFromExtractedRegion(root, videoKey),
                     collector.declaredCommentCountFromExtractedRegion(root),
                     collector.commentsReachedEndFromExtractedRegion(root),
-                    collector.commentsEmptyFromExtractedRegion(root));
+                    collector.commentsEmptyFromExtractedRegion(root),
+                    nextDomStartIndexFromExtractedRegion(root));
             return extracted;
         } catch (Exception e) {
             log.warn("[douyin.comments.dom] extract_region failed regionKey={} error={}",
@@ -1352,25 +1881,47 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
     }
 
+    private int nextDomStartIndexFromExtractedRegion(JsonNode extractRoot) {
+        JsonNode diagnostics = extractRoot.path("results").path(0).path("payload").path("diagnostics");
+        if (!diagnostics.isObject()) {
+            return -1;
+        }
+        return diagnostics.path("nextStartIndex").asInt(-1);
+    }
+
     private void startCommentNetworkCapture() {
         try {
-            browser.service_douyin_comment_network_main("start", 20, 512 * 1024, 120_000);
-        } catch (Exception ignored) {
+            String result = browser.service_douyin_comment_network_main(
+                    "start",
+                    COMMENT_NETWORK_CAPTURE_MAX_PAGES,
+                    COMMENT_NETWORK_CAPTURE_MAX_BODY_BYTES,
+                    COMMENT_NETWORK_CAPTURE_TTL_MS);
+            logCommentNetworkAction("start", result);
+            commentNetworkCaptureActive = true;
+        } catch (Exception e) {
+            commentNetworkCaptureActive = false;
+            log.warn("[douyin.comments.network] start failed: {}", e.toString());
             // Network observation is an enhancement path. DOM/region extraction remains the fallback.
         }
     }
 
     private void stopCommentNetworkCapture() {
         try {
-            browser.service_douyin_comment_network_main("stop", null, null, null);
-        } catch (Exception ignored) {
+            String result = browser.service_douyin_comment_network_main("stop", null, null, null);
+            logCommentNetworkAction("stop", result);
+        } catch (Exception e) {
+            log.warn("[douyin.comments.network] stop failed: {}", e.toString());
             // Best-effort cleanup only.
+        } finally {
+            commentNetworkCaptureActive = false;
         }
     }
 
     private ExtractedComments drainNetworkComments(String videoKey) {
         try {
-            JsonNode root = parse(browser.service_douyin_comment_network_main("drain", null, null, null));
+            String result = browser.service_douyin_comment_network_main("drain", null, null, null);
+            logCommentNetworkAction("drain", result);
+            JsonNode root = parse(result);
             if (!root.path("ok").asBoolean(false)) {
                 return ExtractedComments.empty();
             }
@@ -1380,9 +1931,23 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             }
             LinkedHashMap<String, DouyinCommentItem> comments = new LinkedHashMap<>();
             int declared = 0;
+            int pageCount = 0;
+            boolean terminalPage = false;
+            String lastCursor = "";
+            String lastNextCursor = "";
+            List<String> pageKeys = new ArrayList<>();
             for (JsonNode page : pages) {
                 DouyinCommentCollector.NetworkCommentPage parsed =
                         collector.commentsFromNetworkPage(page, videoKey);
+                if (networkPageUsable(parsed)) {
+                    pageCount++;
+                    pageKeys.add(networkPageKey(page, parsed));
+                    lastCursor = firstNonBlank(parsed.cursor(), lastCursor);
+                    lastNextCursor = firstNonBlank(parsed.nextCursor(), lastNextCursor);
+                    if (parsed.hasMoreKnown() && !parsed.hasMore()) {
+                        terminalPage = true;
+                    }
+                }
                 declared = Math.max(declared, parsed.declaredCommentCount());
                 for (DouyinCommentItem item : parsed.comments()) {
                     if (!item.text().isBlank()) {
@@ -1390,10 +1955,49 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     }
                 }
             }
-            return new ExtractedComments(new ArrayList<>(comments.values()), declared);
-        } catch (Exception ignored) {
+            return ExtractedComments.network(
+                    new ArrayList<>(comments.values()),
+                    declared,
+                    pageCount,
+                    terminalPage,
+                    pageKeys,
+                    lastCursor,
+                    lastNextCursor);
+        } catch (Exception e) {
+            log.warn("[douyin.comments.network] drain failed: {}", e.toString());
             return ExtractedComments.empty();
         }
+    }
+
+    private void logCommentNetworkAction(String op, String rawJson) {
+        // Intentionally quiet in production. The action result is parsed by the
+        // caller when it affects behavior; verbose payload logging is only useful
+        // during network capture debugging and can leak large request details.
+    }
+
+    private boolean networkPageUsable(DouyinCommentCollector.NetworkCommentPage page) {
+        if (page == null) {
+            return false;
+        }
+        return !page.comments().isEmpty()
+                || page.declaredCommentCount() > 0
+                || !page.cursor().isBlank()
+                || !page.nextCursor().isBlank()
+                || page.hasMoreKnown()
+                || page.sourceUrl().toLowerCase(Locale.ROOT).contains("comment");
+    }
+
+    private String networkPageKey(JsonNode page, DouyinCommentCollector.NetworkCommentPage parsed) {
+        String requestId = page == null ? "" : page.path("requestId").asText("");
+        if (!requestId.isBlank()) {
+            return "request:" + requestId;
+        }
+        if (parsed == null) {
+            return "";
+        }
+        return "url:" + parsed.sourceUrl()
+                + "|cursor:" + parsed.cursor()
+                + "|next:" + parsed.nextCursor();
     }
 
     private void ensureCommentsPanelReady(RegionInfo region, String phase) {
@@ -1464,7 +2068,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 region.source() + "+safe-point");
     }
 
-    private ScrollRegionEvidence scrollCommentRegion(RegionInfo region, int scrollIndex) {
+    private ScrollRegionEvidence scrollCommentRegion(RegionInfo region, int scrollIndex, boolean networkOnly) {
+        if (networkOnly) {
+            return scrollCommentRegionNetworkTrigger(region);
+        }
         ClickPoint point = commentRegionScrollPoint(region, scrollIndex);
         if (scrollIndex == 0 || scrollIndex % 25 == 0) {
             parkMouseInCommentRegion(point, "park_comments_region_before_scroll");
@@ -1491,6 +2098,24 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return ScrollRegionEvidence.regionOnlyFallback("scroll_container_not_found:no_keyboard_or_page_scroll_fallback");
         }
         return evidence;
+    }
+
+    private ScrollRegionEvidence scrollCommentRegionNetworkTrigger(RegionInfo region) {
+        ClickPoint point = commentRegionScrollPoint(region, 0);
+        try {
+            requireOk(browser.service_scroll_main(
+                            "down",
+                            COMMENT_NETWORK_SCROLL_STEP_PX,
+                            point.x(),
+                            point.y(),
+                            COMMENT_NETWORK_WHEEL_SCROLL_DEADLINE_MS),
+                    "scroll_comments_network_trigger");
+            return ScrollRegionEvidence.networkTrigger("network_only_direct_wheel");
+        } catch (DouyinBrowserException e) {
+            log.warn("[douyin.comments.network] direct wheel trigger failed, keep network collector alive: code={}, message={}",
+                    e.code(), e.getMessage());
+            return ScrollRegionEvidence.wheelFallback("network_direct_wheel_" + e.code().toLowerCase(Locale.ROOT));
+        }
     }
 
     private ClickPoint commentRegionScrollPoint(RegionInfo region, int scrollIndex) {
@@ -1543,6 +2168,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     private BrowserObservation observeActive(String filter) {
         return parseObservation(browser.service_observe_active(filter));
+    }
+
+    private BrowserObservation observeTab(long tabId, String filter) {
+        return parseObservation(browser.service_observe_tab(tabId, filter));
     }
 
     private BrowserObservation parseObservation(String raw) {
@@ -1872,6 +2501,57 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return last;
     }
 
+    private OpenedAuthorProfile waitForAuthorProfileTabOrActive(long tabId,
+                                                                 DouyinCommentItem comment,
+                                                                 int attempts,
+                                                                 long waitMs) {
+        BrowserObservation observed = observeTab(tabId, "all");
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            if (looksLikeDouyinUserProfile(observed, comment)) {
+                return new OpenedAuthorProfile(observed, tabId);
+            }
+            if (authorProfileObservationTerminalFailure(observed)) {
+                return new OpenedAuthorProfile(observed, tabId);
+            }
+            if (isBlankObservation(observed)) {
+                BrowserObservation active = observeActive("all");
+                if (looksLikeDouyinUserProfile(active, comment)) {
+                    log.info("[douyin.lead] author profile tab {} snapshot was blank; using active controlled tab for engagement",
+                            tabId);
+                    return new OpenedAuthorProfile(active, null);
+                }
+                BrowserObservation main = observeMain("all");
+                if (looksLikeDouyinUserProfile(main, comment)) {
+                    log.info("[douyin.lead] author profile tab {} snapshot was blank; using main controlled tab for engagement",
+                            tabId);
+                    return new OpenedAuthorProfile(main, null);
+                }
+            }
+            waitMs(waitMs);
+            observed = observeTab(tabId, "all");
+        }
+        return new OpenedAuthorProfile(observed, tabId);
+    }
+
+    private boolean authorProfileObservationTerminalFailure(BrowserObservation observed) {
+        if (observed == null || observed.ok()) {
+            return false;
+        }
+        String code = observed.code() == null ? "" : observed.code();
+        String message = observed.message() == null ? "" : observed.message().toLowerCase(Locale.ROOT);
+        return "SESSION_DETACHED".equals(code)
+                || message.contains("target_closed");
+    }
+
+    private boolean isBlankObservation(BrowserObservation obs) {
+        if (obs == null) {
+            return true;
+        }
+        return (obs.url() == null || obs.url().isBlank())
+                && (obs.title() == null || obs.title().isBlank())
+                && (obs.tree() == null || obs.tree().isBlank());
+    }
+
     private List<ClickPoint> authorOpenClickPoints(DouyinCommentItem.ClickTarget target) {
         if (target == null || !target.hasPoint()) {
             return List.of();
@@ -1895,18 +2575,47 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         String title = obs.title() == null ? "" : obs.title();
         String tree = obs.tree() == null ? "" : obs.tree();
         String author = comment == null ? "" : (comment.authorName() == null ? "" : comment.authorName().trim());
+        String expectedProfileToken = comment == null ? "" : profileIdentityToken(comment.authorProfileUrl());
+        String observedProfileToken = profileIdentityToken(obs.url());
+        boolean expectedUrlMatches = !expectedProfileToken.isBlank()
+                && expectedProfileToken.equalsIgnoreCase(observedProfileToken);
+        if (!expectedProfileToken.isBlank()
+                && !observedProfileToken.isBlank()
+                && !expectedUrlMatches) {
+            return false;
+        }
         boolean profileUrl = url.contains("/user/") || url.contains("sec_uid") || url.contains("modal_id=user");
         boolean profileSignals = tree.contains("获赞")
                 || tree.contains("粉丝")
                 || tree.contains("关注")
                 || tree.contains("TA的作品")
                 || tree.contains("作品");
-        boolean authorVisible = author.isBlank() || tree.contains(author) || title.contains(author);
+        boolean authorVisible = expectedUrlMatches || author.isBlank() || tree.contains(author) || title.contains(author);
         boolean wrongGlobalPage = !profileUrl && (url.contains("/follow")
                 || url.contains("/search")
                 || url.contains("/video/")
                 || tree.contains("搜索你感兴趣的内容"));
         return !wrongGlobalPage && authorVisible && (profileUrl || profileSignals);
+    }
+
+    private String profileIdentityToken(String profileUrl) {
+        if (profileUrl == null || profileUrl.isBlank()) {
+            return "";
+        }
+        String raw = profileUrl.trim();
+        int idx = raw.toLowerCase(Locale.ROOT).indexOf("/user/");
+        if (idx < 0) {
+            return "";
+        }
+        String token = raw.substring(idx + "/user/".length());
+        int end = token.length();
+        for (String marker : List.of("?", "#", "/")) {
+            int markerIndex = token.indexOf(marker);
+            if (markerIndex >= 0) {
+                end = Math.min(end, markerIndex);
+            }
+        }
+        return token.substring(0, end).trim();
     }
 
     private BrowserObservation waitForSearchVerified(String keyword, int attempts, long waitMs) {
@@ -3157,7 +3866,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         int viewportH = Math.max(1, obs.viewportHeight());
         double minContentX = Math.max(180.0d, viewportW * 0.16d);
         return parseTreeLines(obs.tree()).stream()
-                .filter(line -> matchesAnyNeedle(line.name(), needles))
+                .filter(line -> matchesProfileActionNeedle(line, needles))
                 .filter(line -> line.x() >= minContentX)
                 .filter(line -> line.y() >= 70.0d && line.y() <= Math.max(360.0d, viewportH * 0.72d))
                 .filter(line -> !line.role().equalsIgnoreCase("Searchbox"))
@@ -3166,12 +3875,19 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 .orElse(null);
     }
 
-    private boolean matchesAnyNeedle(String value, String... needles) {
-        if (value == null || value.isBlank()) {
+    private boolean matchesProfileActionNeedle(TreeLine line, String... needles) {
+        if (line == null || line.name() == null || line.name().isBlank()) {
+            return false;
+        }
+        String compactName = line.name().replaceAll("\\s+", "");
+        String lowerName = compactName.toLowerCase(Locale.ROOT);
+        if (lowerName.contains("下载") || lowerName.contains("客户端")
+                || lowerName.contains("桌面快捷") || lowerName.contains("download")) {
             return false;
         }
         for (String needle : needles) {
-            if (needle != null && !needle.isBlank() && value.contains(needle)) {
+            String compactNeedle = needle == null ? "" : needle.replaceAll("\\s+", "");
+            if (!compactNeedle.isBlank() && compactName.equalsIgnoreCase(compactNeedle)) {
                 return true;
             }
         }
@@ -3182,6 +3898,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         String role = line.role().toLowerCase(Locale.ROOT);
         String name = line.name().replaceAll("\\s+", "");
         int score = 0;
+        if (name.contains("下载") || name.contains("客户端") || name.contains("桌面快捷")
+                || name.toLowerCase(Locale.ROOT).contains("download")) {
+            score -= 1_000;
+        }
         if (role.equals("button")) score += 90;
         if (role.equals("text") || role.equals("statictext")) score += 30;
         for (String needle : needles) {
@@ -4269,6 +4989,23 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return empty("region_scroll_only", reason);
         }
 
+        static ScrollRegionEvidence networkTrigger(String reason) {
+            return new ScrollRegionEvidence(
+                    true,
+                    "network_direct_wheel",
+                    reason == null ? "" : reason,
+                    Double.NaN,
+                    Double.NaN,
+                    true,
+                    0,
+                    0,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "");
+        }
+
         static ScrollRegionEvidence empty(String mode, String reason) {
             return new ScrollRegionEvidence(
                     false,
@@ -4374,23 +5111,69 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             List<DouyinCommentItem> comments,
             int declaredCommentCount,
             boolean endReached,
-            boolean emptyReached
+            boolean emptyReached,
+            int nextDomStartIndex,
+            int networkPageCount,
+            boolean networkHasMoreFalse,
+            List<String> networkPageKeys,
+            String networkCursor,
+            String networkNextCursor
     ) {
         ExtractedComments(List<DouyinCommentItem> comments, int declaredCommentCount) {
-            this(comments, declaredCommentCount, false, false);
+            this(comments, declaredCommentCount, false, false, -1, 0, false, List.of(), "", "");
         }
 
         ExtractedComments(List<DouyinCommentItem> comments, int declaredCommentCount, boolean endReached) {
-            this(comments, declaredCommentCount, endReached, false);
+            this(comments, declaredCommentCount, endReached, false, -1, 0, false, List.of(), "", "");
+        }
+
+        ExtractedComments(List<DouyinCommentItem> comments,
+                          int declaredCommentCount,
+                          boolean endReached,
+                          boolean emptyReached) {
+            this(comments, declaredCommentCount, endReached, emptyReached, -1, 0, false, List.of(), "", "");
+        }
+
+        ExtractedComments(List<DouyinCommentItem> comments,
+                          int declaredCommentCount,
+                          boolean endReached,
+                          boolean emptyReached,
+                          int nextDomStartIndex) {
+            this(comments, declaredCommentCount, endReached, emptyReached, nextDomStartIndex, 0, false, List.of(), "", "");
         }
 
         static ExtractedComments empty() {
-            return new ExtractedComments(List.of(), 0, false, false);
+            return new ExtractedComments(List.of(), 0, false, false, -1, 0, false, List.of(), "", "");
+        }
+
+        static ExtractedComments network(List<DouyinCommentItem> comments,
+                                         int declaredCommentCount,
+                                         int pageCount,
+                                         boolean hasMoreFalse,
+                                         List<String> pageKeys,
+                                         String cursor,
+                                         String nextCursor) {
+            return new ExtractedComments(
+                    comments,
+                    declaredCommentCount,
+                    false,
+                    false,
+                    -1,
+                    pageCount,
+                    hasMoreFalse,
+                    pageKeys,
+                    cursor,
+                    nextCursor);
         }
 
         ExtractedComments {
             comments = comments == null ? List.of() : List.copyOf(comments);
             declaredCommentCount = Math.max(0, declaredCommentCount);
+            nextDomStartIndex = Math.max(-1, nextDomStartIndex);
+            networkPageCount = Math.max(0, networkPageCount);
+            networkPageKeys = networkPageKeys == null ? List.of() : List.copyOf(networkPageKeys);
+            networkCursor = networkCursor == null ? "" : networkCursor;
+            networkNextCursor = networkNextCursor == null ? "" : networkNextCursor;
         }
     }
 
@@ -4401,9 +5184,73 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             int extractedCount,
             int visibleCount,
             int declaredCommentCount,
+            int nextDomStartIndex,
             boolean endReached,
-            boolean emptyReached
+            boolean emptyReached,
+            int networkPageCount,
+            boolean networkHasMoreFalse
     ) {
+    }
+
+    private static final class NetworkCollectionState {
+        private int pageCount;
+        private int terminalPageCount;
+        private final Set<String> pageKeys = new HashSet<>();
+        private String lastCursor = "";
+        private String lastNextCursor = "";
+
+        void record(ExtractedComments comments) {
+            if (comments == null || comments.networkPageCount() <= 0) {
+                return;
+            }
+            int newPages = 0;
+            if (comments.networkPageKeys().isEmpty()) {
+                newPages = comments.networkPageCount();
+            } else {
+                for (String key : comments.networkPageKeys()) {
+                    if (key == null || key.isBlank() || pageKeys.add(key)) {
+                        newPages++;
+                    }
+                }
+            }
+            if (newPages <= 0) {
+                return;
+            }
+            pageCount += newPages;
+            if (comments.networkHasMoreFalse()) {
+                terminalPageCount++;
+            }
+            lastCursor = firstNonBlankStatic(comments.networkCursor(), lastCursor);
+            lastNextCursor = firstNonBlankStatic(comments.networkNextCursor(), lastNextCursor);
+        }
+
+        boolean primaryActive() {
+            return pageCount > 0;
+        }
+
+        boolean hasTerminalPage() {
+            return terminalPageCount > 0;
+        }
+
+        int pageCount() {
+            return pageCount;
+        }
+
+        int terminalPageCount() {
+            return terminalPageCount;
+        }
+
+        String lastCursor() {
+            return lastCursor;
+        }
+
+        String lastNextCursor() {
+            return lastNextCursor;
+        }
+
+        private static String firstNonBlankStatic(String first, String second) {
+            return first != null && !first.isBlank() ? first : second == null ? "" : second;
+        }
     }
 
     record VideoResultTarget(TreeLine clickLine,
@@ -4484,6 +5331,10 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
         boolean isMostLiked() {
             return "most_liked".equals(code);
+        }
+
+        boolean isComprehensive() {
+            return "comprehensive".equals(code);
         }
     }
 

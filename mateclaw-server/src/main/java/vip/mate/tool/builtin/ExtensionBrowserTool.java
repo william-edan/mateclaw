@@ -715,6 +715,10 @@ public class ExtensionBrowserTool {
         return extension_browser_observe_tab(new TabRef.Active(), filter, null);
     }
 
+    public String service_observe_tab(long tabId, String filter) {
+        return extension_browser_observe_tab(new TabRef.Explicit(tabId), filter, null);
+    }
+
     public String service_observe_main(String filter) {
         return extension_browser_observe_tab(new TabRef.Main(), filter, null);
     }
@@ -743,12 +747,20 @@ public class ExtensionBrowserTool {
         return extension_browser_click_at_tab(new TabRef.Active(), x, y, "linear", null);
     }
 
+    public String service_click_tab(long tabId, double x, double y) {
+        return extension_browser_click_at_tab(new TabRef.Explicit(tabId), x, y, "linear", null);
+    }
+
     public String service_hover_active(double x, double y) {
         return extension_browser_hover_at_tab(new TabRef.Active(), x, y, "linear", null);
     }
 
     public String service_type_active(String text, @Nullable TypePayload.FocusTarget focusTarget) {
         return extension_browser_type_at_tab(new TabRef.Active(), text, focusTarget, null);
+    }
+
+    public String service_type_tab(long tabId, String text, @Nullable TypePayload.FocusTarget focusTarget) {
+        return extension_browser_type_at_tab(new TabRef.Explicit(tabId), text, focusTarget, null);
     }
 
     public String service_type_main(String text, @Nullable TypePayload.FocusTarget focusTarget) {
@@ -763,13 +775,25 @@ public class ExtensionBrowserTool {
         return extension_browser_press_key_at_tab(new TabRef.Active(), key, null);
     }
 
+    public String service_press_key_tab(long tabId, String key) {
+        return extension_browser_press_key_at_tab(new TabRef.Explicit(tabId), key, null);
+    }
+
     public String service_close_tab_active() {
+        return service_close_tab(new TabRef.Active());
+    }
+
+    public String service_close_tab(long tabId) {
+        return service_close_tab(new TabRef.Explicit(tabId));
+    }
+
+    private String service_close_tab(TabRef tabRef) {
         BrowserSession session = resolveSession();
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
                 newMsgId(),
-                new TabRef.Active(),
+                tabRef,
                 ActionKind.CLOSE_TAB,
                 new CloseTabPayload(),
                 DEFAULT_DEADLINE_MS);
@@ -812,6 +836,11 @@ public class ExtensionBrowserTool {
         return service_register_region(new TabRef.Active(), regionKey, x, y, width, height, source);
     }
 
+    public String service_register_region_tab(long tabId, String regionKey, double x, double y,
+                                              double width, double height, String source) {
+        return service_register_region(new TabRef.Explicit(tabId), regionKey, x, y, width, height, source);
+    }
+
     private String service_register_region(TabRef tabRef, String regionKey, double x, double y,
                                            double width, double height, String source) {
         BrowserSession session = resolveSession();
@@ -848,14 +877,22 @@ public class ExtensionBrowserTool {
     }
 
     public String service_extract_region_main(String regionKey, int maxItems) {
-        return service_extract_region(new TabRef.Main(), regionKey, maxItems);
+        return service_extract_region(new TabRef.Main(), regionKey, maxItems, 0);
+    }
+
+    public String service_extract_region_main(String regionKey, int maxItems, int startIndex) {
+        return service_extract_region(new TabRef.Main(), regionKey, maxItems, startIndex);
     }
 
     public String service_extract_region_active(String regionKey, int maxItems) {
-        return service_extract_region(new TabRef.Active(), regionKey, maxItems);
+        return service_extract_region(new TabRef.Active(), regionKey, maxItems, 0);
     }
 
-    private String service_extract_region(TabRef tabRef, String regionKey, int maxItems) {
+    public String service_extract_region_tab(long tabId, String regionKey, int maxItems) {
+        return service_extract_region(new TabRef.Explicit(tabId), regionKey, maxItems, 0);
+    }
+
+    private String service_extract_region(TabRef tabRef, String regionKey, int maxItems, int startIndex) {
         BrowserSession session = resolveSession();
         if (session == null) return noSession();
 
@@ -863,7 +900,7 @@ public class ExtensionBrowserTool {
                 newMsgId(),
                 tabRef,
                 ActionKind.EXTRACT_REGION,
-                new ExtractRegionPayload(regionKey, maxItems),
+                new ExtractRegionPayload(regionKey, maxItems, startIndex),
                 DEFAULT_DEADLINE_MS);
         return executePlan(session, List.of(req));
     }
@@ -886,12 +923,20 @@ public class ExtensionBrowserTool {
     }
 
     public String service_click_profile_action_active(List<String> labels) {
+        return service_click_profile_action(new TabRef.Active(), labels);
+    }
+
+    public String service_click_profile_action_tab(long tabId, List<String> labels) {
+        return service_click_profile_action(new TabRef.Explicit(tabId), labels);
+    }
+
+    private String service_click_profile_action(TabRef tabRef, List<String> labels) {
         BrowserSession session = resolveSession();
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
                 newMsgId(),
-                new TabRef.Active(),
+                tabRef,
                 ActionKind.CLICK_PROFILE_ACTION,
                 new ClickProfileActionPayload(labels),
                 DEFAULT_DEADLINE_MS);
@@ -910,12 +955,20 @@ public class ExtensionBrowserTool {
         return service_type_dm_draft(new TabRef.Main(), text, send, false);
     }
 
+    public String service_type_dm_draft_tab(long tabId, String text, boolean send) {
+        return service_type_dm_draft(new TabRef.Explicit(tabId), text, send, false);
+    }
+
     public String service_send_dm_active(String text) {
         String active = service_type_dm_draft(new TabRef.Active(), text, true, true);
         if (!active.contains("\"NO_TARGET_TAB\"") && !active.contains("tab_ref=\\\"active\\\"")) {
             return active;
         }
         return service_type_dm_draft(new TabRef.Main(), text, true, true);
+    }
+
+    public String service_send_dm_tab(long tabId, String text) {
+        return service_type_dm_draft(new TabRef.Explicit(tabId), text, true, true);
     }
 
     private String service_type_dm_draft(TabRef tabRef, String text, boolean send, boolean sendOnly) {

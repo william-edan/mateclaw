@@ -34,6 +34,14 @@ function fakeDebugger() {
     emit: (tabId: number, method: DebuggerEvent['method'], params: DebuggerEvent['params']) => {
       listener?.({ tabId, method, params } as DebuggerEvent)
     },
+    emitWithSession: (
+      sessionId: string,
+      tabId: number,
+      method: DebuggerEvent['method'],
+      params: DebuggerEvent['params'],
+    ) => {
+      listener?.({ tabId, sessionId, method, params } as DebuggerEvent)
+    },
   }
 }
 
@@ -86,10 +94,18 @@ describe('douyin_comment_network handler', () => {
 
     expect(start.ok).toBe(true)
     expect(env.attach).toHaveBeenCalledExactlyOnceWith(42)
-    expect(env.send).toHaveBeenCalledWith(42, 'Network.enable', expect.objectContaining({
-      maxResourceBufferSize: 2_000,
-      maxPostDataSize: 0,
-    }))
+    expect(env.send.mock.calls.some(call =>
+      call[0] === 42 &&
+      call[1] === 'Target.setAutoAttach' &&
+      (call[2] as { autoAttach?: boolean; flatten?: boolean }).autoAttach === true &&
+      (call[2] as { autoAttach?: boolean; flatten?: boolean }).flatten === true
+    )).toBe(true)
+    expect(env.send.mock.calls.some(call =>
+      call[0] === 42 &&
+      call[1] === 'Network.enable' &&
+      (call[2] as { maxResourceBufferSize?: number; maxPostDataSize?: number }).maxResourceBufferSize === 2_000 &&
+      (call[2] as { maxResourceBufferSize?: number; maxPostDataSize?: number }).maxPostDataSize === 0
+    )).toBe(true)
 
     env.setBody('r-url', commentJson('1'))
     env.emit(42, 'Network.responseReceived', responseReceived(
@@ -130,8 +146,56 @@ describe('douyin_comment_network handler', () => {
     const stop = await handler(42, { op: 'stop' }, 5_000)
 
     expect(stop.ok).toBe(true)
-    expect(env.send).toHaveBeenCalledWith(42, 'Network.disable', {})
+    expect(env.send.mock.calls.some(call => call[0] === 42 && call[1] === 'Network.disable')).toBe(true)
+    expect(env.send.mock.calls.some(call =>
+      call[0] === 42 &&
+      call[1] === 'Target.setAutoAttach' &&
+      (call[2] as { autoAttach?: boolean }).autoAttach === false
+    )).toBe(true)
     expect(env.removeListener).toHaveBeenCalledOnce()
+  })
+
+  it('captures comment pages from auto-attached child targets by sessionId', async () => {
+    const env = fakeDebugger()
+    const handler = douyinCommentNetworkHandler({
+      debugger: env.debugger,
+      setTimer: vi.fn(() => 1),
+      clearTimer: vi.fn(),
+    })
+
+    await handler(42, { op: 'start', maxPages: 3, maxBodyBytes: 2_000, ttlMs: 10_000 }, 5_000)
+    env.emit(42, 'Target.attachedToTarget', {
+      sessionId: 'child-1',
+      targetInfo: {
+        targetId: 'target-1',
+        type: 'iframe',
+        url: 'https://www.douyin.com/',
+      },
+    })
+    await Promise.resolve()
+
+    expect(env.send.mock.calls.some(call =>
+      call[0] === 42 &&
+      call[1] === 'Network.enable' &&
+      call[3] === 'child-1'
+    )).toBe(true)
+
+    env.setBody('r-child', commentJson('child'))
+    env.emitWithSession('child-1', 42, 'Network.responseReceived', responseReceived(
+      'r-child',
+      'https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=1&cursor=child',
+    ))
+    env.emitWithSession('child-1', 42, 'Network.loadingFinished', loadingFinished('r-child', 200))
+
+    const drain = await handler(42, { op: 'drain' }, 5_000)
+    const pages = drain.ok ? drain.payload.pages as Array<Record<string, unknown>> : []
+    expect(pages).toHaveLength(1)
+    expect(pages[0]).toEqual(expect.objectContaining({
+      requestId: 'r-child',
+      sessionId: 'child-1',
+      targetType: 'iframe',
+      body: expect.stringContaining('"comments"'),
+    }))
   })
 
   it('enforces maxPages and maxBodyBytes before storing responses', async () => {

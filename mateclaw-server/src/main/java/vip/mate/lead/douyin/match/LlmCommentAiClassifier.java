@@ -30,7 +30,12 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class LlmCommentAiClassifier implements CommentAiClassifier {
 
-    private static final int BATCH_SIZE = 30;
+    private static final int TARGET_BATCH_SIZE = 80;
+    private static final int MAX_BATCH_SIZE = 100;
+    private static final int MAX_BATCH_CHARS = 14_000;
+    private static final int MAX_COMMENT_TEXT_CHARS = 300;
+    private static final int MIN_SPLIT_BATCH_SIZE = 10;
+    private static final int COMMENT_JSON_OVERHEAD_CHARS = 80;
     private static final int MAX_REASON_LENGTH = 120;
     private static final RetryTemplate NO_RETRY = RetryTemplate.builder().maxAttempts(1).build();
 
@@ -56,17 +61,70 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
         }
 
         List<CommentMatchResult> out = new ArrayList<>();
-        for (int start = 0; start < candidates.size(); start += BATCH_SIZE) {
-            int end = Math.min(start + BATCH_SIZE, candidates.size());
-            List<CommentMatchResult> batch = candidates.subList(start, end);
-            try {
-                String response = callModel(chatModel, semanticRules, batch);
-                out.addAll(parseResponse(semanticRules, batch, response));
-            } catch (Exception e) {
-                log.info("[douyin.lead] AI comment classifier batch failed, keep rule results: {}", e.getMessage());
-            }
+        for (List<CommentMatchResult> batch : planBatches(candidates)) {
+            out.addAll(classifyBatchWithFallback(chatModel, semanticRules, batch));
         }
         return out;
+    }
+
+    private List<CommentMatchResult> classifyBatchWithFallback(ChatModel chatModel,
+                                                               List<CommentMatchRule> semanticRules,
+                                                               List<CommentMatchResult> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return List.of();
+        }
+        try {
+            String response = callModel(chatModel, semanticRules, batch);
+            return parseResponse(semanticRules, batch, response);
+        } catch (Exception e) {
+            if (batch.size() <= MIN_SPLIT_BATCH_SIZE) {
+                log.info("[douyin.lead] AI comment classifier batch failed, keep rule results: size={}, error={}",
+                        batch.size(), e.getMessage());
+                return List.of();
+            }
+            int splitAt = Math.max(1, batch.size() / 2);
+            log.info("[douyin.lead] AI comment classifier batch failed; split and retry: size={}, left={}, right={}, error={}",
+                    batch.size(), splitAt, batch.size() - splitAt, e.getMessage());
+            List<CommentMatchResult> out = new ArrayList<>();
+            out.addAll(classifyBatchWithFallback(chatModel, semanticRules, batch.subList(0, splitAt)));
+            out.addAll(classifyBatchWithFallback(chatModel, semanticRules, batch.subList(splitAt, batch.size())));
+            return out;
+        }
+    }
+
+    List<List<CommentMatchResult>> planBatches(List<CommentMatchResult> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        List<List<CommentMatchResult>> batches = new ArrayList<>();
+        List<CommentMatchResult> current = new ArrayList<>();
+        int currentChars = 0;
+        for (CommentMatchResult candidate : candidates) {
+            int candidateChars = estimateCandidateChars(candidate);
+            int countLimit = currentChars <= MAX_BATCH_CHARS / 2 ? MAX_BATCH_SIZE : TARGET_BATCH_SIZE;
+            boolean overCount = current.size() >= countLimit;
+            boolean overChars = !current.isEmpty() && currentChars + candidateChars > MAX_BATCH_CHARS;
+            if (overCount || overChars) {
+                batches.add(List.copyOf(current));
+                current.clear();
+                currentChars = 0;
+            }
+            current.add(candidate);
+            currentChars += candidateChars;
+        }
+        if (!current.isEmpty()) {
+            batches.add(List.copyOf(current));
+        }
+        return List.copyOf(batches);
+    }
+
+    private int estimateCandidateChars(CommentMatchResult candidate) {
+        DouyinCommentItem comment = candidate == null ? null : candidate.comment();
+        String author = comment == null ? "" : comment.authorName();
+        String text = truncateCommentText(comment == null ? "" : comment.text());
+        return COMMENT_JSON_OVERHEAD_CHARS
+                + (author == null ? 0 : author.length())
+                + text.length();
     }
 
     private String callModel(ChatModel chatModel, List<CommentMatchRule> rules, List<CommentMatchResult> batch)
@@ -115,7 +173,7 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
             rows.add(Map.of(
                     "index", i,
                     "author", comment == null ? "" : comment.authorName(),
-                    "text", comment == null ? "" : comment.text()));
+                    "text", truncateCommentText(comment == null ? "" : comment.text())));
         }
         return objectMapper.writeValueAsString(rows);
     }
@@ -186,5 +244,16 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
             return cleaned;
         }
         return cleaned.substring(0, MAX_REASON_LENGTH);
+    }
+
+    String truncateCommentText(String value) {
+        if (value == null) {
+            return "";
+        }
+        String cleaned = value.replaceAll("\\s+", " ").trim();
+        if (cleaned.length() <= MAX_COMMENT_TEXT_CHARS) {
+            return cleaned;
+        }
+        return cleaned.substring(0, MAX_COMMENT_TEXT_CHARS);
     }
 }

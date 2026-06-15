@@ -90,4 +90,35 @@ describe('click profile action handler', () => {
     expect(followClick).toHaveBeenCalledTimes(1)
     expect(counterClick).not.toHaveBeenCalled()
   })
+
+  it('clicks the exact private message button instead of the large download CTA', async () => {
+    document.body.innerHTML = `
+      <div data-e2e="user-detail" id="user_detail_element">
+        <button id="followed" type="button"><span>已关注</span></button>
+        <button id="dm" type="button"><span>私信</span></button>
+        <button id="download" type="button">
+          <span>下载电脑客户端，桌面快捷访问</span>
+          <span>下载</span>
+        </button>
+      </div>
+    `
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    setRect(document.querySelector('#followed')!, { left: 760, top: 172, width: 130, height: 44 })
+    setRect(document.querySelector('#dm')!, { left: 908, top: 172, width: 130, height: 44 })
+    setRect(document.querySelector('#download')!, { left: 560, top: 236, width: 420, height: 56 })
+    const dmClick = vi.fn()
+    const downloadClick = vi.fn()
+    document.querySelector('#dm')!.addEventListener('click', dmClick)
+    document.querySelector('#download')!.addEventListener('click', downloadClick)
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const handler = clickProfileActionHandler({ chrome: chromeWithDomExecution() })
+
+    const result = await handler(42, { labels: ['私信', '发私信', 'Message', '发消息'] }, 5000)
+
+    expect(result.ok).toBe(true)
+    expect(result.payload).toEqual({ label: '私信' })
+    expect(dmClick).toHaveBeenCalledTimes(1)
+    expect(downloadClick).not.toHaveBeenCalled()
+  })
 })

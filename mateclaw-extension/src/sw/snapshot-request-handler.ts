@@ -519,32 +519,12 @@ export class SnapshotRequestHandler {
 }
 
 function logA11ySnapshotForDebug(
-  tabId: number,
-  snapshotId: string,
-  req: SnapshotRequestPayload,
-  snapshot: SnapshotResult,
+  _tabId: number,
+  _snapshotId: string,
+  _req: SnapshotRequestPayload,
+  _snapshot: SnapshotResult,
 ): void {
-  const url = snapshot.url || ''
-  if (!url.includes('douyin.com') && !url.includes('iesdouyin.com')) {
-    return
-  }
-  const tree = snapshot.tree || ''
-  const lines = tree ? tree.split('\n').length : 0
-  console.info('[mateclaw][a11y.snapshot]', {
-    snapshotId,
-    tabId,
-    url,
-    title: snapshot.title || '',
-    filter: req.filter,
-    frameId: req.frame_id ?? null,
-    refId: req.ref_id ?? null,
-    viewport: snapshot.viewport,
-    treeChars: tree.length,
-    treeLines: lines,
-  })
-  if (!tree) {
-    console.info('[mateclaw][a11y.snapshot][tree-empty]', { snapshotId, tabId, url })
-  }
+  // Intentionally disabled: snapshot logging is too noisy during Douyin lead tests.
 }
 
 function parseSnapshotRequest(payload: unknown): SnapshotRequestPayload | null {

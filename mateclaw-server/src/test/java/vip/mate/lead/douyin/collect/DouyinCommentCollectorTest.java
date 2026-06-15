@@ -274,6 +274,7 @@ class DouyinCommentCollectorTest {
         assertThat(parsed.declaredCommentCount()).isEqualTo(129);
         assertThat(parsed.cursor()).isEqualTo("0");
         assertThat(parsed.nextCursor()).isEqualTo("20");
+        assertThat(parsed.hasMoreKnown()).isTrue();
         assertThat(parsed.hasMore()).isTrue();
         DouyinCommentItem comment = parsed.comments().getFirst();
         assertThat(comment.videoKey()).isEqualTo("733");
@@ -284,6 +285,28 @@ class DouyinCommentCollectorTest {
         assertThat(comment.likeCount()).isEqualTo(12);
         assertThat(comment.replyCount()).isEqualTo(3);
         assertThat(comment.metadata()).containsEntry("source", "network_observed");
+    }
+
+    @Test
+    void parsesNumericHasMoreZeroAsNetworkTerminalPage() throws Exception {
+        var page = mapper.readTree("""
+                {
+                  "url": "https://www-hj.douyin.com/aweme/v1/web/comment/list/?aweme_id=7562908390894079291&cursor=630",
+                  "status": 200,
+                  "body": "{\\"status_code\\":0,\\"cursor\\":630,\\"has_more\\":0,\\"total\\":760,\\"comments\\":[{\\"cid\\":\\"7562919027288769322\\",\\"text\\":\\"最后一页真实评论\\",\\"aweme_id\\":\\"7562908390894079291\\",\\"digg_count\\":0,\\"user\\":{\\"nickname\\":\\"#一路向北\\",\\"sec_uid\\":\\"MS4wLjABAAAAVHssIob0gCq_Zy65sendXP00tc7fqcq7gmX1YkT03yuMEqzkb0AHyjbaLVzy6ZBM\\"}}]}"
+                }
+                """);
+
+        var parsed = collector.commentsFromNetworkPage(page, "fallback-video");
+
+        assertThat(parsed.comments()).hasSize(1);
+        assertThat(parsed.declaredCommentCount()).isEqualTo(760);
+        assertThat(parsed.cursor()).isEqualTo("630");
+        assertThat(parsed.nextCursor()).isEqualTo("630");
+        assertThat(parsed.hasMoreKnown()).isTrue();
+        assertThat(parsed.hasMore()).isFalse();
+        assertThat(parsed.comments().getFirst().videoKey()).isEqualTo("7562908390894079291");
+        assertThat(parsed.comments().getFirst().authorName()).isEqualTo("#一路向北");
     }
 
     @Test
@@ -303,6 +326,7 @@ class DouyinCommentCollectorTest {
         assertThat(parsed.comments()).hasSize(1);
         assertThat(parsed.comments().getFirst().authorName()).isEqualTo("A1");
         assertThat(parsed.comments().getFirst().text()).isEqualTo("哈哈");
+        assertThat(parsed.hasMoreKnown()).isTrue();
         assertThat(parsed.hasMore()).isFalse();
     }
 

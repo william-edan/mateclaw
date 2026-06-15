@@ -458,6 +458,11 @@ export interface DouyinLeadAcquisitionStartRequest {
   sort?: 'comprehensive' | 'most_liked' | 'latest' | string | null
   videoLimit?: number | null
   matchRules?: DouyinLeadMatchRule[] | null
+  matchHighIntent?: boolean | null
+  highIntentExamples?: string[] | null
+  matchProfile?: string | null
+  matchDescription?: string | null
+  matchExamples?: string[] | null
   dmDraft?: string | null
   sendDm?: boolean | null
   engage?: boolean | null
@@ -468,6 +473,11 @@ export interface DouyinLeadAcquisitionStartPayload {
   sort: 'comprehensive' | 'most_liked' | 'latest' | string
   videoLimit: number
   matchRules: DouyinLeadMatchRule[]
+  matchHighIntent: boolean
+  highIntentExamples: string[]
+  matchProfile?: string | null
+  matchDescription?: string | null
+  matchExamples?: string[] | null
   dmDraft: string
   engage: boolean
   sendDm: boolean
@@ -648,11 +658,13 @@ export type DouyinLeadTimelineEventType =
   | 'lead.comments.opened'
   | 'lead.comments.region_detected'
   | 'lead.comments.collecting'
+  | 'lead.comments.progress'
   | 'lead.comments.collected'
   | 'lead.comment.matched'
   | 'lead.comment.match_skipped'
   | 'lead.engagement.started'
   | 'lead.engagement.completed'
+  | 'lead.engagement.failed'
   | 'lead.engagement.skipped'
   | 'lead.video.completed'
   | 'lead.video.failed'
@@ -702,7 +714,7 @@ export const leadAcquisitionApi = {
     http.get<DouyinLeadStatsResponse>('/lead-acquisition/douyin/stats', { params: params ?? {} }),
   listDouyinRuns: (limit = 20) =>
     http.get<DouyinLeadRunListItem[]>('/lead-acquisition/douyin/runs', { params: { limit } }),
-  listDouyinLeads: (params?: { limit?: number; status?: string; keyword?: string }) =>
+  listDouyinLeads: (params?: { limit?: number; status?: string; keyword?: string; taskId?: string | number }) =>
     http.get<DouyinLeadPoolItem[]>('/lead-acquisition/douyin/leads', { params: params ?? {} }),
   listDouyinTemplates: () =>
     http.get<DouyinLeadTemplate[]>('/lead-acquisition/douyin/templates'),

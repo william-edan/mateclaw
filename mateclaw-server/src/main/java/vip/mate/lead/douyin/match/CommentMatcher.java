@@ -17,8 +17,6 @@ import java.util.Map;
 @Component
 public class CommentMatcher {
 
-    private static final int MAX_AI_CANDIDATES = 200;
-
     private final CommentAiClassifier aiClassifier;
 
     public CommentMatcher() {
@@ -89,7 +87,7 @@ public class CommentMatcher {
         return new CommentMatchResult(comment, false, 0d, "keyword_miss:" + target);
     }
 
-    private List<CommentMatchResult> applySemanticRules(List<CommentMatchResult> results, List<CommentMatchRule> rules) {
+    List<CommentMatchResult> applySemanticRules(List<CommentMatchResult> results, List<CommentMatchRule> rules) {
         if (aiClassifier == null || results.isEmpty()) {
             return results;
         }
@@ -102,7 +100,6 @@ public class CommentMatcher {
         List<CommentMatchResult> candidates = results.stream()
                 .filter(result -> !result.matched())
                 .filter(result -> result.comment() != null && !clean(result.comment().text()).isBlank())
-                .limit(MAX_AI_CANDIDATES)
                 .toList();
         if (candidates.isEmpty()) {
             return results;

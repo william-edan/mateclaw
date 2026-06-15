@@ -85,6 +85,36 @@ class CommentMatcherTest {
     }
 
     @Test
+    void semanticAiReceivesAllUnmatchedCandidatesWithoutBusinessLimit() {
+        AtomicInteger candidateCount = new AtomicInteger();
+        CommentMatcher hybridMatcher = new CommentMatcher((rules, candidates) -> {
+            candidateCount.set(candidates.size());
+            return candidates.stream()
+                    .map(candidate -> {
+                        boolean hit = candidate.comment().text().contains("第249条");
+                        return new CommentMatchResult(
+                                candidate.comment(),
+                                hit,
+                                hit ? 0.88d : 0.1d,
+                                hit ? "semantic_match:晚段候选命中" : "semantic_reject");
+                    })
+                    .toList();
+        });
+        List<DouyinCommentItem> comments = new java.util.ArrayList<>();
+        for (int i = 0; i < 250; i++) {
+            comments.add(comment("user-" + i, i == 249 ? "第249条评论想咨询替代方案" : "普通评论 " + i));
+        }
+
+        List<CommentMatchResult> results = hybridMatcher.matched(
+                comments,
+                List.of(CommentMatchRule.semantic("找咨询替代方案的人")));
+
+        assertThat(candidateCount).hasValue(250);
+        assertThat(results).hasSize(1);
+        assertThat(results.getFirst().comment().authorName()).isEqualTo("user-249");
+    }
+
+    @Test
     void keywordHitsDoNotNeedAiFallback() {
         AtomicInteger aiCalls = new AtomicInteger();
         CommentMatcher hybridMatcher = new CommentMatcher((rules, candidates) -> {

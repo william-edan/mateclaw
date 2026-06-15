@@ -153,6 +153,7 @@ describe('DebuggerManager', () => {
 
     expect(listener).toHaveBeenCalledExactlyOnceWith({
       tabId: 101,
+      sessionId: undefined,
       method: 'Network.loadingFinished',
       params: { requestId: 'r1' },
     })

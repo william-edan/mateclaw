@@ -104,42 +104,79 @@
                   />
                 </label>
 
-                <div class="field field--wide match-rule-field">
-                  <div class="field-head">
-                    <span>评论匹配规则</span>
-                    <span class="field-hint">关键词精确查找，语义由大模型判断</span>
-                  </div>
-                  <div class="match-rule-list">
-                    <div
-                      v-for="(rule, index) in form.matchRules"
-                      :key="`rule-${index}`"
-                      class="match-rule-row"
-                    >
-                      <select v-model="rule.mode" :disabled="taskLocked" aria-label="匹配模式">
-                        <option value="keyword">关键词匹配</option>
-                        <option value="semantic">语义匹配</option>
-                      </select>
-                      <input
-                        v-model.trim="rule.value"
-                        type="text"
-                        maxlength="160"
-                        :placeholder="rule.mode === 'semantic' ? '例如：抱怨易企秀加载慢的人' : '例如：慢出心脏病'"
-                        :disabled="taskLocked"
-                      />
+                <div class="field field--wide match-target-field">
+                  <label class="match-target-switch">
+                    <input v-model="form.matchEnabled" type="checkbox" :disabled="taskLocked" />
+                    <span>
+                      <strong>评论匹配目标</strong>
+                      <small>描述要找哪些评论，系统会按评论正文语义判断是否值得触达</small>
+                    </span>
+                  </label>
+
+                  <div v-if="form.matchEnabled" class="match-target-workspace">
+                    <div class="field-head">
+                      <span>默认分类</span>
+                      <span class="field-hint">点击后自动填充描述和示例词</span>
+                    </div>
+                    <div class="match-preset-grid">
                       <button
+                        v-for="preset in MATCH_PRESETS"
+                        :key="preset.key"
                         type="button"
-                        class="icon-text-button"
+                        class="match-preset-button"
+                        :class="{ active: form.matchProfile === preset.key }"
                         :disabled="taskLocked"
-                        :aria-label="`删除第 ${index + 1} 条匹配规则`"
-                        @click="removeMatchRule(index)"
+                        @click="applyMatchPreset(preset.key)"
                       >
-                        删除
+                        <strong>{{ preset.label }}</strong>
                       </button>
                     </div>
-                  </div>
-                  <div class="match-rule-actions">
-                    <button type="button" :disabled="taskLocked" @click="addMatchRule('keyword')">添加关键词</button>
-                    <button type="button" :disabled="taskLocked" @click="addMatchRule('semantic')">添加语义规则</button>
+
+                    <label class="field compact-field">
+                      <span>描述匹配哪些评论</span>
+                      <textarea
+                        v-model.trim="form.matchDescription"
+                        rows="3"
+                        maxlength="260"
+                        placeholder="例如：匹配正在咨询价格、试用、功能、购买渠道或联系方式的评论"
+                        :disabled="taskLocked"
+                      ></textarea>
+                    </label>
+
+                    <div class="field-head">
+                      <span>示例词</span>
+                      <span class="field-hint">作为模型判断参考，可自行添加</span>
+                    </div>
+                    <div class="intent-chip-list">
+                      <span
+                        v-for="(example, index) in form.matchExamples"
+                        :key="`${example}-${index}`"
+                        class="intent-chip"
+                      >
+                        {{ example }}
+                        <button
+                          type="button"
+                          :disabled="taskLocked"
+                          :aria-label="`删除示例词 ${example}`"
+                          @click="removeMatchExample(index)"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    </div>
+                    <div class="intent-example-add">
+                      <input
+                        v-model.trim="matchExampleDraft"
+                        type="text"
+                        maxlength="40"
+                        placeholder="例如：有没有方案"
+                        :disabled="taskLocked"
+                        @keydown.enter.prevent="addMatchExample"
+                      />
+                      <button type="button" :disabled="taskLocked || !matchExampleDraft.trim()" @click="addMatchExample">
+                        添加
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -156,8 +193,8 @@
               </div>
 
               <div class="switch-row">
-                <label class="switch-item">
-                  <input v-model="form.engage" type="checkbox" :disabled="taskLocked" />
+                <label class="switch-item" :class="{ disabled: !form.matchEnabled }">
+                  <input v-model="form.engage" type="checkbox" :disabled="taskLocked || !form.matchEnabled" />
                   <span>匹配后关注并打开私信</span>
                 </label>
                 <label class="switch-item">
@@ -333,7 +370,7 @@
             <div class="panel-head compact">
               <div>
                 <h2>线索池</h2>
-                <p>{{ leadPoolLoading ? '正在读取跨任务线索...' : `展示 ${leadPoolRows.length} 条跨任务命中线索。` }}</p>
+                <p>{{ leadPoolLoading ? '正在读取线索...' : leadPoolScopeDescription }}</p>
               </div>
               <button class="text-button" type="button" :disabled="leadPoolLoading" @click="loadLeadPool">
                 {{ leadPoolLoading ? '刷新中' : '刷新' }}
@@ -434,12 +471,25 @@ type SortMode = 'comprehensive' | 'most_liked' | 'latest'
 type LeadPoolStatus = 'all' | 'pending' | 'engaged' | 'sent' | 'failed'
 type LeadView = 'launch' | 'history'
 type OpenRunOptions = { scroll?: boolean }
+type MatchProfile = 'high_intent' | 'bad_experience' | 'consultation' | 'competitor_alternative' | 'custom'
+
+interface MatchPreset {
+  key: MatchProfile
+  label: string
+  description: string
+  examples: string[]
+  dmDraft: string
+}
 
 interface LeadForm {
   keyword: string
   sort: SortMode
   videoLimit: number
   matchRules: DouyinLeadMatchRule[]
+  matchEnabled: boolean
+  matchProfile: MatchProfile
+  matchDescription: string
+  matchExamples: string[]
   dmDraft: string
   engage: boolean
   sendDm: boolean
@@ -449,6 +499,12 @@ interface LeadTemplate {
   name: string
   keyword: string
   matchRules: DouyinLeadMatchRule[]
+  matchEnabled?: boolean
+  matchProfile?: MatchProfile | string
+  matchDescription?: string
+  matchExamples?: string[]
+  matchHighIntent?: boolean
+  highIntentExamples?: string[]
   dmDraft: string
   videoLimit: number
   sort?: SortMode
@@ -479,35 +535,90 @@ const statsKeyword = ref('')
 const savedTemplates = ref<DouyinLeadTemplate[]>([])
 const templateName = ref('')
 const templateSaving = ref(false)
+const matchExampleDraft = ref('')
+
+const MATCH_PRESETS: MatchPreset[] = [
+  {
+    key: 'high_intent',
+    label: '有意向的客户',
+    description: '匹配正在咨询价格、试用、功能、购买渠道、联系方式，或明确表达想了解解决方案的评论。',
+    examples: ['多少钱', '怎么收费', '能试用吗', '怎么联系', '想了解', '有没有方案'],
+    dmDraft: '你好，看到你在评论里提到相关需求，方便简单交流一下吗？',
+  },
+  {
+    key: 'bad_experience',
+    label: '体验不好的用户',
+    description: '匹配抱怨现有工具慢、不好用、出错、买后后悔，或表达想换方案的评论。',
+    examples: ['太慢了', '不好用', '用不了', '不推荐', '后悔买了', '一直出问题'],
+    dmDraft: '你好，看到你提到使用体验不太顺，方便了解一下你的场景吗？',
+  },
+  {
+    key: 'consultation',
+    label: '求教程/功能咨询',
+    description: '匹配正在询问怎么做、怎么用、是否支持某功能，或需要教程和落地方法的评论。',
+    examples: ['怎么用', '有教程吗', '怎么做', '支持吗', '能不能', '求教学'],
+    dmDraft: '你好，看到你在问具体用法，我这边可以给你一个思路。',
+  },
+  {
+    key: 'competitor_alternative',
+    label: '竞品替代需求',
+    description: '匹配正在寻找替代工具、比较不同产品、求推荐新方案，或表达想从现有工具迁移的评论。',
+    examples: ['有没有替代', '哪个更好用', '求推荐', '换一个工具', '类似软件', '平替'],
+    dmDraft: '你好，看到你在找替代方案，方便简单交流一下你的需求吗？',
+  },
+  {
+    key: 'custom',
+    label: '自定义',
+    description: '描述你希望命中的评论类型，系统会按评论正文语义判断是否匹配。',
+    examples: ['补充你的示例词'],
+    dmDraft: '你好，看到你的评论，方便简单交流一下吗？',
+  },
+]
+
+const DEFAULT_MATCH_PROFILE: MatchProfile = 'high_intent'
 
 const builtInTemplates: LeadTemplate[] = [
   {
+    name: '有意向的客户',
+    keyword: '',
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: 'high_intent',
+    matchDescription: matchPreset('high_intent').description,
+    matchExamples: [...matchPreset('high_intent').examples],
+    dmDraft: matchPreset('high_intent').dmDraft,
+    videoLimit: 5,
+  },
+  {
     name: '产品吐槽线索',
     keyword: '易企秀',
-    matchRules: [
-      { mode: 'keyword', value: '慢出心脏病' },
-      { mode: 'semantic', value: '抱怨易企秀加载慢、体验差或后悔购买的人' },
-    ],
-    dmDraft: '你好',
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: 'bad_experience',
+    matchDescription: '匹配吐槽易企秀加载慢、体验差、功能不好用、买后后悔，或正在寻找替代工具的评论。',
+    matchExamples: ['慢出心脏病', '不好用', '太慢了', '后悔购买', '有没有替代'],
+    dmDraft: matchPreset('bad_experience').dmDraft,
     videoLimit: 2,
   },
   {
     name: '数字化转型需求',
     keyword: 'ai数字化转型',
-    matchRules: [
-      { mode: 'keyword', value: '转型' },
-      { mode: 'semantic', value: '表达想了解数字化转型、AI落地或业务增长方案的人' },
-    ],
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: 'high_intent',
+    matchDescription: '匹配表达想了解数字化转型、AI落地、业务增长方案，或正在找服务商和落地方法的评论。',
+    matchExamples: ['转型', 'AI落地', '业务增长', '怎么做', '有没有方案'],
     dmDraft: '你好，看到你对数字化转型有关注，方便交流一下吗？',
     videoLimit: 5,
   },
   {
     name: 'AI 工具咨询',
     keyword: 'AI工具',
-    matchRules: [
-      { mode: 'keyword', value: '怎么用' },
-      { mode: 'semantic', value: '正在咨询 AI 工具用法、价格或适用场景的人' },
-    ],
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: 'consultation',
+    matchDescription: '匹配正在咨询 AI 工具用法、价格、适用场景，或需要教程和推荐的评论。',
+    matchExamples: ['怎么用', '多少钱', '适合什么场景', '求推荐', '有教程吗'],
     dmDraft: '你好，看到你在评论里提到 AI 工具，我这边可以分享一个方案。',
     videoLimit: 5,
   },
@@ -516,7 +627,9 @@ const builtInTemplates: LeadTemplate[] = [
 const form = ref<LeadForm>(defaultForm())
 
 const canLaunch = computed(() => {
-  return !taskLocked.value && form.value.keyword.trim().length > 0
+  return !taskLocked.value
+    && form.value.keyword.trim().length > 0
+    && (!form.value.matchEnabled || form.value.matchDescription.trim().length > 0)
 })
 
 const activeRunRunning = computed(() => {
@@ -544,6 +657,19 @@ const leadPoolRows = computed(() => {
     sent: lead.sent === true,
     failureReason: reasonLabel(lead.failureCode || lead.failureMessage || ''),
   }))
+})
+
+const selectedLeadPoolTaskId = computed(() => {
+  if (activeView.value !== 'history') return null
+  return currentRun.value?.taskId ?? null
+})
+
+const leadPoolScopeDescription = computed(() => {
+  const count = leadPoolRows.value.length
+  if (selectedLeadPoolTaskId.value) {
+    return `展示当前任务的 ${count} 条命中线索。`
+  }
+  return `展示 ${count} 条跨任务命中线索。`
 })
 
 const statsCards = computed(() => {
@@ -611,6 +737,19 @@ watch(() => form.value.engage, (engage) => {
   if (!engage) form.value.sendDm = false
 })
 
+watch(() => form.value.matchEnabled, (enabled) => {
+  if (!enabled) {
+    form.value.engage = false
+    form.value.sendDm = false
+    return
+  }
+  form.value.engage = true
+  form.value.matchRules = []
+  if (!form.value.matchDescription.trim()) {
+    applyMatchPreset(DEFAULT_MATCH_PROFILE)
+  }
+})
+
 watch(recentRuns, () => {
   if (activeView.value === 'history') void ensureHistoryRunSelected()
 })
@@ -626,14 +765,17 @@ onMounted(() => {
 })
 
 function defaultForm(): LeadForm {
+  const preset = matchPreset(DEFAULT_MATCH_PROFILE)
   return {
     keyword: '',
     sort: 'comprehensive',
     videoLimit: 2,
-    matchRules: [
-      { mode: 'keyword', value: '' },
-    ],
-    dmDraft: '你好',
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: preset.key,
+    matchDescription: preset.description,
+    matchExamples: [...preset.examples],
+    dmDraft: preset.dmDraft,
     engage: true,
     sendDm: false,
   }
@@ -645,15 +787,54 @@ function normalizeVideoLimit() {
   form.value.videoLimit = Math.min(50, Math.max(1, next))
 }
 
-function addMatchRule(mode: DouyinLeadMatchRule['mode']) {
-  form.value.matchRules.push({ mode, value: '' })
+function matchPreset(profile?: string | null): MatchPreset {
+  return MATCH_PRESETS.find(preset => preset.key === profile) ?? MATCH_PRESETS[0]!
 }
 
-function removeMatchRule(index: number) {
-  form.value.matchRules.splice(index, 1)
-  if (!form.value.matchRules.length) {
-    form.value.matchRules.push({ mode: 'keyword', value: '' })
+function normalizeMatchProfile(value?: string | null): MatchProfile {
+  return matchPreset(value).key
+}
+
+function matchProfileLabel(profile?: string | null): string {
+  return matchPreset(profile).label
+}
+
+function applyMatchPreset(profile: MatchProfile | string) {
+  if (taskLocked.value) return
+  const preset = matchPreset(profile)
+  form.value.matchEnabled = true
+  form.value.matchProfile = preset.key
+  form.value.matchDescription = preset.description
+  form.value.matchExamples = [...preset.examples]
+  form.value.matchRules = []
+  if (!form.value.dmDraft.trim() || MATCH_PRESETS.some(item => item.dmDraft === form.value.dmDraft.trim())) {
+    form.value.dmDraft = preset.dmDraft
   }
+}
+
+function normalizeMatchExamples(examples?: string[] | null): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const item of examples ?? []) {
+    const value = String(item ?? '').trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    normalized.push(value)
+    if (normalized.length >= 30) break
+  }
+  return normalized
+}
+
+function addMatchExample() {
+  const value = matchExampleDraft.value.trim()
+  if (!value || taskLocked.value) return
+  form.value.matchExamples = normalizeMatchExamples([...form.value.matchExamples, value])
+  matchExampleDraft.value = ''
+}
+
+function removeMatchExample(index: number) {
+  if (taskLocked.value) return
+  form.value.matchExamples.splice(index, 1)
 }
 
 function normalizeMatchRules(rules?: DouyinLeadMatchRule[] | null): DouyinLeadMatchRule[] {
@@ -667,12 +848,71 @@ function normalizeMatchRules(rules?: DouyinLeadMatchRule[] | null): DouyinLeadMa
 }
 
 function normalizedFormMatchRules(): DouyinLeadMatchRule[] {
-  return normalizeMatchRules(form.value.matchRules).filter(rule => rule.value.length > 0)
+  if (form.value.matchEnabled) return []
+  return normalizeMatchRules(form.value.matchRules)
+    .filter(rule => rule.value.length > 0 && !isPresetMatchRule(rule))
+}
+
+function isPresetMatchRule(rule: DouyinLeadMatchRule): boolean {
+  const value = String(rule.value || '')
+  return rule.mode === 'semantic' && (
+    value.includes('评论匹配目标')
+    || value.includes('高意向客户')
+  )
+}
+
+function examplesFromPresetRules(rules?: DouyinLeadMatchRule[] | null): string[] {
+  const rule = normalizeMatchRules(rules).find(isPresetMatchRule)
+  const match = String(rule?.value || '').match(/(?:可参考这些高意向表达或相近说法|可参考这些示例词或相近说法)：(.+?)。/)
+  if (!match) return []
+  return normalizeMatchExamples(match[1].split('、'))
+}
+
+function descriptionFromPresetRules(rules?: DouyinLeadMatchRule[] | null): string {
+  const rule = normalizeMatchRules(rules).find(isPresetMatchRule)
+  const value = String(rule?.value || '')
+  const modern = value.match(/匹配描述：(.+?)。(?:只根据评论正文判断|可参考这些示例词|$)/)
+  if (modern?.[1]) return modern[1].trim()
+  if (value.includes('高意向客户')) return matchPreset('high_intent').description
+  return ''
+}
+
+function profileFromPresetRules(rules?: DouyinLeadMatchRule[] | null): MatchProfile {
+  const rule = normalizeMatchRules(rules).find(isPresetMatchRule)
+  const value = String(rule?.value || '')
+  const label = value.match(/评论匹配目标：(.+?)。/)?.[1]
+  const preset = MATCH_PRESETS.find(item => item.label === label)
+  if (preset) return preset.key
+  if (value.includes('高意向客户')) return 'high_intent'
+  return 'custom'
+}
+
+function templateMatchRulesPayload(): DouyinLeadMatchRule[] {
+  if (!form.value.matchEnabled) return normalizedFormMatchRules()
+  return [{ mode: 'semantic', value: matchSemanticRule(form.value.matchProfile, form.value.matchDescription, form.value.matchExamples) }]
+}
+
+function matchSemanticRule(profile: MatchProfile | string, description: string, examples: string[]): string {
+  const preset = matchPreset(profile)
+  const normalizedDescription = description.trim() || preset.description
+  const normalizedExamples = normalizeMatchExamples(examples)
+  const base = [
+    `评论匹配目标：${preset.label}。`,
+    `匹配描述：${normalizedDescription}。`,
+    '只根据评论正文判断，不要使用作者名称；不要命中与描述无关的泛泛点赞、收藏、路过、开玩笑或无明确需求的评论。',
+  ].join('')
+  return normalizedExamples.length
+    ? `${base} 可参考这些示例词或相近说法：${normalizedExamples.join('、')}。`
+    : base
 }
 
 function matchRulesSummary(rules?: DouyinLeadMatchRule[] | null): string {
   const normalized = normalizeMatchRules(rules).filter(rule => rule.value.length > 0)
   if (!normalized.length) return '只采集评论'
+  const presetRule = normalized.find(isPresetMatchRule)
+  if (presetRule) return profileFromPresetRules([presetRule]) === 'custom'
+    ? '自定义匹配'
+    : matchProfileLabel(profileFromPresetRules([presetRule]))
   return normalized
     .slice(0, 2)
     .map(rule => `${rule.mode === 'semantic' ? '语义' : '关键词'}：${rule.value}`)
@@ -682,18 +922,46 @@ function matchRulesSummary(rules?: DouyinLeadMatchRule[] | null): string {
 function resetForm() {
   form.value = defaultForm()
   launchError.value = ''
+  matchExampleDraft.value = ''
 }
 
 function applyTemplate(template: LeadTemplate | DouyinLeadTemplate) {
+  const templateRules = normalizeMatchRules(template.matchRules)
+  const matchEnabled = 'matchEnabled' in template
+    ? template.matchEnabled !== false
+    : 'matchHighIntent' in template
+    ? template.matchHighIntent !== false
+    : templateRules.some(isPresetMatchRule)
+  const profile = normalizeMatchProfile(
+    'matchProfile' in template && template.matchProfile
+      ? String(template.matchProfile)
+      : profileFromPresetRules(templateRules),
+  )
+  const preset = matchPreset(profile)
+  const examples = normalizeMatchExamples(
+    'matchExamples' in template && Array.isArray(template.matchExamples)
+      ? template.matchExamples
+      : 'highIntentExamples' in template && Array.isArray(template.highIntentExamples)
+      ? template.highIntentExamples
+      : examplesFromPresetRules(templateRules),
+  )
+  const description = 'matchDescription' in template && template.matchDescription
+    ? String(template.matchDescription)
+    : descriptionFromPresetRules(templateRules) || preset.description
   form.value = {
     keyword: template.keyword || '',
     sort: normalizeSortMode(template.sort),
     videoLimit: template.videoLimit || 2,
-    matchRules: normalizeMatchRules(template.matchRules),
-    dmDraft: template.dmDraft || '你好',
-    engage: template.engage ?? true,
+    matchRules: matchEnabled ? [] : templateRules,
+    matchEnabled,
+    matchProfile: profile,
+    matchDescription: description,
+    matchExamples: examples.length ? examples : [...preset.examples],
+    dmDraft: template.dmDraft || preset.dmDraft,
+    engage: template.engage ?? matchEnabled,
     sendDm: template.sendDm ?? false,
   }
+  matchExampleDraft.value = ''
   templateName.value = template.name || ''
 }
 
@@ -748,7 +1016,7 @@ function templatePayload(name: string): DouyinLeadTemplatePayload {
     keyword: form.value.keyword.trim(),
     sort: form.value.sort,
     videoLimit: form.value.videoLimit,
-    matchRules: normalizedFormMatchRules(),
+    matchRules: templateMatchRulesPayload(),
     dmDraft: form.value.dmDraft.trim() || '你好',
     engage: form.value.engage,
     sendDm: form.value.sendDm,
@@ -774,6 +1042,11 @@ async function submitDouyinRun() {
       sort: form.value.sort,
       videoLimit: form.value.videoLimit,
       matchRules: normalizedFormMatchRules(),
+      matchHighIntent: false,
+      highIntentExamples: [],
+      matchProfile: form.value.matchProfile,
+      matchDescription: form.value.matchEnabled ? form.value.matchDescription.trim() : '',
+      matchExamples: form.value.matchEnabled ? normalizeMatchExamples(form.value.matchExamples) : [],
       dmDraft: form.value.dmDraft.trim() || '你好',
       engage: form.value.engage,
       sendDm: form.value.sendDm,
@@ -898,6 +1171,9 @@ async function openRunById(runId: string | number | null, options: OpenRunOption
     const run = unwrapApiData<DouyinLeadAcquisitionRunResponse | null>(response, null)
     if (!run) throw new Error('未找到任务详情')
     currentRun.value = normalizeRun(run)
+    if (activeView.value === 'history') {
+      await loadLeadPool()
+    }
     if (options.scroll !== false) {
       await nextTick()
       const selector = activeView.value === 'history' ? '.history-final-summary' : '.result-panel'
@@ -919,6 +1195,7 @@ async function loadLeadPool() {
       limit: 50,
       status: leadPoolStatus.value,
       keyword: leadPoolKeyword.value.trim() || undefined,
+      taskId: selectedLeadPoolTaskId.value ?? undefined,
     })
     leadPool.value = unwrapApiData<DouyinLeadPoolItem[]>(response, [])
   } catch (error) {
@@ -1005,6 +1282,12 @@ function reasonLabel(value?: string | null): string {
     ALL_VIDEOS_FAILED: '所有视频处理失败',
     DM_BUTTON_NOT_FOUND: '未找到私信入口',
     DM_PAGE_NOT_CONFIRMED: '未确认进入私信页',
+    PROFILE_TAB_NOT_CONTROLLED: '主页标签页未受浏览器扩展控制',
+    DM_TAB_NOT_CONTROLLED: '私信标签页未受浏览器扩展控制',
+    DEADLINE_EXCEEDED: '执行超时',
+    PROFILE_OPEN_FAILED: '用户主页打开失败',
+    VIDEO_RESULT_NOT_FOUND: '未找到视频结果',
+    DRAFT_NOT_OBSERVED: '未检测到私信草稿',
     ENGAGEMENT_FAILED: '触达执行失败',
     COMMENT_COLLECTION_INCOMPLETE: '评论采集未完整',
     COMMENT_PANEL_LOST_DURING_SCROLL: '滚动时评论区丢失',
@@ -1394,6 +1677,146 @@ function buildChatPrompt(): string {
   font-weight: 500;
 }
 
+.match-target-field {
+  gap: 12px;
+}
+
+.match-target-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--mc-primary) 22%, var(--mc-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-primary) 5%, var(--mc-bg));
+  cursor: pointer;
+}
+
+.match-target-switch input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--mc-primary);
+}
+
+.match-target-switch span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.match-target-switch strong {
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+
+.match-target-switch small {
+  color: var(--mc-text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.match-target-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.match-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.match-preset-button {
+  min-height: 38px;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-container);
+  color: var(--mc-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 8px;
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+
+.match-preset-button.active {
+  border-color: color-mix(in srgb, var(--mc-primary) 56%, var(--mc-border));
+  background: color-mix(in srgb, var(--mc-primary) 10%, var(--mc-bg-container));
+  color: var(--mc-primary);
+}
+
+.match-preset-button:not(:disabled):hover {
+  border-color: var(--mc-primary);
+  color: var(--mc-primary);
+}
+
+.compact-field {
+  gap: 7px;
+}
+
+.intent-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--mc-border);
+  border-radius: 999px;
+  background: var(--mc-bg);
+  color: var(--mc-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 8px 0 11px;
+}
+
+.intent-chip button {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mc-text-tertiary);
+  cursor: pointer;
+}
+
+.intent-chip button:hover {
+  background: var(--mc-bg-muted);
+  color: var(--mc-danger);
+}
+
+.intent-example-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 8px;
+}
+
+.intent-example-add button {
+  min-height: 38px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-bg);
+  color: var(--mc-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.intent-example-add button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--mc-primary) 42%, var(--mc-border));
+  color: var(--mc-primary);
+}
+
 .match-rule-list {
   display: flex;
   max-height: 184px;
@@ -1483,6 +1906,10 @@ function buildChatPrompt(): string {
 .switch-item input {
   width: 18px;
   height: 18px;
+}
+
+.switch-item.disabled {
+  color: var(--mc-text-tertiary);
 }
 
 .primary-button,

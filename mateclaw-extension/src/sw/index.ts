@@ -256,11 +256,11 @@ const handlers: ActionHandlers = {
   type:       typeHandler({ debugger: debuggerManager, chrome, clearFirst: true }),
   press_key:  pressKeyHandler({ debugger: debuggerManager }),
   scroll:     baseScrollHandler,
-  scroll_region: scrollRegionHandler({ regions: regionRegistry, scroll: baseScrollHandler }),
+  scroll_region: scrollRegionHandler({ regions: regionRegistry, scroll: baseScrollHandler, chrome }),
   register_region: registerRegionHandler({ regions: regionRegistry }),
   detect_region: detectRegionHandler({ regions: regionRegistry, chrome }),
   extract_region: extractRegionHandler({ regions: regionRegistry, chrome }),
-  open_author_from_comment: openAuthorFromCommentHandler({ chrome }),
+  open_author_from_comment: openAuthorFromCommentHandler({ chrome, tabGroupManager, subject: SUBJECT }),
   click_profile_action: clickProfileActionHandler({ chrome }),
   type_dm_draft: typeDmDraftHandler({ debugger: debuggerManager, chrome }),
   close_tab: closeTabHandler({ chrome }),
@@ -271,7 +271,7 @@ const handlers: ActionHandlers = {
     initialCursorPosition: tabId => viewportCenterFromDebugger(debuggerManager, tabId),
   }),
   wait:       waitHandler({ chrome }),
-  douyin_comment_network: douyinCommentNetworkHandler({ debugger: debuggerManager }),
+  douyin_comment_network: douyinCommentNetworkHandler({ debugger: debuggerManager, chrome }),
 }
 
 const executor = new ActionExecutor(handlers)

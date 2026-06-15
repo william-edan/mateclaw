@@ -162,12 +162,12 @@ class DouyinLeadAcquisitionControllerTest {
                 "https://www.douyin.com/user/abc",
                 "2026-06-10T16:00:00",
                 "2026-06-10T16:02:00");
-        when(queryService.leadPool(eq(7L), eq(25), eq("sent"), eq("易企秀"))).thenReturn(List.of(lead));
+        when(queryService.leadPool(eq(7L), eq(25), eq("sent"), eq("易企秀"), eq(null))).thenReturn(List.of(lead));
 
-        var response = controller.leadPool(7L, 25, "sent", "易企秀");
+        var response = controller.leadPool(7L, 25, "sent", "易企秀", null);
 
         assertThat(response.getData()).containsExactly(lead);
-        verify(queryService).leadPool(eq(7L), eq(25), eq("sent"), eq("易企秀"));
+        verify(queryService).leadPool(eq(7L), eq(25), eq("sent"), eq("易企秀"), eq(null));
     }
 
     @Test

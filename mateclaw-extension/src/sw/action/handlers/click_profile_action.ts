@@ -68,7 +68,7 @@ function clickProfileActionInPage(labels: string[]): { ok: boolean; label?: stri
     ? []
     : collectCandidates(document, selectors, 'document_dom')
   const candidates = [...scopedCandidates, ...documentCandidates]
-    .filter(item => item.text && wanted.some(label => item.text.includes(label)))
+    .filter(item => profileActionTextMatches(item.text, wanted))
     .filter(item => item.rect.width > 0 && item.rect.height > 0)
     .filter(item => item.rect.left >= minContentX)
     .filter(item => item.rect.top >= 70 && item.rect.top <= maxY)
@@ -126,7 +126,22 @@ function clickProfileActionInPage(labels: string[]): { ok: boolean; label?: stri
     }
     if (item.text.includes('已关注') || item.text.includes('互相关注')) value += 40
     if (item.text.includes('分享主页') || item.el.id === 'frame-user-info-share-button') value -= 120
+    if (isUnsafeProfileActionText(item.text)) value -= 1_000
     return value
+  }
+
+  function profileActionTextMatches(text: string, actionLabels: string[]): boolean {
+    const normalized = normalize(text)
+    if (!normalized || isUnsafeProfileActionText(normalized)) return false
+    return actionLabels.some(label => normalized === label || normalized.toLowerCase() === label.toLowerCase())
+  }
+
+  function isUnsafeProfileActionText(text: string): boolean {
+    const normalized = normalize(text).toLowerCase()
+    return normalized.includes('下载')
+      || normalized.includes('客户端')
+      || normalized.includes('桌面快捷')
+      || normalized.includes('download')
   }
 
   function normalize(text: string): string {

@@ -294,40 +294,86 @@
             </div>
 
             <div class="form-group full-width">
-              <label class="form-label">
-                {{ t('skills.douyinLead.matchRules') }}
-                <span class="form-hint">{{ t('skills.douyinLead.commentRuleOptional') }}</span>
+              <label class="douyin-intent-switch">
+                <input v-model="douyinForm.matchEnabled" type="checkbox" :disabled="douyinLaunching" />
+                <span>
+                  <strong>{{ t('skills.douyinLead.matchTarget') }}</strong>
+                  <small>{{ t('skills.douyinLead.matchTargetHint') }}</small>
+                </span>
               </label>
-              <div class="douyin-match-rules">
-                <div
-                  v-for="(rule, index) in douyinForm.matchRules"
-                  :key="`douyin-rule-${index}`"
-                  class="douyin-match-rule-row"
-                >
-                  <select v-model="rule.mode" class="form-input" :disabled="douyinLaunching">
-                    <option value="keyword">{{ t('skills.douyinLead.keywordMatch') }}</option>
-                    <option value="semantic">{{ t('skills.douyinLead.semanticMatch') }}</option>
-                  </select>
-                  <input
-                    v-model.trim="rule.value"
-                    class="form-input"
-                    type="text"
-                    maxlength="160"
-                    :placeholder="rule.mode === 'semantic' ? t('skills.douyinLead.semanticMatchPlaceholder') : t('skills.douyinLead.keywordMatchPlaceholder')"
+
+              <div v-if="douyinForm.matchEnabled" class="douyin-intent-examples">
+                <label class="form-label">
+                  {{ t('skills.douyinLead.matchPreset') }}
+                  <span class="form-hint">{{ t('skills.douyinLead.matchPresetHint') }}</span>
+                </label>
+                <div class="douyin-match-preset-grid">
+                  <button
+                    v-for="preset in DOUYIN_MATCH_PRESETS"
+                    :key="preset.key"
+                    type="button"
+                    class="douyin-match-preset-button"
+                    :class="{ active: douyinForm.matchProfile === preset.key }"
                     :disabled="douyinLaunching"
-                  />
-                  <button type="button" class="douyin-rule-delete" :disabled="douyinLaunching" @click="removeDouyinMatchRule(index)">
-                    {{ t('common.delete') }}
+                    @click="applyDouyinMatchPreset(preset.key)"
+                  >
+                    {{ t(preset.labelKey) }}
                   </button>
                 </div>
-              </div>
-              <div class="douyin-rule-actions">
-                <button type="button" :disabled="douyinLaunching" @click="addDouyinMatchRule('keyword')">
-                  {{ t('skills.douyinLead.addKeywordRule') }}
-                </button>
-                <button type="button" :disabled="douyinLaunching" @click="addDouyinMatchRule('semantic')">
-                  {{ t('skills.douyinLead.addSemanticRule') }}
-                </button>
+
+                <label class="form-label" for="douyin-match-description">
+                  {{ t('skills.douyinLead.matchDescription') }}
+                  <span class="form-hint">{{ t('skills.douyinLead.matchDescriptionHint') }}</span>
+                </label>
+                <textarea
+                  id="douyin-match-description"
+                  v-model.trim="douyinForm.matchDescription"
+                  class="form-textarea"
+                  rows="3"
+                  maxlength="260"
+                  :placeholder="t('skills.douyinLead.matchDescriptionPlaceholder')"
+                  :disabled="douyinLaunching"
+                ></textarea>
+
+                <label class="form-label">
+                  {{ t('skills.douyinLead.matchExamples') }}
+                  <span class="form-hint">{{ t('skills.douyinLead.matchExamplesHint') }}</span>
+                </label>
+                <div class="douyin-intent-chip-list">
+                  <span
+                    v-for="(example, index) in douyinForm.matchExamples"
+                    :key="`${example}-${index}`"
+                    class="douyin-intent-chip"
+                  >
+                    {{ example }}
+                    <button
+                      type="button"
+                      :disabled="douyinLaunching"
+                      :aria-label="`${t('common.delete')} ${example}`"
+                      @click="removeDouyinMatchExample(index)"
+                    >
+                      ×
+                    </button>
+                  </span>
+                </div>
+                <div class="douyin-intent-add">
+                  <input
+                    v-model.trim="douyinMatchExampleDraft"
+                    class="form-input"
+                    type="text"
+                    maxlength="40"
+                    :placeholder="t('skills.douyinLead.matchExamplePlaceholder')"
+                    :disabled="douyinLaunching"
+                    @keydown.enter.prevent="addDouyinMatchExample"
+                  />
+                  <button
+                    type="button"
+                    :disabled="douyinLaunching || !douyinMatchExampleDraft.trim()"
+                    @click="addDouyinMatchExample"
+                  >
+                    {{ t('common.add') }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -345,11 +391,11 @@
 
             <div class="form-group full-width">
               <div class="douyin-toggle-row">
-                <label class="douyin-checkbox">
+                <label class="douyin-checkbox" :class="{ disabled: !douyinForm.matchEnabled }">
                   <input
                     v-model="douyinForm.engage"
                     type="checkbox"
-                    :disabled="douyinLaunching"
+                    :disabled="douyinLaunching || !douyinForm.matchEnabled"
                   />
                   <span>{{ t('skills.douyinLead.engage') }}</span>
                 </label>
@@ -1049,18 +1095,77 @@ interface DouyinLaunchForm {
   sort: 'comprehensive' | 'most_liked' | 'latest'
   videoLimit: number
   matchRules: DouyinLeadMatchRule[]
+  matchEnabled: boolean
+  matchProfile: DouyinMatchProfile
+  matchDescription: string
+  matchExamples: string[]
   dmDraft: string
   engage: boolean
   sendDm: boolean
 }
 
+type DouyinMatchProfile = 'high_intent' | 'bad_experience' | 'consultation' | 'competitor_alternative' | 'custom'
+
+interface DouyinMatchPreset {
+  key: DouyinMatchProfile
+  labelKey: string
+  descriptionKey: string
+  examples: string[]
+  dmDraft: string
+}
+
+const DOUYIN_MATCH_PRESETS: DouyinMatchPreset[] = [
+  {
+    key: 'high_intent',
+    labelKey: 'skills.douyinLead.matchPresetHighIntent',
+    descriptionKey: 'skills.douyinLead.matchPresetHighIntentDesc',
+    examples: ['多少钱', '怎么收费', '能试用吗', '怎么联系', '想了解', '有没有方案'],
+    dmDraft: '你好，看到你在评论里提到相关需求，方便简单交流一下吗？',
+  },
+  {
+    key: 'bad_experience',
+    labelKey: 'skills.douyinLead.matchPresetBadExperience',
+    descriptionKey: 'skills.douyinLead.matchPresetBadExperienceDesc',
+    examples: ['太慢了', '不好用', '用不了', '不推荐', '后悔买了', '一直出问题'],
+    dmDraft: '你好，看到你提到使用体验不太顺，方便了解一下你的场景吗？',
+  },
+  {
+    key: 'consultation',
+    labelKey: 'skills.douyinLead.matchPresetConsultation',
+    descriptionKey: 'skills.douyinLead.matchPresetConsultationDesc',
+    examples: ['怎么用', '有教程吗', '怎么做', '支持吗', '能不能', '求教学'],
+    dmDraft: '你好，看到你在问具体用法，我这边可以给你一个思路。',
+  },
+  {
+    key: 'competitor_alternative',
+    labelKey: 'skills.douyinLead.matchPresetAlternative',
+    descriptionKey: 'skills.douyinLead.matchPresetAlternativeDesc',
+    examples: ['有没有替代', '哪个更好用', '求推荐', '换一个工具', '类似软件', '平替'],
+    dmDraft: '你好，看到你在找替代方案，方便简单交流一下你的需求吗？',
+  },
+  {
+    key: 'custom',
+    labelKey: 'skills.douyinLead.matchPresetCustom',
+    descriptionKey: 'skills.douyinLead.matchPresetCustomDesc',
+    examples: ['补充你的示例词'],
+    dmDraft: '你好，看到你的评论，方便简单交流一下吗？',
+  },
+]
+
+const DEFAULT_DOUYIN_MATCH_PROFILE: DouyinMatchProfile = 'high_intent'
+
 function defaultDouyinForm(): DouyinLaunchForm {
+  const preset = douyinMatchPreset(DEFAULT_DOUYIN_MATCH_PROFILE)
   return {
     keyword: '',
     sort: 'comprehensive',
     videoLimit: 50,
-    matchRules: [{ mode: 'keyword', value: '' }],
-    dmDraft: '你好',
+    matchRules: [],
+    matchEnabled: true,
+    matchProfile: preset.key,
+    matchDescription: t(preset.descriptionKey),
+    matchExamples: [...preset.examples],
+    dmDraft: preset.dmDraft,
     engage: true,
     sendDm: false,
   }
@@ -1071,15 +1176,30 @@ const douyinLaunchSkill = ref<Skill | null>(null)
 const douyinLaunching = ref(false)
 const douyinForm = ref<DouyinLaunchForm>(defaultDouyinForm())
 const douyinLaunchResult = ref<DouyinLeadAcquisitionRunResponse | null>(null)
+const douyinMatchExampleDraft = ref('')
 
 const canSubmitDouyinLaunch = computed(() => {
   if (douyinLaunching.value) return false
   if (!douyinForm.value.keyword.trim()) return false
+  if (douyinForm.value.matchEnabled && !douyinForm.value.matchDescription.trim()) return false
   return true
 })
 
 watch(() => douyinForm.value.engage, (engage) => {
   if (!engage) douyinForm.value.sendDm = false
+})
+
+watch(() => douyinForm.value.matchEnabled, (enabled) => {
+  if (!enabled) {
+    douyinForm.value.engage = false
+    douyinForm.value.sendDm = false
+    return
+  }
+  douyinForm.value.engage = true
+  douyinForm.value.matchRules = []
+  if (!douyinForm.value.matchDescription.trim()) {
+    applyDouyinMatchPreset(DEFAULT_DOUYIN_MATCH_PROFILE)
+  }
 })
 
 const douyinResultStatusClass = computed(() => {
@@ -1119,6 +1239,7 @@ function isDouyinLeadAcquisitionSkill(skill: Skill): boolean {
 function openDouyinLaunch(skill: Skill) {
   douyinLaunchSkill.value = skill
   douyinForm.value = defaultDouyinForm()
+  douyinMatchExampleDraft.value = ''
   douyinLaunchResult.value = null
   douyinLaunchVisible.value = true
 }
@@ -1134,24 +1255,68 @@ function normalizeDouyinVideoLimit() {
   douyinForm.value.videoLimit = Math.min(50, Math.max(1, next))
 }
 
-function addDouyinMatchRule(mode: DouyinLeadMatchRule['mode']) {
-  douyinForm.value.matchRules.push({ mode, value: '' })
+function douyinMatchPreset(profile?: string | null): DouyinMatchPreset {
+  return DOUYIN_MATCH_PRESETS.find(preset => preset.key === profile) ?? DOUYIN_MATCH_PRESETS[0]!
 }
 
-function removeDouyinMatchRule(index: number) {
-  douyinForm.value.matchRules.splice(index, 1)
-  if (!douyinForm.value.matchRules.length) {
-    douyinForm.value.matchRules.push({ mode: 'keyword', value: '' })
+function applyDouyinMatchPreset(profile: DouyinMatchProfile | string) {
+  if (douyinLaunching.value) return
+  const preset = douyinMatchPreset(profile)
+  douyinForm.value.matchEnabled = true
+  douyinForm.value.matchProfile = preset.key
+  douyinForm.value.matchDescription = t(preset.descriptionKey)
+  douyinForm.value.matchExamples = [...preset.examples]
+  douyinForm.value.matchRules = []
+  if (!douyinForm.value.dmDraft.trim() || DOUYIN_MATCH_PRESETS.some(item => item.dmDraft === douyinForm.value.dmDraft.trim())) {
+    douyinForm.value.dmDraft = preset.dmDraft
   }
 }
 
+function normalizeDouyinMatchExamples(examples?: string[] | null): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const item of examples ?? []) {
+    const value = String(item ?? '').trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    normalized.push(value)
+    if (normalized.length >= 30) break
+  }
+  return normalized
+}
+
+function addDouyinMatchExample() {
+  const value = douyinMatchExampleDraft.value.trim()
+  if (!value || douyinLaunching.value) return
+  douyinForm.value.matchExamples = normalizeDouyinMatchExamples([
+    ...douyinForm.value.matchExamples,
+    value,
+  ])
+  douyinMatchExampleDraft.value = ''
+}
+
+function removeDouyinMatchExample(index: number) {
+  if (douyinLaunching.value) return
+  douyinForm.value.matchExamples.splice(index, 1)
+}
+
+function isDouyinPresetMatchRule(rule: DouyinLeadMatchRule): boolean {
+  const value = String(rule.value || '')
+  return rule.mode === 'semantic' && (
+    value.includes('评论匹配目标')
+    || value.includes('Comment match target')
+    || value.includes('高意向客户')
+  )
+}
+
 function normalizedDouyinMatchRules(): DouyinLeadMatchRule[] {
+  if (douyinForm.value.matchEnabled) return []
   return douyinForm.value.matchRules
     .map(rule => ({
       mode: rule.mode === 'semantic' ? 'semantic' : 'keyword',
       value: String(rule.value || '').trim(),
     }))
-    .filter(rule => rule.value.length > 0)
+    .filter(rule => rule.value.length > 0 && !isDouyinPresetMatchRule(rule))
 }
 
 async function submitDouyinLaunch() {
@@ -1168,6 +1333,11 @@ async function submitDouyinLaunch() {
       sort: douyinForm.value.sort,
       videoLimit: douyinForm.value.videoLimit,
       matchRules: normalizedDouyinMatchRules(),
+      matchHighIntent: false,
+      highIntentExamples: [],
+      matchProfile: douyinForm.value.matchProfile,
+      matchDescription: douyinForm.value.matchEnabled ? douyinForm.value.matchDescription.trim() : '',
+      matchExamples: douyinForm.value.matchEnabled ? normalizeDouyinMatchExamples(douyinForm.value.matchExamples) : [],
       dmDraft: douyinForm.value.dmDraft.trim() || '你好',
       engage: douyinForm.value.engage,
       sendDm: douyinForm.value.sendDm,
@@ -2433,6 +2603,23 @@ html.dark .skill-btn-launch { color: #34d399; background: rgba(52, 211, 153, 0.1
 .douyin-limit-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .douyin-limit-input { width: 88px; flex: 0 0 88px; }
 .douyin-limit-range { flex: 1; min-width: 0; accent-color: var(--mc-primary); }
+.douyin-intent-switch { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--mc-primary) 22%, var(--mc-border)); border-radius: 10px; background: color-mix(in srgb, var(--mc-primary) 5%, var(--mc-bg)); color: var(--mc-text-primary); cursor: pointer; }
+.douyin-intent-switch input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--mc-primary); }
+.douyin-intent-switch span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.douyin-intent-switch strong { font-size: 13px; font-weight: 700; }
+.douyin-intent-switch small { color: var(--mc-text-tertiary); font-size: 12px; line-height: 1.45; }
+.douyin-intent-examples { display: flex; flex-direction: column; gap: 9px; margin-top: 12px; }
+.douyin-match-preset-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.douyin-match-preset-button { min-height: 36px; border: 1px solid var(--mc-border); border-radius: 8px; background: var(--mc-bg); color: var(--mc-text-secondary); font-size: 12px; font-weight: 700; padding: 0 8px; cursor: pointer; transition: border-color .18s ease, background .18s ease, color .18s ease; }
+.douyin-match-preset-button.active { border-color: color-mix(in srgb, var(--mc-primary) 56%, var(--mc-border)); background: color-mix(in srgb, var(--mc-primary) 10%, var(--mc-bg)); color: var(--mc-primary); }
+.douyin-match-preset-button:not(:disabled):hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+.douyin-intent-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.douyin-intent-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; border: 1px solid var(--mc-border); border-radius: 999px; background: var(--mc-bg); color: var(--mc-text-primary); font-size: 12px; font-weight: 650; padding: 0 8px 0 10px; }
+.douyin-intent-chip button { display: inline-grid; width: 18px; height: 18px; place-items: center; border: 0; border-radius: 999px; background: transparent; color: var(--mc-text-tertiary); cursor: pointer; }
+.douyin-intent-chip button:hover { background: var(--mc-bg-muted); color: var(--mc-danger); }
+.douyin-intent-add { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 8px; }
+.douyin-intent-add button { min-height: 36px; border: 1px solid var(--mc-border); border-radius: 8px; background: var(--mc-bg); color: var(--mc-text-secondary); font-size: 12px; font-weight: 650; padding: 0 10px; cursor: pointer; }
+.douyin-intent-add button:not(:disabled):hover { border-color: var(--mc-primary); color: var(--mc-primary); }
 .douyin-match-rules { display: flex; max-height: 150px; flex-direction: column; gap: 8px; overflow: auto; }
 .douyin-match-rule-row { display: grid; grid-template-columns: 118px minmax(0, 1fr) 58px; gap: 8px; align-items: center; }
 .douyin-rule-actions { display: flex; gap: 8px; margin-top: 8px; }

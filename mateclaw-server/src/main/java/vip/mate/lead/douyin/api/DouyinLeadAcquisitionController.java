@@ -71,8 +71,9 @@ public class DouyinLeadAcquisitionController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestParam(value = "limit", required = false, defaultValue = "50") int limit,
             @RequestParam(value = "status", required = false) String status,
-            @RequestParam(value = "keyword", required = false) String keyword) {
-        return R.ok(queryService.leadPool(workspaceId == null ? 1L : workspaceId, limit, status, keyword));
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "taskId", required = false) Long taskId) {
+        return R.ok(queryService.leadPool(workspaceId == null ? 1L : workspaceId, limit, status, keyword, taskId));
     }
 
     @GetMapping("/douyin/stats")
