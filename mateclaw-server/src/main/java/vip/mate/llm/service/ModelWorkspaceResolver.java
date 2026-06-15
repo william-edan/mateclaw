@@ -7,6 +7,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public final class ModelWorkspaceResolver {
 
     public static final long DEFAULT_WORKSPACE_ID = 1L;
+    private static final ThreadLocal<Long> CURRENT_WORKSPACE_ID = new ThreadLocal<>();
 
     private ModelWorkspaceResolver() {
     }
@@ -23,6 +24,22 @@ public final class ModelWorkspaceResolver {
                 }
             }
         }
+        Long explicit = CURRENT_WORKSPACE_ID.get();
+        if (explicit != null) {
+            return explicit;
+        }
         return DEFAULT_WORKSPACE_ID;
+    }
+
+    public static void setCurrentWorkspaceId(Long workspaceId) {
+        if (workspaceId == null || workspaceId <= 0) {
+            CURRENT_WORKSPACE_ID.remove();
+            return;
+        }
+        CURRENT_WORKSPACE_ID.set(workspaceId);
+    }
+
+    public static void clear() {
+        CURRENT_WORKSPACE_ID.remove();
     }
 }

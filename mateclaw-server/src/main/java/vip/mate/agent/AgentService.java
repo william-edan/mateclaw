@@ -17,6 +17,7 @@ import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.chatmodel.ThinkingLevelHolder;
 import vip.mate.llm.event.ModelConfigChangedEvent;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.lifecycle.MemoryLifecycleMediator;
 import vip.mate.memory.lifecycle.TurnContext;
@@ -228,13 +229,16 @@ public class AgentService {
      */
     public String chat(Long agentId, String message, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
-        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
         try {
+            BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
+            ChatOriginHolder.set(captured);
             return withLifecycleSync(agentId, message, conversationId,
                     (msg, convId) -> agent.chat(msg, convId));
         } finally {
             ChatOriginHolder.clear();
+            ModelWorkspaceResolver.clear();
         }
     }
 
@@ -264,16 +268,26 @@ public class AgentService {
 
     public Flux<String> chatStream(Long agentId, String message, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
         // Capture the origin into a request-scoped holder; cleared on Flux
         // termination so the next reactive subscriber doesn't inherit stale state.
-        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
+        BaseAgent agent;
+        try {
+            agent = getOrBuildAgentForConversation(agentId, conversationId);
+        } finally {
+            ModelWorkspaceResolver.clear();
+        }
         return Flux.defer(() -> {
+            ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
             ChatOriginHolder.set(captured);
             return withLifecycleFlux(agentId, message, conversationId,
                     (msg, convId) -> agent.chatStream(msg, convId),
                     chunk -> chunk);
-        }).doFinally(signal -> ChatOriginHolder.clear());
+        }).doFinally(signal -> {
+            ChatOriginHolder.clear();
+            ModelWorkspaceResolver.clear();
+        });
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId) {
@@ -300,7 +314,14 @@ public class AgentService {
                                                    String requesterId, String thinkingLevel,
                                                    ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
+        BaseAgent agent;
+        try {
+            agent = getOrBuildAgentForConversation(agentId, conversationId);
+        } finally {
+            ModelWorkspaceResolver.clear();
+        }
 
         // 设置请求级思考深度（通过 ThreadLocal 传递到 StateGraph 执行）
         if (thinkingLevel != null && !thinkingLevel.isBlank()) {
@@ -315,9 +336,9 @@ public class AgentService {
             }
         }
 
-        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
         if (agent instanceof StructuredStreamCapable capable) {
             return Flux.defer(() -> {
+                        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
                         ChatOriginHolder.set(captured);
                         return withLifecycleFlux(agentId, message, conversationId,
                                 (msg, convId) -> capable.chatStructuredStream(msg, convId,
@@ -325,19 +346,26 @@ public class AgentService {
                                         .doFinally(signal -> ThinkingLevelHolder.clear()),
                                 StreamDelta::content);
                     })
-                    .doFinally(signal -> ChatOriginHolder.clear());
+                    .doFinally(signal -> {
+                        ChatOriginHolder.clear();
+                        ModelWorkspaceResolver.clear();
+                    });
         }
 
         // 降级：不支持结构化流的 Agent，包装为纯内容流
         ThinkingLevelHolder.clear();
         return Flux.defer(() -> {
+                    ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
                     ChatOriginHolder.set(captured);
                     return withLifecycleFlux(agentId, message, conversationId,
                             (msg, convId) -> agent.chatStream(msg, convId)
                                     .map(chunk -> new StreamDelta(chunk, null)),
                             StreamDelta::content);
                 })
-                .doFinally(signal -> ChatOriginHolder.clear());
+                .doFinally(signal -> {
+                    ChatOriginHolder.clear();
+                    ModelWorkspaceResolver.clear();
+                });
     }
 
     public String execute(Long agentId, String goal, String conversationId) {
@@ -346,13 +374,16 @@ public class AgentService {
 
     public String execute(Long agentId, String goal, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, goal);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
-        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
         try {
+            BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
+            ChatOriginHolder.set(captured);
             return withLifecycleSync(agentId, goal, conversationId,
                     (msg, convId) -> agent.execute(msg, convId));
         } finally {
             ChatOriginHolder.clear();
+            ModelWorkspaceResolver.clear();
         }
     }
 
@@ -373,13 +404,16 @@ public class AgentService {
     public String chatWithReplay(Long agentId, String userMessage, String conversationId,
                                   String toolCallPayload, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
-        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
         try {
+            BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
+            ChatOriginHolder.set(captured);
             return withLifecycleSync(agentId, userMessage, conversationId,
                     (msg, convId) -> agent.chatWithReplay(msg, convId, toolCallPayload));
         } finally {
             ChatOriginHolder.clear();
+            ModelWorkspaceResolver.clear();
         }
     }
 
@@ -437,16 +471,57 @@ public class AgentService {
                                                    String toolCallPayload, String requesterId,
                                                    ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
-        BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
-        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        ChatOrigin captured = resolveWorkspaceOrigin(agentId, conversationId, origin);
+        ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
+        BaseAgent agent;
+        try {
+            agent = getOrBuildAgentForConversation(agentId, conversationId);
+        } finally {
+            ModelWorkspaceResolver.clear();
+        }
         return Flux.defer(() -> {
+                    ModelWorkspaceResolver.setCurrentWorkspaceId(captured.workspaceId());
                     ChatOriginHolder.set(captured);
                     return withLifecycleFlux(agentId, userMessage, conversationId,
                             (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
                                     requesterId != null ? requesterId : ""),
                             StreamDelta::content);
                 })
-                .doFinally(signal -> ChatOriginHolder.clear());
+                .doFinally(signal -> {
+                    ChatOriginHolder.clear();
+                    ModelWorkspaceResolver.clear();
+                });
+    }
+
+    private ChatOrigin resolveWorkspaceOrigin(Long agentId, String conversationId, ChatOrigin origin) {
+        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        if (captured.workspaceId() != null) {
+            return captured;
+        }
+        Long workspaceId = workspaceIdFromConversation(conversationId);
+        if (workspaceId == null) {
+            workspaceId = workspaceIdFromAgent(agentId);
+        }
+        return workspaceId != null ? captured.withWorkspace(workspaceId, captured.workspaceBasePath()) : captured;
+    }
+
+    private Long workspaceIdFromConversation(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        ConversationEntity conv = conversationMapper.selectOne(
+                new LambdaQueryWrapper<ConversationEntity>()
+                        .eq(ConversationEntity::getConversationId, conversationId)
+                        .last("LIMIT 1"));
+        return conv != null ? conv.getWorkspaceId() : null;
+    }
+
+    private Long workspaceIdFromAgent(Long agentId) {
+        if (agentId == null) {
+            return null;
+        }
+        AgentEntity entity = agentMapper.selectById(agentId);
+        return entity != null ? entity.getWorkspaceId() : null;
     }
 
     public AgentState getAgentState(Long agentId) {
