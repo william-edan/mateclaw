@@ -19,6 +19,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @EnableConfigurationProperties({GraphObservationProperties.class, ConversationWindowProperties.class, ToolTimeoutProperties.class})
 public class WebMvcConfig implements WebMvcConfigurer {
 
+    private final WorkspaceContextInterceptor workspaceContextInterceptor;
     private final WorkspaceAccessInterceptor workspaceAccessInterceptor;
 
     /** CORS allowed origins, comma-separated. Default "*" for dev, restrict in production. */
@@ -27,6 +28,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // Bind the workspace context first so it is available to everything downstream.
+        registry.addInterceptor(workspaceContextInterceptor)
+                .addPathPatterns("/api/**");
         registry.addInterceptor(workspaceAccessInterceptor)
                 .addPathPatterns("/api/**");
     }
