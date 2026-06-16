@@ -43,6 +43,35 @@ export const typeDmDraftHandler = (
       }
     }
 
+    // [出路③] 主路：MAIN world 经 React fiber 拿 Slate editor、模型层写草稿(后台无焦点可用)。
+    // 命中即返回；失败记 slateReason 继续走下面的 ISOLATED execCommand / CDP 兜底(仅前台有效)。
+    let slateReason = 'not_attempted'
+    try {
+      const sr = await chromeApi.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        world: 'MAIN',
+        func: typeDmDraftBySlateEditor,
+        args: [text],
+      })
+      const sp = sr?.[0]?.result as { ok?: boolean; draftTyped?: boolean; reason?: string; target?: string } | undefined
+      if (sp?.ok === true) {
+        const sent = send ? await clickDmSendInPage(chromeApi, tabId, text) : { ok: true, sent: false, target: undefined }
+        if (!sent.ok) {
+          throw new ActionFailureError('GROUNDING_AMBIGUOUS',
+            `dm draft typed (slate) but send failed: ${sent.reason || 'send_button_not_found'}`, false)
+        }
+        return {
+          ok: true,
+          elapsed_ms: 0,
+          payload: { draftTyped: true, text, target: sp.target || 'slate_editor', sent: sent.sent === true, sendTarget: sent.target },
+        }
+      }
+      slateReason = sp?.reason || 'slate_unknown'
+    } catch (e) {
+      if (e instanceof ActionFailureError) throw e
+      slateReason = 'slate_threw:' + String((e as Error)?.message || e)
+    }
+
     const results = await chromeApi.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: typeDouyinDmDraftInPage,
@@ -96,7 +125,7 @@ export const typeDmDraftHandler = (
       }
       throw new ActionFailureError(
         'GROUNDING_AMBIGUOUS',
-        `${payload?.reason || 'dm draft was not observed after typing'}; cdp=${cdp.reason || 'failed'}`,
+        `slate=${slateReason}; ${payload?.reason || 'dm draft was not observed after typing'}; cdp=${cdp.reason || 'failed'}`,
         false,
       )
     }
@@ -155,6 +184,99 @@ async function typeDmDraftByCdp(
   }
 }
 
+// [出路③ 最后一公里] 后台无焦点向抖音 Slate 私信框输入。必须 world:'MAIN'：Slate editor 对象
+// 在页面 realm，ISOLATED world 取到引用也调不动其方法。经 React fiber 拿到 editor，用模型层
+// insertText(显式末尾 selection)写入——不依赖 document 焦点(execCommand/CDP Input 后台必失效)。
+// 取不到 editor 时退合成 beforeinput(Slate 原生监听 beforeinput、不查 hasFocus/isTrusted)。
+async function typeDmDraftBySlateEditor(
+  text: string,
+): Promise<{ ok: boolean; draftTyped?: boolean; reason?: string; target?: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const panel: any = document.querySelector('#imSaasContainerId, [data-e2e="im-dialog"]') || document
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const el: any = panel.querySelector('[data-slate-editor="true"]')
+  if (!el) return { ok: false, reason: 'slate_editable_not_found' }
+  const want = String(text).replace(/\s+/g, '')
+  const domHas = (): boolean => String(el.innerText || el.textContent || '').replace(/\s+/g, '').includes(want)
+
+  // fiber 取 Slate editor —— 鸭子类型沿 fiber.return 向上遍历，不写死路径(跨 Slate/React 版本会断)
+  const key = Object.keys(el).find((k: string) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let editor: any = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let f: any = key ? el[key] : null, i = 0; f && i < 40 && !editor; f = f.return, i++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bags: any[] = [f.memoizedProps, f.memoizedState, f.stateNode && f.stateNode.props]
+    for (const bag of bags) {
+      if (!bag) continue
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cands: any[] = bag.editor ? [bag.editor] : Object.values(bag)
+      for (const v of cands) {
+        if (v && typeof v === 'object' && typeof v.insertText === 'function'
+          && 'selection' in v && 'children' in v && typeof v.apply === 'function') { editor = v; break }
+      }
+      if (editor) break
+    }
+  }
+
+  if (editor) {
+    try {
+      const endPoint = () => {
+        const path: number[] = []
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let node: any = editor
+        while (node && node.children && node.children.length) {
+          const idx = node.children.length - 1
+          path.push(idx)
+          node = node.children[idx]
+        }
+        const off = node && typeof node.text === 'string' ? node.text.length : 0
+        return { anchor: { path, offset: off }, focus: { path, offset: off } }
+      }
+      // 清空旧内容(模型层，无焦点可用)
+      try {
+        editor.selection = { anchor: { path: [0, 0], offset: 0 }, focus: endPoint().anchor }
+        if (typeof editor.deleteFragment === 'function') editor.deleteFragment()
+        else if (typeof editor.delete === 'function') editor.delete()
+      } catch { /* ignore clear failure */ }
+      // 末尾插入；多行按行拆，行间走 insertSoftBreak/insertBreak
+      editor.selection = endPoint()
+      const lines = String(text).split('\n')
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+          if (typeof editor.insertSoftBreak === 'function') editor.insertSoftBreak()
+          else if (typeof editor.insertBreak === 'function') editor.insertBreak()
+          else editor.insertText('\n')
+        }
+        editor.insertText(lines[i])
+      }
+      if (typeof editor.onChange === 'function') editor.onChange()
+      await new Promise(r => setTimeout(r, 150))
+      if (domHas()) return { ok: true, draftTyped: true, target: 'slate_editor_main_world' }
+    } catch { /* fall through to beforeinput */ }
+  }
+
+  // 兜底：合成 beforeinput(同 MAIN world)。Slate 用原生 addEventListener('beforeinput') 监听、
+  // 不查 hasFocus/isTrusted；setBaseAndExtent 只做元素级 focus(不需窗口焦点)。
+  try {
+    el.focus()
+    const sel = window.getSelection()
+    if (sel) {
+      const r = document.createRange()
+      r.selectNodeContents(el)
+      r.collapse(false)
+      sel.removeAllRanges()
+      sel.addRange(r)
+    }
+    el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: text }))
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }))
+    await new Promise(r => setTimeout(r, 150))
+    if (domHas()) return { ok: true, draftTyped: true, target: 'slate_beforeinput' }
+  } catch { /* ignore */ }
+
+  return { ok: false, reason: editor ? 'slate_inserted_but_dom_empty' : 'slate_editor_not_found_on_fiber' }
+}
+
 async function typeDouyinDmDraftInPage(
   text: string,
   send: boolean,
@@ -162,9 +284,10 @@ async function typeDouyinDmDraftInPage(
   if (!/douyin\.com$/u.test(location.hostname) && !location.hostname.endsWith('.douyin.com')) {
     return { ok: false, reason: 'not_douyin_page' }
   }
-  const pageText = document.body?.innerText || document.body?.textContent || ''
-  if (!/私信|发送消息|输入消息|消息/u.test(pageText)) {
-    return { ok: false, reason: 'dm_context_not_visible' }
+  // 抖音私信是作者主页上的同页浮层(#imSaasContainerId)，URL 不变；用 DOM 锚点判断浮层是否打开，
+  // 而非 innerText(后台/最小化时 innerText 可能残缺、误判 dm_context_not_visible)。
+  if (!document.querySelector('#imSaasContainerId, [data-e2e="im-dialog"], .messageEditorinputArea, .e2e-send-msg-btn')) {
+    return { ok: false, reason: 'dm_panel_not_open' }
   }
   const target = findDmEditable()
   if (!target) {
@@ -771,6 +894,16 @@ function isDisabled(el: HTMLElement): boolean {
 }
 
 function findDmEditable(): HTMLElement | null {
+  // 优先：私信浮层(#imSaasContainerId / im-dialog)内的输入框，不按视口 rect 过滤——后台/最小化时
+  // 视口塌缩、rect 不可靠，但浮层 + 输入框的 DOM 锚点稳定。
+  const dmPanel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]')
+  if (dmPanel) {
+    const anchored = dmPanel.querySelector<HTMLElement>(
+      '.messageEditorinputArea [contenteditable], .messageEditorinputArea [data-slate-editor="true"], .messageEditorinputArea, [class*="messageEditor"] [contenteditable], [data-slate-editor="true"], [contenteditable="true"]',
+    )
+    const root = anchored ? editableRoot(anchored) : null
+    if (root && isEditable(root) && !elementText(root).includes('搜索')) return root
+  }
   const selectors = [
     'textarea',
     'input',

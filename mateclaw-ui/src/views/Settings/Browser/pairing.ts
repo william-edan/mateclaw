@@ -41,6 +41,7 @@ export type ExtensionMessage =
   | { type: 'ping' }
   | { type: 'pair'; pat: string; serverUrl: string; deviceName?: string }
   | { type: 'unpair' }
+  | { type: 'reconnect' }
 
 // Minimal structural typing for the slice of the `chrome` API we touch. The
 // admin UI may run in Firefox or a browser without the extension installed, so
@@ -263,3 +264,47 @@ export function statusFromPing(ping: PingResponse | null): PairingStatus {
 /** localStorage key holding the tokenId of the active pairing, so [Disconnect]
  *  can revoke it across reloads. */
 export const PAIRING_TOKEN_KEY = 'mc-browser-pairing-token-id'
+
+// ---------------------------------------------------------------------------
+// 发起获客前“自动连接”：ping 唤醒(可能已休眠的)扩展 SW → 已连直接返回；未连则触发
+// reconnect 并轮询 ping 直到 connected:true 或超时。供获客页 submit 前调用，避免 NO_SESSION。
+// ---------------------------------------------------------------------------
+
+export interface EnsureConnectedDeps {
+  ping?: () => Promise<PingResponse | null>
+  reconnect?: () => Promise<{ ok?: boolean; connected?: boolean } | null>
+  sleep?: (ms: number) => Promise<void>
+}
+
+export interface EnsureConnectedResult {
+  connected: boolean
+  reason?: 'not-detected' | 'timeout'
+}
+
+export async function ensureExtensionConnected(
+  deps: EnsureConnectedDeps = {},
+  opts: { maxPolls?: number; pollIntervalMs?: number } = {},
+): Promise<EnsureConnectedResult> {
+  const ping = deps.ping ?? (() => sendToExtension<PingResponse>({ type: 'ping' }))
+  const reconnect =
+    deps.reconnect ?? (() => sendToExtension<{ ok?: boolean; connected?: boolean }>({ type: 'reconnect' }))
+  const sleep = deps.sleep ?? realSleep
+  const maxPolls = opts.maxPolls ?? 8
+  const pollIntervalMs = opts.pollIntervalMs ?? 700
+
+  // 1. ping —— 这一步会唤醒可能已休眠的扩展 SW。
+  let p = await ping()
+  if (p === null) return { connected: false, reason: 'not-detected' }
+  if (p.connected) return { connected: true }
+
+  // 2. 未连 → 触发扩展重连（有配对走 direct，否则 native“装好即连”）。
+  await reconnect()
+
+  // 3. 轮询等待 connected:true。
+  for (let i = 0; i < maxPolls; i++) {
+    await sleep(pollIntervalMs)
+    p = await ping()
+    if (p?.connected) return { connected: true }
+  }
+  return { connected: false, reason: 'timeout' }
+}

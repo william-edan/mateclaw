@@ -1324,6 +1324,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private void cleanupUnconfirmedAuthorProfileTab(DouyinCommentItem comment,
                                                     @Nullable Long tabId,
                                                     @Nullable BrowserObservation observed) {
+        // [调试-临时] 不自动关闭未确认的作者标签页，留着让你手动切过去观察 CDP/a11y 行为。
+        // 恢复：删除下面这个 if 块。
+        if (true) {
+            log.info("[douyin.lead][调试] 跳过关闭未确认作者 tab: author={}, tabId={}",
+                    comment.authorName(), tabId);
+            return;
+        }
         try {
             if (tabId != null && tryOk(browser.service_close_tab(tabId))) {
                 waitMs(350L);
@@ -1386,33 +1393,60 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     "未找到私信入口：A11y 与 DOM 均未命中");
         }
         BrowserObservation dmPage = waitForDmPage(engagementTabId, 8, 650L);
-        if (!looksLikeDouyinDmPage(dmPage)) {
-            dmPage = retryDmDomActionAfterUnconfirmedPage(comment, profile, dmPage, dmLabels, engagementTabId);
-        }
-        if (!isDouyinPage(dmPage.url())) {
-            return EngagementResult.failed(comment, "DM_TAB_NOT_CONTROLLED", "私信页不是受控抖音标签页");
-        }
-        if (!looksLikeDouyinDmPage(dmPage)) {
-            log.warn("[douyin.lead] dm page not confirmed: url={}, title={}, signals={}, tree={}",
-                    dmPage.url(), dmPage.title(), dmPageSignals(dmPage), treeExcerpt(dmPage.tree()));
-            return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
-                    followConfirmed, false, false, false, "failed", "DM_PAGE_NOT_CONFIRMED",
-                    "未确认进入目标用户私信页，拒绝输入草稿。signals=" + dmPageSignals(dmPage));
+        // 后台 tab 的 observe(a11y) 必然空(snapshot blank、连 url 都空)——Chrome 对非活动 tab 的硬限制。
+        // 私信浮层(#imSaasContainerId)是作者主页上的同页浮层、URL 不变，靠 url/a11y 确认会误判并拦死。
+        // 故：observe 可用(前台)时正常确认私信页；observe 空(后台)时不拦，坚持 engagementTabId 直接走
+        // DOM 输入——type_dm_draft 以 #imSaasContainerId 浮层为锚点自行确认浮层是否打开并输入草稿；
+        // 浮层真没打开时它返回 dm_panel_not_open → 最终归为 DM_INPUT_NOT_FOUND，而不是在这里就拦死。
+        boolean dmObserveUsable = !isBlankObservation(dmPage) && isDouyinPage(dmPage.url());
+        if (dmObserveUsable) {
+            if (!looksLikeDouyinDmPage(dmPage)) {
+                dmPage = retryDmDomActionAfterUnconfirmedPage(comment, profile, dmPage, dmLabels, engagementTabId);
+            }
+            if (!looksLikeDouyinDmPage(dmPage)) {
+                log.warn("[douyin.lead] dm page not confirmed: url={}, title={}, signals={}, tree={}",
+                        dmPage.url(), dmPage.title(), dmPageSignals(dmPage), treeExcerpt(dmPage.tree()));
+                return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
+                        followConfirmed, false, false, false, "failed", "DM_PAGE_NOT_CONFIRMED",
+                        "未确认进入目标用户私信页，拒绝输入草稿。signals=" + dmPageSignals(dmPage));
+            }
+        } else {
+            log.info("[douyin.lead] dm observe blank/non-douyin (background); proceeding with DOM-anchored input on tab={}",
+                    engagementTabId);
         }
         JsonNode dmDraftAction = errorNode("NOT_RUN", "type_dm_draft not run");
         boolean typedByDmPrimitive = false;
         boolean typedByGenericFallback = false;
         boolean sentByDmPrimitive = false;
-        try {
-            dmDraftAction = parse(engagementTabId == null
-                    ? browser.service_type_dm_draft_active(dmDraft, sendDm)
-                    : browser.service_type_dm_draft_tab(engagementTabId, dmDraft, sendDm));
-            typedByDmPrimitive = ok(dmDraftAction);
-            sentByDmPrimitive = actionPayloadBoolean(dmDraftAction, "sent");
-        } catch (RuntimeException e) {
-            log.warn("[douyin.lead] type_dm_draft primitive failed; checking whether draft is already visible: {}",
-                    e.getMessage());
-            typedByDmPrimitive = false;
+        // 私信浮层(#imSaasContainerId)点开后异步渲染，输入框可能要等几秒才 mount——重试
+        // service_type_dm_draft 直到输入成功或超时(~12s)，避免一次找不到输入框就 DM_INPUT_NOT_FOUND。
+        long dmTypeDeadlineMs = System.currentTimeMillis() + 12_000L;
+        int dmAttempt = 0;
+        while (true) {
+            dmAttempt++;
+            try {
+                dmDraftAction = parse(engagementTabId == null
+                        ? browser.service_type_dm_draft_active(dmDraft, sendDm)
+                        : browser.service_type_dm_draft_tab(engagementTabId, dmDraft, sendDm));
+                typedByDmPrimitive = ok(dmDraftAction);
+                sentByDmPrimitive = actionPayloadBoolean(dmDraftAction, "sent");
+            } catch (RuntimeException e) {
+                log.warn("[douyin.lead] type_dm_draft attempt {} failed: {}", dmAttempt, e.getMessage());
+                typedByDmPrimitive = false;
+            }
+            if (typedByDmPrimitive) {
+                log.info("[douyin.lead] dm draft typed by primitive: attempt={}, sent={}", dmAttempt, sentByDmPrimitive);
+                break;
+            }
+            String dmReason = dmDraftAction.path("message").asText(dmDraftAction.path("code").asText(""));
+            if (System.currentTimeMillis() >= dmTypeDeadlineMs) {
+                log.info("[douyin.lead] dm draft not typed after {} attempts (~12s); last reason={}; trying fallback",
+                        dmAttempt, dmReason);
+                break;
+            }
+            log.info("[douyin.lead] dm input not ready yet, waiting for panel render: attempt={}, reason={}",
+                    dmAttempt, dmReason);
+            waitMs(2_000L);
         }
         if (!typedByDmPrimitive) {
             BrowserObservation afterDraftAttempt = observeEngagementTab(engagementTabId, "all");
@@ -1464,15 +1498,20 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 || (looksLikeDouyinDmPage(verify)
                 && (dmDraftVisibleInDmInputArea(verify, dmDraft) || dmDraftVisibleInDmDom(verify, dmDraft)));
         boolean sent = sendDm && sentByDmPrimitive;
-        boolean succeeded = draftTyped && (followConfirmed || dmPage.tree().contains("私信")) && (!sendDm || sent);
+        // 后台 observe 空时 followConfirmed / dmPage.tree 读不到——用"关注点击已发出"(followClicked)
+        // 或"已关注"(alreadyFollowed)作为触达判据，避免把后台读不到误报成 FOLLOW_NOT_CONFIRMED。
+        boolean engaged = followConfirmed || followClicked || alreadyFollowed || dmPage.tree().contains("私信");
+        boolean succeeded = draftTyped && engaged && (!sendDm || sent);
         String failureCode = succeeded ? null
-                : (!draftTyped ? "DRAFT_NOT_OBSERVED"
-                : (!followConfirmed && !dmPage.tree().contains("私信") ? "FOLLOW_NOT_CONFIRMED"
+                : (!draftTyped ? "DM_INPUT_NOT_FOUND"
+                : (!engaged ? "FOLLOW_NOT_CONFIRMED"
                 : "DM_SEND_NOT_CONFIRMED"));
-        String failureMessage = succeeded ? null
-                : (!draftTyped ? "未能确认私信草稿已输入"
-                : (!followConfirmed && !dmPage.tree().contains("私信") ? "未能确认已关注目标作者"
-                : "未能确认私信已发送"));
+        // 成功时：不勾自动发送则明确提示"只输入草稿、未发出"；失败时给对应原因。
+        String failureMessage = !succeeded
+                ? (!draftTyped ? "未找到私信输入框 / 未能输入草稿"
+                    : (!engaged ? "未能确认已关注目标作者"
+                    : "未能确认私信已发送"))
+                : (!sendDm ? "未勾选自动发送私信：已输入私信草稿、未发出" : null);
         return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true, followConfirmed,
                 true, draftTyped, sent, succeeded ? "succeeded" : "failed",
                 failureCode,
@@ -1485,6 +1524,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private void restoreVideoContextAfterEngagement(DouyinCommentItem comment, @Nullable Long engagementTabId) {
+        // [调试-临时] 触达后不自动关闭作者标签页，留着方便观察。恢复：删除下面这个 if 块。
+        if (true) {
+            log.info("[douyin.lead][调试] 跳过触达后关闭作者 tab: author={}, tabId={}",
+                    comment.authorName(), engagementTabId);
+            return;
+        }
         try {
             if (engagementTabId != null && tryOk(browser.service_close_tab(engagementTabId))) {
                 waitMs(700L);
@@ -1647,34 +1692,50 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     private boolean clickProfileAction(BrowserObservation profile, String actionName, List<String> labels,
                                        @Nullable Long engagementTabId) {
-        ClickPoint a11y = findProfileActionPoint(profile, labels.toArray(String[]::new));
-        if (a11y != null && clickEngagementPoint(engagementTabId, a11y)) {
-            log.info("[douyin.lead] clicked profile action by a11y: action={}, labels={}, x={}, y={}",
-                    actionName, labels, a11y.x(), a11y.y());
-            return true;
-        }
-        if (clickProfileActionByDom(engagementTabId, labels)) {
-            log.info("[douyin.lead] clicked profile action by dom: action={}, labels={}",
-                    actionName, labels);
-            return true;
+        // [出路③] DOM 优先 + 短轮询：open_author 已等到页面 readyState complete(加载完成)。这里
+        // 在加载完成基础上再给 SPA 一点渲染余量，轮询匹配关注/私信按钮，最多约 15s——不再死等，
+        // 找不到就如实失败、继续下一个(并由 clickProfileActionByDom 打印后台 tab 的 DOM 诊断：
+        // readyState/按钮数/按钮文本，用于判断是后台根本不渲染、还是按钮在但选择器没匹配)。
+        // a11y+CDP 坐标点击仅作兜底(仅活动 tab 有效)。是否真生效由外层 followConfirmed 判定。
+        long retryDeadlineMs = System.currentTimeMillis() + 15_000L;
+        int attempt = 0;
+        while (true) {
+            attempt++;
+            if (clickProfileActionByDom(engagementTabId, labels)) {
+                log.info("[douyin.lead] clicked profile action by dom: action={}, labels={}, attempt={}",
+                        actionName, labels, attempt);
+                return true;
+            }
+            ClickPoint a11y = findProfileActionPoint(profile, labels.toArray(String[]::new));
+            if (a11y != null && clickEngagementPoint(engagementTabId, a11y)) {
+                log.info("[douyin.lead] clicked profile action by a11y(fallback): action={}, labels={}, x={}, y={}, attempt={}",
+                        actionName, labels, a11y.x(), a11y.y(), attempt);
+                return true;
+            }
+            if (System.currentTimeMillis() >= retryDeadlineMs) {
+                break;
+            }
+            log.info("[douyin.lead] profile action not present yet, waiting for SPA render: action={}, labels={}, attempt={}",
+                    actionName, labels, attempt);
+            waitMs(2_000L);
         }
         if ("dm".equals(actionName) && openProfileMoreMenu(profile, engagementTabId)) {
             waitMs(350L);
-            BrowserObservation afterMore = observeEngagementTab(engagementTabId, "all");
-            ClickPoint menuPoint = findProfileActionPoint(afterMore, labels.toArray(String[]::new));
-            if (menuPoint != null && clickEngagementPoint(engagementTabId, menuPoint)) {
-                log.info("[douyin.lead] clicked profile action from more menu by a11y: action={}, labels={}, x={}, y={}",
-                        actionName, labels, menuPoint.x(), menuPoint.y());
-                return true;
-            }
             if (clickProfileActionByDom(engagementTabId, labels)) {
                 log.info("[douyin.lead] clicked profile action from more menu by dom: action={}, labels={}",
                         actionName, labels);
                 return true;
             }
+            BrowserObservation afterMore = observeEngagementTab(engagementTabId, "all");
+            ClickPoint menuPoint = findProfileActionPoint(afterMore, labels.toArray(String[]::new));
+            if (menuPoint != null && clickEngagementPoint(engagementTabId, menuPoint)) {
+                log.info("[douyin.lead] clicked profile action from more menu by a11y(fallback): action={}, labels={}, x={}, y={}",
+                        actionName, labels, menuPoint.x(), menuPoint.y());
+                return true;
+            }
         }
-        log.warn("[douyin.lead] profile action not found: action={}, labels={}, url={}, tree={}",
-                actionName, labels, profile == null ? "" : profile.url(),
+        log.warn("[douyin.lead] profile action not found after {} attempts (~180s): action={}, labels={}, url={}, tree={}",
+                attempt, actionName, labels, profile == null ? "" : profile.url(),
                 profile == null ? "" : treeExcerpt(profile.tree()));
         return false;
     }
@@ -1689,9 +1750,17 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private boolean clickProfileActionByDom(@Nullable Long engagementTabId, List<String> labels) {
-        return tryOk(engagementTabId == null
+        String raw = engagementTabId == null
                 ? browser.service_click_profile_action_active(labels)
-                : browser.service_click_profile_action_tab(engagementTabId, labels));
+                : browser.service_click_profile_action_tab(engagementTabId, labels);
+        if (tryOk(raw)) {
+            return true;
+        }
+        // 诊断：找不到按钮时打印扩展回传的后台 tab DOM 状态(reason 里带 diag={rs,vis,roots,btns,texts})，
+        // 用于判断后台 tab 是否真的渲染了主内容区与关注/私信按钮。
+        String snippet = raw == null ? "" : (raw.length() > 600 ? raw.substring(0, 600) : raw);
+        log.info("[douyin.lead] dom click_profile miss: labels={}, raw={}", labels, snippet);
+        return false;
     }
 
     private BrowserObservation observeEngagementTab(@Nullable Long engagementTabId, String filter) {
@@ -2514,17 +2583,19 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 return new OpenedAuthorProfile(observed, tabId);
             }
             if (isBlankObservation(observed)) {
-                BrowserObservation active = observeActive("all");
-                if (looksLikeDouyinUserProfile(active, comment)) {
-                    log.info("[douyin.lead] author profile tab {} snapshot was blank; using active controlled tab for engagement",
+                // [出路③] 后台 tab 的 CDP a11y observe 必然返回空(snapshot blank)——这是 Chrome 对
+                // 非活动 tab 的硬限制。但 open_author 已确认该 tab 导航到目标作者主页(/user/，
+                // readyState complete)，且后台 DOM 仍可点击(executeScript 不受 hidden 影响、实测坐标
+                // 不塌缩、抖音接受合成点击)。故不再 fallback 到用户当前 active/main tab(那会跑到错的
+                // 页面、还逼用户切过去)，改为坚持该后台 tabId：用已知作者 url 构造 observation
+                // (tree 空不影响后续 DOM 触达；looksLikeDouyinUserProfile 仅凭 url token 匹配即通过)。
+                String authorUrl = comment == null ? null : comment.authorProfileUrl();
+                if (authorUrl != null && !authorUrl.isBlank()) {
+                    log.info("[douyin.lead] author profile tab {} snapshot blank (background); keeping tab for DOM-only engagement, url={}",
+                            tabId, authorUrl);
+                    return new OpenedAuthorProfile(
+                            new BrowserObservation(true, authorUrl, "", "", 1280, 800, "", ""),
                             tabId);
-                    return new OpenedAuthorProfile(active, null);
-                }
-                BrowserObservation main = observeMain("all");
-                if (looksLikeDouyinUserProfile(main, comment)) {
-                    log.info("[douyin.lead] author profile tab {} snapshot was blank; using main controlled tab for engagement",
-                            tabId);
-                    return new OpenedAuthorProfile(main, null);
                 }
             }
             waitMs(waitMs);

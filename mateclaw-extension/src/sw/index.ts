@@ -278,7 +278,7 @@ const handlers: ActionHandlers = {
   register_region: registerRegionHandler({ regions: regionRegistry }),
   detect_region: detectRegionHandler({ regions: regionRegistry, chrome }),
   extract_region: extractRegionHandler({ regions: regionRegistry, chrome }),
-  open_author_from_comment: openAuthorFromCommentHandler({ chrome, tabGroupManager, subject: SUBJECT }),
+  open_author_from_comment: openAuthorFromCommentHandler({ chrome, tabGroupManager, subject: SUBJECT, debugger: debuggerManager }),
   click_profile_action: clickProfileActionHandler({ chrome }),
   type_dm_draft: typeDmDraftHandler({ debugger: debuggerManager, chrome }),
   close_tab: closeTabHandler({ chrome }),
@@ -479,6 +479,7 @@ type ExternalMsg =
   | { type: 'ping' }
   | { type: 'pair'; pat: string; serverUrl: string; deviceName?: string }
   | { type: 'unpair' }
+  | { type: 'reconnect' }
 
 chrome.runtime.onMessageExternal.addListener(
   (
@@ -530,6 +531,22 @@ chrome.runtime.onMessageExternal.addListener(
         configStore
           .clearPairing()
           .then(() => sendResponse({ ok: true }))
+          .catch(e => sendResponse({ ok: false, error: String(e) }))
+        return true
+      }
+      case 'reconnect': {
+        // 发起获客时由前端触发：先唤醒(可能已休眠的)SW，再重连。有配对凭据走 direct WSS，
+        // 否则回退 native“装好即连”。前端随后轮询 ping 等 connected:true。
+        configStore
+          .getConfig()
+          .then(cfg => {
+            if (cfg.serverUrl && cfg.pat) {
+              return connectDirect(cfg.serverUrl, cfg.pat)
+            }
+            connectNative()
+            return undefined
+          })
+          .then(() => sendResponse({ ok: true, connected: isConnected() }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true
       }

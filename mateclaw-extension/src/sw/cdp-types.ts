@@ -11,6 +11,18 @@ export interface CDP {
       errorText?: string
     }
   }
+  /**
+   * Force a page's web lifecycle state. We send `{ state: 'active' }` on the
+   * background author-profile tab opened by open_author_from_comment so Chrome
+   * keeps it laid out + un-frozen during long lead runs — without ever bringing
+   * it to the foreground or overriding the viewport. Does NOT require Page.enable.
+   */
+  'Page.setWebLifecycleState': {
+    params: {
+      state: 'frozen' | 'active'
+    }
+    result: Record<string, never>
+  }
   'Input.dispatchMouseEvent': {
     params: {
       type: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel'

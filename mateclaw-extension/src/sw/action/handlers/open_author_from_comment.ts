@@ -1,11 +1,13 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { OpenAuthorFromCommentParams } from '../types'
 import type { TabGroupManager } from '../../tab-group-manager'
+import type { DebuggerManager } from '../../debugger-manager'
 
 export interface OpenAuthorFromCommentHandlerDeps {
   chrome?: typeof globalThis.chrome
   tabGroupManager?: Pick<TabGroupManager, 'addTab' | 'joinChromeGroup'>
   subject?: string
+  debugger?: Pick<DebuggerManager, 'attach' | 'send'>
 }
 
 export const openAuthorFromCommentHandler = (
@@ -44,9 +46,12 @@ export const openAuthorFromCommentHandler = (
     if (!chromeApi.tabs?.create) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.tabs.create is unavailable', true)
     }
+    // 后台打开作者主页：active:false 不抢用户焦点，用户可继续在原标签页做别的事。
+    // 后台 tab 的 DOM/布局照常（实测 hidden 下按钮坐标不塌缩），CDP 指定 tabId 即可
+    // observe/点击，无需把它切到前台。
     const createProps: chrome.tabs.CreateProperties = {
       url: payload.href,
-      active: true,
+      active: false,
       openerTabId: tabId,
     }
     let created: chrome.tabs.Tab
@@ -67,6 +72,18 @@ export const openAuthorFromCommentHandler = (
     const readyTab = typeof created?.id === 'number'
       ? await waitForCreatedProfileTabReady(chromeApi, created.id, payload.href, _deadlineMs)
       : undefined
+    // 保活：作者主页在后台(active:false)长时间运行时，Chrome 可能冻结/丢弃该 tab，导致后续
+    // observe 拿到空树、坐标拿不到。用 CDP Page.setWebLifecycleState('active') 把它设回活跃。
+    // 不抢焦点、不弹窗、不强制视口。best-effort：失败不影响 tab 已创建；保持 attach 让 tab 在
+    // 交给后端首次 observe 之前不被丢弃（共享同一 DebuggerManager，后端 attach 幂等复用）。
+    if (typeof created?.id === 'number' && deps.debugger) {
+      try {
+        await deps.debugger.attach(created.id)
+        await deps.debugger.send(created.id, 'Page.setWebLifecycleState', { state: 'active' })
+      } catch {
+        /* keepalive is best-effort; the tab was still created */
+      }
+    }
     return {
       ok: true,
       elapsed_ms: 0,

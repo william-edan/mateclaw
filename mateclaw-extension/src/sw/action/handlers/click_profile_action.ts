@@ -48,6 +48,22 @@ export const clickProfileActionHandler = (
 function clickProfileActionInPage(labels: string[]): { ok: boolean; label?: string; reason?: string } {
   const wanted = labels.map(normalize).filter(Boolean)
   if (wanted.length === 0) return { ok: false, reason: 'empty_labels' }
+  // 已关注短路：作者已关注时关注按钮显示“已关注/互相关注/相互关注”，按“关注”精确匹配会找不到、
+  // 误报 FOLLOW_BUTTON_NOT_FOUND 并中断后续私信。这里识别已关注状态、视为成功(不再点击)，让上层
+  // 继续执行私信。仅对 follow 动作生效。
+  const isFollowAction = wanted.some(w => ['关注', '回关', 'follow'].includes(w.toLowerCase()))
+  if (isFollowAction) {
+    const followedRoot = document.querySelector('#user_detail_element,[data-e2e="user-detail"]') || document.body
+    const alreadyFollowed = !!followedRoot && Array.from(
+      followedRoot.querySelectorAll('button,[role="button"],div[tabindex],span[tabindex]'),
+    ).some(el => ['已关注', '互相关注', '相互关注', '已互关'].includes(
+      String((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, '').trim(),
+    ))
+    if (alreadyFollowed) {
+      console.info('[mateclaw][click_profile_action]', { ok: true, labels, strategy: 'already_followed' })
+      return { ok: true, label: 'already_followed' }
+    }
+  }
   const viewportW = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1)
   const viewportH = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1)
   const minContentX = Math.max(180, viewportW * 0.16)
@@ -84,7 +100,16 @@ function clickProfileActionInPage(labels: string[]): { ok: boolean; label?: stri
       profileRoots: profileRoots.length,
       reason: `no_profile_action:${wanted.join('/')}`,
     })
-    return { ok: false, reason: `no_profile_action:${wanted.join('/')}` }
+    const diag = {
+      rs: document.readyState,
+      vis: document.visibilityState,
+      roots: profileRoots.length,
+      btns: document.querySelectorAll('button,[role="button"]').length,
+      texts: Array.from(document.querySelectorAll('button,[role="button"]'))
+        .map(e => ((e as HTMLElement).innerText || e.textContent || '').replace(/\s/g, '').slice(0, 10))
+        .filter(Boolean).slice(0, 14),
+    }
+    return { ok: false, reason: `no_profile_action:${wanted.join('/')}|diag=${JSON.stringify(diag)}` }
   }
   console.info('[mateclaw][click_profile_action]', {
     ok: true,
@@ -96,6 +121,16 @@ function clickProfileActionInPage(labels: string[]): { ok: boolean; label?: stri
     rect: rectSummary(best.rect),
   })
   best.el.scrollIntoView({ block: 'center', inline: 'center' })
+  // 完整指针序列 + native click。部分抖音控件对裸 el.click() 不响应，需要
+  // pointerdown→mousedown→pointerup→mouseup→click 的完整合成序列才认。全程页内 DOM 派发、
+  // 不经 CDP Input，后台(hidden)tab 也能执行——这是后台静默触达(出路③)的关键。
+  const clickOpts = { bubbles: true, cancelable: true, composed: true }
+  try {
+    if (typeof PointerEvent === 'function') best.el.dispatchEvent(new PointerEvent('pointerdown', clickOpts))
+    best.el.dispatchEvent(new MouseEvent('mousedown', clickOpts))
+    if (typeof PointerEvent === 'function') best.el.dispatchEvent(new PointerEvent('pointerup', clickOpts))
+    best.el.dispatchEvent(new MouseEvent('mouseup', clickOpts))
+  } catch { /* best-effort */ }
   best.el.click()
   return { ok: true, label: best.text }
 

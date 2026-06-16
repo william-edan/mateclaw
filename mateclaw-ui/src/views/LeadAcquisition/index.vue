@@ -205,15 +205,16 @@
                 </label>
               </div>
 
-              <label v-show="form.sendDm" class="field field--wide">
-                <span>私信内容</span>
+              <label v-show="form.engage" class="field field--wide">
+                <span>私信内容（草稿）</span>
                 <textarea
                   v-model.trim="form.dmDraft"
                   rows="3"
                   maxlength="500"
-                  placeholder="你好"
+                  placeholder="你好，看到你的评论，方便简单交流一下吗？"
                   :disabled="taskLocked"
                 ></textarea>
+                <span class="field-hint">不勾「自动发送私信」时，只把这段内容填入私信框作为草稿、不会发出；勾选后才会自动发送。</span>
               </label>
 
               <div class="form-actions">
@@ -480,6 +481,7 @@ import McTooltip from '@/components/common/McTooltip.vue'
 import LeadRunLivePanel from '@/components/lead/LeadRunLivePanel.vue'
 import LeadRunFinalSummary from '@/components/lead/LeadRunFinalSummary.vue'
 import BrowserPairingPanel from '@/views/Settings/Browser/index.vue'
+import { ensureExtensionConnected } from '@/views/Settings/Browser/pairing'
 
 type SortMode = 'comprehensive' | 'most_liked' | 'latest'
 type LeadPoolStatus = 'all' | 'pending' | 'engaged' | 'sent' | 'failed'
@@ -754,7 +756,7 @@ function defaultForm(): LeadForm {
     matchExamples: [...preset.examples],
     dmDraft: preset.dmDraft,
     engage: true,
-    sendDm: true,
+    sendDm: false,
   }
 }
 
@@ -998,6 +1000,13 @@ async function submitDouyinRun() {
   launchError.value = ''
   currentRun.value = null
   try {
+    // 自动确保浏览器扩展已连接：ping 唤醒可能休眠的扩展 SW + 触发重连，避免发起即 NO_SESSION。
+    const conn = await ensureExtensionConnected()
+    if (!conn.connected) {
+      throw new Error(conn.reason === 'not-detected'
+        ? '未检测到浏览器扩展，请确认已安装并启用 MateClaw 扩展后重试'
+        : '浏览器扩展连接超时，请确认浏览器已打开、扩展已启用后重试')
+    }
     const payload: DouyinLeadAcquisitionStartPayload = {
       keyword: form.value.keyword.trim(),
       sort: form.value.sort,
