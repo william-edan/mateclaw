@@ -9,6 +9,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.cron.model.DeliveryConfig;
+import vip.mate.workspace.core.WorkspaceContextTaskDecorator;
 
 import java.util.List;
 import java.util.Optional;
@@ -91,6 +92,9 @@ public class CronDeliveryListener {
         ex.setMaxPoolSize(4);
         ex.setQueueCapacity(1000);
         ex.setThreadNamePrefix("cron-delivery-");
+        // Carry the submitting (event-dispatcher) thread's workspace onto the
+        // delivery thread so off-request delivery resolves the real workspace.
+        ex.setTaskDecorator(new WorkspaceContextTaskDecorator());
         ex.setRejectedExecutionHandler((r, executor) -> {
             // RFC §2.7.3: AbortPolicy + audit (NOT CallerRunsPolicy) — the
             // caller is the Spring event-dispatcher thread; blocking it would
