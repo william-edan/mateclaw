@@ -1304,10 +1304,26 @@ public class ConversationService {
      * 对所有登录用户可见。
      */
     public boolean isConversationOwner(String conversationId, String username) {
+        // Workspace-agnostic overload kept for callers outside the conversation
+        // management endpoints (chat / approval / goal / subagent), which resolve
+        // their own scope. A null workspace skips the cross-workspace check.
+        return isConversationOwner(conversationId, username, null);
+    }
+
+    public boolean isConversationOwner(String conversationId, String username, Long workspaceId) {
         ConversationEntity conv = conversationMapper.selectOne(
                 new LambdaQueryWrapper<ConversationEntity>()
                         .eq(ConversationEntity::getConversationId, conversationId));
         if (conv == null) {
+            return false;
+        }
+        // Cross-workspace scope: a conversation — including system-owned rows from
+        // scheduled jobs / IM channels — is only reachable from its own workspace.
+        // Without this, a member of workspace A could read or mutate workspace B's
+        // conversations (and their messages) by id, and every system conversation
+        // leaked to all authenticated users regardless of workspace.
+        if (workspaceId != null && conv.getWorkspaceId() != null
+                && !workspaceId.equals(conv.getWorkspaceId())) {
             return false;
         }
         return username.equals(conv.getUsername()) || SYSTEM_USER.equals(conv.getUsername());

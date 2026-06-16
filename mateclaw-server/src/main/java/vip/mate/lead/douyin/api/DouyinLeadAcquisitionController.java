@@ -20,6 +20,7 @@ import vip.mate.exception.MateClawException;
 import vip.mate.lead.douyin.DouyinLeadAcquisitionRunService;
 import vip.mate.lead.douyin.model.DouyinLeadAcquisitionInput;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.util.List;
 import java.util.Map;
@@ -33,17 +34,20 @@ public class DouyinLeadAcquisitionController {
     private final DouyinLeadAcquisitionEventStreamService eventStreamService;
     private final DouyinLeadTemplateService templateService;
     private final AuthService authService;
+    private final WorkspaceService workspaceService;
 
     public DouyinLeadAcquisitionController(DouyinLeadAcquisitionRunService runService,
                                            DouyinLeadAcquisitionQueryService queryService,
                                            DouyinLeadAcquisitionEventStreamService eventStreamService,
                                            DouyinLeadTemplateService templateService,
-                                           AuthService authService) {
+                                           AuthService authService,
+                                           WorkspaceService workspaceService) {
         this.runService = runService;
         this.queryService = queryService;
         this.eventStreamService = eventStreamService;
         this.templateService = templateService;
         this.authService = authService;
+        this.workspaceService = workspaceService;
     }
 
     @PostMapping("/douyin/runs")
@@ -122,13 +126,19 @@ public class DouyinLeadAcquisitionController {
 
     @GetMapping("/runs/{runId}")
     @RequireWorkspaceRole("viewer")
-    public R<DouyinLeadAcquisitionRunResponse> run(@PathVariable Long runId) {
+    public R<DouyinLeadAcquisitionRunResponse> run(
+            @PathVariable Long runId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertRunInWorkspace(workspaceId == null ? 1L : workspaceId, runId);
         return R.ok(queryService.byRun(runId));
     }
 
     @PostMapping("/runs/{runId}/cancel")
     @RequireWorkspaceRole("member")
-    public R<Map<String, Object>> cancel(@PathVariable Long runId) {
+    public R<Map<String, Object>> cancel(
+            @PathVariable Long runId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertRunInWorkspace(workspaceId == null ? 1L : workspaceId, runId);
         runService.cancel(runId);
         return R.ok(Map.of("cancelled", true, "runId", String.valueOf(runId)));
     }
@@ -137,32 +147,69 @@ public class DouyinLeadAcquisitionController {
     @RequireWorkspaceRole("viewer")
     public SseEmitter streamEvents(@PathVariable Long runId,
                                    @RequestParam(value = "afterEventId", required = false) Long afterEventId,
-                                   @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+                                   @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
+                                   Authentication auth) {
+        // Native EventSource cannot send an X-Workspace-Id header, so the header
+        // guard used by the other endpoints is unavailable here. Derive the run's
+        // workspace server-side and verify the authenticated user is a member of
+        // it — never trusting a client-supplied workspace value.
+        assertRunVisibleToMember(runId, auth);
         return eventStreamService.stream(runId, lastEventId, afterEventId);
     }
 
     @GetMapping("/tasks/{taskId}")
     @RequireWorkspaceRole("viewer")
-    public R<DouyinLeadAcquisitionRunResponse> task(@PathVariable Long taskId) {
+    public R<DouyinLeadAcquisitionRunResponse> task(
+            @PathVariable Long taskId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertTaskInWorkspace(workspaceId == null ? 1L : workspaceId, taskId);
         return R.ok(queryService.byTask(taskId));
     }
 
     @GetMapping("/tasks/{taskId}/comments")
     @RequireWorkspaceRole("viewer")
-    public R<List<LeadCommentDTO>> comments(@PathVariable Long taskId) {
+    public R<List<LeadCommentDTO>> comments(
+            @PathVariable Long taskId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertTaskInWorkspace(workspaceId == null ? 1L : workspaceId, taskId);
         return R.ok(queryService.comments(taskId));
     }
 
     @GetMapping("/tasks/{taskId}/profiles")
     @RequireWorkspaceRole("viewer")
-    public R<List<LeadProfileDTO>> profiles(@PathVariable Long taskId) {
+    public R<List<LeadProfileDTO>> profiles(
+            @PathVariable Long taskId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertTaskInWorkspace(workspaceId == null ? 1L : workspaceId, taskId);
         return R.ok(queryService.profiles(taskId));
     }
 
     @GetMapping("/tasks/{taskId}/engagements")
     @RequireWorkspaceRole("viewer")
-    public R<List<LeadEngagementDTO>> engagements(@PathVariable Long taskId) {
+    public R<List<LeadEngagementDTO>> engagements(
+            @PathVariable Long taskId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        queryService.assertTaskInWorkspace(workspaceId == null ? 1L : workspaceId, taskId);
         return R.ok(queryService.engagements(taskId));
+    }
+
+    /**
+     * SSE-only ownership guard: the run's workspace is read from the run itself
+     * and checked against the authenticated user's membership. Global admins
+     * keep their cross-workspace visibility (mirroring {@code WorkspaceAccessInterceptor}).
+     */
+    private void assertRunVisibleToMember(Long runId, Authentication auth) {
+        Long runWorkspaceId = queryService.runWorkspaceId(runId);
+        if (runWorkspaceId == null) {
+            return;
+        }
+        UserEntity user = requireUser(auth);
+        if ("admin".equalsIgnoreCase(user.getRole())) {
+            return;
+        }
+        if (!workspaceService.hasPermissionCached(runWorkspaceId, user.getId(), "viewer")) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
+        }
     }
 
     private UserEntity requireUser(Authentication auth) {

@@ -69,9 +69,10 @@ public class ConversationController {
     public R<?> listMessages(@PathVariable String conversationId,
                              @RequestParam(required = false) Long beforeId,
                              @RequestParam(required = false) Integer limit,
+                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                              Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权访问该会话");
         }
 
@@ -114,9 +115,11 @@ public class ConversationController {
      */
     @Operation(summary = "删除会话")
     @DeleteMapping("/{conversationId}")
-    public R<Void> delete(@PathVariable String conversationId, Authentication auth) {
+    public R<Void> delete(@PathVariable String conversationId,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                          Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         conversationService.deleteConversation(conversationId);
@@ -128,9 +131,11 @@ public class ConversationController {
      */
     @Operation(summary = "重命名会话")
     @PutMapping("/{conversationId}/title")
-    public R<Void> rename(@PathVariable String conversationId, @RequestBody Map<String, String> body, Authentication auth) {
+    public R<Void> rename(@PathVariable String conversationId, @RequestBody Map<String, String> body,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                          Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         String title = body.getOrDefault("title", "").trim();
@@ -148,9 +153,10 @@ public class ConversationController {
     @PutMapping("/{conversationId}/pin")
     public R<Void> setPinned(@PathVariable String conversationId,
                              @RequestBody Map<String, Boolean> body,
+                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                              Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         conversationService.setPinned(conversationId, Boolean.TRUE.equals(body.get("pinned")));
@@ -174,9 +180,10 @@ public class ConversationController {
     @PutMapping("/{conversationId}/model")
     public R<Void> setModel(@PathVariable String conversationId,
                             @RequestBody Map<String, String> body,
+                            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                             Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         String provider = body.get("modelProvider");
@@ -193,8 +200,11 @@ public class ConversationController {
      */
     @Operation(summary = "批量删除会话")
     @PostMapping("/batch-delete")
-    public R<Integer> batchDelete(@RequestBody Map<String, List<String>> body, Authentication auth) {
+    public R<Integer> batchDelete(@RequestBody Map<String, List<String>> body,
+                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                  Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
+        long ws = workspaceId == null ? 1L : workspaceId;
         List<String> ids = body.get("conversationIds");
         if (ids == null || ids.isEmpty()) {
             return R.fail("未指定要删除的会话");
@@ -204,7 +214,7 @@ public class ConversationController {
             if (conversationId == null || conversationId.isBlank()) {
                 continue;
             }
-            if (!conversationService.isConversationOwner(conversationId, username)) {
+            if (!conversationService.isConversationOwner(conversationId, username, ws)) {
                 continue;
             }
             conversationService.deleteConversation(conversationId);
@@ -218,9 +228,11 @@ public class ConversationController {
      */
     @Operation(summary = "清空会话消息")
     @DeleteMapping("/{conversationId}/messages")
-    public R<Void> clearMessages(@PathVariable String conversationId, Authentication auth) {
+    public R<Void> clearMessages(@PathVariable String conversationId,
+                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                 Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         conversationService.clearMessages(conversationId);
@@ -233,7 +245,9 @@ public class ConversationController {
      */
     @Operation(summary = "获取会话流状态")
     @GetMapping("/{conversationId}/status")
-    public R<Map<String, String>> getStreamStatus(@PathVariable String conversationId, Authentication auth) {
+    public R<Map<String, String>> getStreamStatus(@PathVariable String conversationId,
+                                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                                  Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
         // A freshly opened chat uses a client-generated id that is not persisted
         // until the first message lands. The console polls this endpoint on an
@@ -241,7 +255,7 @@ public class ConversationController {
         if (!conversationService.conversationExists(conversationId)) {
             return R.ok(Map.of("streamStatus", "idle"));
         }
-        if (!conversationService.isConversationOwner(conversationId, username)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
             return R.fail(403, "无权访问该会话");
         }
         if (streamTracker.isRunning(conversationId)) {
