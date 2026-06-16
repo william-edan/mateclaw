@@ -54,6 +54,8 @@ mvn -q -pl mateclaw-server -am test -Dtest=类名 -Dsurefire.failIfNoSpecifiedTe
 
 ## 第 1 部分 · 地基：off-request 工作区上下文绑定 + fail-closed
 
+> ✅ **本部分已完成**（2026-06-16，TDD 红→绿，3 个任务各自提交）：Task 1.1 `8927da46`、Task 1.3 `6a0dd5f1`、Task 1.2 `4e52e049`。5 个新测试全绿，无回归。
+
 修三处 off-request 破口：① cron 执行前不绑 holder；② workflow.v2 无 workspaceId 时硬编码回落 1L；③ `cronDeliveryExecutor` 线程池缺 task decorator。
 
 ### Task 1.1: CronJobRunner.executeJob 绑定工作区上下文
