@@ -1324,13 +1324,6 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private void cleanupUnconfirmedAuthorProfileTab(DouyinCommentItem comment,
                                                     @Nullable Long tabId,
                                                     @Nullable BrowserObservation observed) {
-        // [调试-临时] 不自动关闭未确认的作者标签页，留着让你手动切过去观察 CDP/a11y 行为。
-        // 恢复：删除下面这个 if 块。
-        if (true) {
-            log.info("[douyin.lead][调试] 跳过关闭未确认作者 tab: author={}, tabId={}",
-                    comment.authorName(), tabId);
-            return;
-        }
         try {
             if (tabId != null && tryOk(browser.service_close_tab(tabId))) {
                 waitMs(350L);
@@ -1524,12 +1517,6 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private void restoreVideoContextAfterEngagement(DouyinCommentItem comment, @Nullable Long engagementTabId) {
-        // [调试-临时] 触达后不自动关闭作者标签页，留着方便观察。恢复：删除下面这个 if 块。
-        if (true) {
-            log.info("[douyin.lead][调试] 跳过触达后关闭作者 tab: author={}, tabId={}",
-                    comment.authorName(), engagementTabId);
-            return;
-        }
         try {
             if (engagementTabId != null && tryOk(browser.service_close_tab(engagementTabId))) {
                 waitMs(700L);
