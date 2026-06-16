@@ -91,7 +91,7 @@ describe('lead acquisition experience', () => {
     expect(livePanel).toContain('timeline-scroll')
     expect(livePanel).toContain('搜索与排序')
     expect(livePanel).toContain('线索触达')
-    expect(livePanel).toContain('实时连接恢复中，已切换为 2 秒刷新一次。')
+    expect(livePanel).toContain('已自动改用定时刷新')
     expect(livePanel).toContain('window.setInterval')
     expect(livePanel).toContain('leadAcquisitionApi.getDouyinRun')
     expect(livePanel).toContain('LeadRunFinalSummary')

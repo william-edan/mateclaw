@@ -45,6 +45,10 @@
       {
         "from": "resources/runtime",
         "to": "runtime"
+      },
+      {
+        "from": "resources/bridge",
+        "to": "bridge"
       }
     ],
     "asar": true,

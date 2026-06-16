@@ -27,8 +27,11 @@ describe('lead acquisition realtime execution contract', () => {
 
   it('falls back to polling and tells the user when realtime reconnects', () => {
     expect(combined).toContain('leadAcquisitionApi.getDouyinRun')
-    expect(combined).toContain('实时连接恢复中')
+    expect(combined).toContain('定时刷新')
     expect(combined).toContain('setInterval')
+    // 多次重连失败后稳定降级到定时刷新，不再无限重试、不再焦虑提示
+    expect(livePanel).toContain('MAX_RECONNECT_ATTEMPTS')
+    expect(livePanel).toContain('pollingMode')
   })
 
   it('renders the live events needed by the execution timeline', () => {
@@ -47,5 +50,15 @@ describe('lead acquisition realtime execution contract', () => {
     expect(combined).toContain('统计看板')
     expect(combined).toContain('loadLeadStats()')
     expect(combined).toContain('loadLeadPool()')
+  })
+
+  it('keeps the stop button in a stopping state until the run is terminal', () => {
+    // 取消是协作式的：后端 interrupt 执行线程后仍需等当前步骤安全结束，
+    // 因此前端把“停止中”持久化到任务真正进入 terminal，而不是 cancel 接口一返回就复位。
+    expect(livePanel).toContain('cancelRequested')
+    expect(livePanel).toContain('停止中…')
+    expect(livePanel).toContain('正在停止')
+    expect(livePanel).toContain('startCancelWatch')
+    expect(livePanel).toContain('watch(terminal')
   })
 })

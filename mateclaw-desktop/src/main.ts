@@ -9,6 +9,11 @@ import { fileURLToPath } from 'node:url'
 const DEFAULT_PORT = 18088
 const STARTUP_TIMEOUT_MS = 150_000
 
+// Shared contract: native host name + fixed extension id (must match the bridge / extension side).
+const NATIVE_HOST_NAME = 'com.mateclaw.browser_bridge'
+const EXTENSION_ID = 'bjdhmojdiahokgfcaahphcjgcnffbonf'
+const NATIVE_HOST_MANIFEST_FILE = `${NATIVE_HOST_NAME}.json`
+
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let serverProcess: ChildProcess | null = null
@@ -198,6 +203,69 @@ async function ensureBackend(port: number): Promise<void> {
   await waitForServer(port)
 }
 
+/** Absolute path to the bridge.exe shipped inside the desktop package. */
+function bridgeExecutablePath(): string {
+  return path.join(appRoot(), 'bridge', 'bridge.exe')
+}
+
+/**
+ * Registers the Chrome Native Messaging host so the bundled bridge.exe is reachable
+ * the moment the desktop app is installed. Idempotent: rewrites the manifest and the
+ * HKCU registry value on every boot, which is safe to repeat.
+ *
+ * Windows only for now. Failures are logged and never block startup.
+ */
+function ensureNativeHostRegistered(): void {
+  try {
+    if (process.platform !== 'win32') {
+      // TODO: implement NativeMessagingHosts registration for macOS (~/Library/Application Support)
+      // and Linux (~/.config/google-chrome/NativeMessagingHosts).
+      console.warn(`[native-host] skipped: registration is only implemented on Windows (platform=${process.platform})`)
+      return
+    }
+
+    const bridgePath = bridgeExecutablePath()
+    if (!fs.existsSync(bridgePath)) {
+      console.warn(`[native-host] bridge.exe not found, skipping registration: ${bridgePath}`)
+      return
+    }
+
+    const localAppData = process.env.LOCALAPPDATA
+    if (!localAppData) {
+      console.warn('[native-host] LOCALAPPDATA is not set, skipping registration')
+      return
+    }
+
+    const installDir = path.join(localAppData, 'MateClaw')
+    fs.mkdirSync(installDir, { recursive: true })
+    const manifestPath = path.join(installDir, NATIVE_HOST_MANIFEST_FILE)
+
+    const manifest = {
+      name: NATIVE_HOST_NAME,
+      description: 'MateClaw Browser Agent Native Host',
+      path: bridgePath,
+      type: 'stdio',
+      allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
+    }
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+
+    const registryKey = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`
+    const reg = spawn('reg', ['add', registryKey, '/ve', '/d', manifestPath, '/f'], { windowsHide: true })
+    reg.on('error', (error) => {
+      console.warn(`[native-host] reg add failed to launch: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    reg.on('exit', (code) => {
+      if (code === 0) {
+        console.log(`[native-host] registered ${NATIVE_HOST_NAME} -> ${manifestPath}`)
+      } else {
+        console.warn(`[native-host] reg add exited with code ${code}`)
+      }
+    })
+  } catch (error) {
+    console.warn(`[native-host] registration error: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function installMenu(port: number): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
@@ -253,6 +321,7 @@ async function boot(): Promise<void> {
   await app.whenReady()
   const port = resolvePort()
   installMenu(port)
+  ensureNativeHostRegistered()
   createSplashWindow()
 
   try {

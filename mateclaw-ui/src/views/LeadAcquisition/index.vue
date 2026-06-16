@@ -77,7 +77,7 @@
                     v-model.trim="form.keyword"
                     type="text"
                     maxlength="120"
-                    placeholder="例如：易企秀"
+                    placeholder="搜索视频关键词"
                     :disabled="taskLocked"
                     required
                   />
@@ -105,15 +105,14 @@
                 </label>
 
                 <div class="field field--wide match-target-field">
-                  <label class="match-target-switch">
-                    <input v-model="form.matchEnabled" type="checkbox" :disabled="taskLocked" />
+                  <div class="match-target-switch">
                     <span>
                       <strong>评论匹配目标</strong>
                       <small>描述要找哪些评论，系统会按评论正文语义判断是否值得触达</small>
                     </span>
-                  </label>
+                  </div>
 
-                  <div v-if="form.matchEnabled" class="match-target-workspace">
+                  <div class="match-target-workspace">
                     <div class="field-head">
                       <span>默认分类</span>
                       <span class="field-hint">点击后自动填充描述和示例词</span>
@@ -180,28 +179,42 @@
                   </div>
                 </div>
 
-                <label class="field field--wide">
-                  <span>私信模板</span>
-                  <textarea
-                    v-model.trim="form.dmDraft"
-                    rows="3"
-                    maxlength="500"
-                    placeholder="你好"
-                    :disabled="taskLocked || !form.engage"
-                  ></textarea>
-                </label>
               </div>
 
               <div class="switch-row">
-                <label class="switch-item" :class="{ disabled: !form.matchEnabled }">
-                  <input v-model="form.engage" type="checkbox" :disabled="taskLocked || !form.matchEnabled" />
-                  <span>匹配后关注并打开私信</span>
+                <label class="switch-item">
+                  <input v-model="form.engage" type="checkbox" :disabled="taskLocked" />
+                  <span>关注匹配用户</span>
+                  <McTooltip placement="top">
+                    <el-icon class="switch-hint-icon" @click.prevent.stop><QuestionFilled /></el-icon>
+                    <template #content>
+                      仅对命中评论的用户执行关注，不发送私信。
+                    </template>
+                  </McTooltip>
                 </label>
                 <label class="switch-item">
                   <input v-model="form.sendDm" type="checkbox" :disabled="taskLocked || !form.engage" />
                   <span>自动发送私信</span>
+                  <McTooltip placement="top">
+                    <el-icon class="switch-hint-icon" @click.prevent.stop><QuestionFilled /></el-icon>
+                    <template #content>
+                      <p style="margin: 0 0 6px;">在关注基础上，自动发送上方填写的私信内容。</p>
+                      <p style="margin: 0;">抖音平台对私信和关注有每日频次限制，频繁操作可能触发风控，导致私信、关注等功能被临时禁用。为保护账号安全，请合理控制每日关注和私信数量，避免过度使用。</p>
+                    </template>
+                  </McTooltip>
                 </label>
               </div>
+
+              <label v-show="form.sendDm" class="field field--wide">
+                <span>私信内容</span>
+                <textarea
+                  v-model.trim="form.dmDraft"
+                  rows="3"
+                  maxlength="500"
+                  placeholder="你好"
+                  :disabled="taskLocked"
+                ></textarea>
+              </label>
 
               <div class="form-actions">
                 <button class="primary-button" type="submit" :disabled="!canLaunch">
@@ -248,7 +261,7 @@
                     @click="applyTemplate(template)"
                   >
                     <strong>{{ template.name }}</strong>
-                    <span>{{ template.keyword }} · {{ matchRulesSummary(template.matchRules) }}</span>
+                    <span>{{ template.keyword }} · {{ matchProfileLabel(template.matchProfile) }}</span>
                   </button>
                 </div>
               </section>
@@ -450,7 +463,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Connection, Promotion } from '@element-plus/icons-vue'
+import { ChatDotRound, Connection, Promotion, QuestionFilled } from '@element-plus/icons-vue'
 import { leadAcquisitionApi } from '@/api'
 import type {
   DouyinLeadAcquisitionRunResponse,
@@ -463,6 +476,7 @@ import type {
   DouyinLeadTemplatePayload,
 } from '@/api'
 import { mcToast } from '@/composables/useMcToast'
+import McTooltip from '@/components/common/McTooltip.vue'
 import LeadRunLivePanel from '@/components/lead/LeadRunLivePanel.vue'
 import LeadRunFinalSummary from '@/components/lead/LeadRunFinalSummary.vue'
 import BrowserPairingPanel from '@/views/Settings/Browser/index.vue'
@@ -485,8 +499,6 @@ interface LeadForm {
   keyword: string
   sort: SortMode
   videoLimit: number
-  matchRules: DouyinLeadMatchRule[]
-  matchEnabled: boolean
   matchProfile: MatchProfile
   matchDescription: string
   matchExamples: string[]
@@ -579,8 +591,8 @@ const DEFAULT_MATCH_PROFILE: MatchProfile = 'high_intent'
 
 const builtInTemplates: LeadTemplate[] = [
   {
-    name: '有意向的客户',
-    keyword: '',
+    name: '意向客户挖掘',
+    keyword: '化帆AI',
     matchRules: [],
     matchEnabled: true,
     matchProfile: 'high_intent',
@@ -588,39 +600,19 @@ const builtInTemplates: LeadTemplate[] = [
     matchExamples: [...matchPreset('high_intent').examples],
     dmDraft: matchPreset('high_intent').dmDraft,
     videoLimit: 5,
+    sort: 'latest',
   },
   {
-    name: '产品吐槽线索',
-    keyword: '易企秀',
+    name: '用户反馈收集',
+    keyword: '化帆AI',
     matchRules: [],
     matchEnabled: true,
     matchProfile: 'bad_experience',
-    matchDescription: '匹配吐槽易企秀加载慢、体验差、功能不好用、买后后悔，或正在寻找替代工具的评论。',
-    matchExamples: ['慢出心脏病', '不好用', '太慢了', '后悔购买', '有没有替代'],
+    matchDescription: matchPreset('bad_experience').description,
+    matchExamples: [...matchPreset('bad_experience').examples],
     dmDraft: matchPreset('bad_experience').dmDraft,
-    videoLimit: 2,
-  },
-  {
-    name: '数字化转型需求',
-    keyword: 'ai数字化转型',
-    matchRules: [],
-    matchEnabled: true,
-    matchProfile: 'high_intent',
-    matchDescription: '匹配表达想了解数字化转型、AI落地、业务增长方案，或正在找服务商和落地方法的评论。',
-    matchExamples: ['转型', 'AI落地', '业务增长', '怎么做', '有没有方案'],
-    dmDraft: '你好，看到你对数字化转型有关注，方便交流一下吗？',
     videoLimit: 5,
-  },
-  {
-    name: 'AI 工具咨询',
-    keyword: 'AI工具',
-    matchRules: [],
-    matchEnabled: true,
-    matchProfile: 'consultation',
-    matchDescription: '匹配正在咨询 AI 工具用法、价格、适用场景，或需要教程和推荐的评论。',
-    matchExamples: ['怎么用', '多少钱', '适合什么场景', '求推荐', '有教程吗'],
-    dmDraft: '你好，看到你在评论里提到 AI 工具，我这边可以分享一个方案。',
-    videoLimit: 5,
+    sort: 'latest',
   },
 ]
 
@@ -629,7 +621,7 @@ const form = ref<LeadForm>(defaultForm())
 const canLaunch = computed(() => {
   return !taskLocked.value
     && form.value.keyword.trim().length > 0
-    && (!form.value.matchEnabled || form.value.matchDescription.trim().length > 0)
+    && form.value.matchDescription.trim().length > 0
 })
 
 const activeRunRunning = computed(() => {
@@ -737,19 +729,6 @@ watch(() => form.value.engage, (engage) => {
   if (!engage) form.value.sendDm = false
 })
 
-watch(() => form.value.matchEnabled, (enabled) => {
-  if (!enabled) {
-    form.value.engage = false
-    form.value.sendDm = false
-    return
-  }
-  form.value.engage = true
-  form.value.matchRules = []
-  if (!form.value.matchDescription.trim()) {
-    applyMatchPreset(DEFAULT_MATCH_PROFILE)
-  }
-})
-
 watch(recentRuns, () => {
   if (activeView.value === 'history') void ensureHistoryRunSelected()
 })
@@ -770,14 +749,12 @@ function defaultForm(): LeadForm {
     keyword: '',
     sort: 'comprehensive',
     videoLimit: 2,
-    matchRules: [],
-    matchEnabled: true,
     matchProfile: preset.key,
     matchDescription: preset.description,
     matchExamples: [...preset.examples],
     dmDraft: preset.dmDraft,
     engage: true,
-    sendDm: false,
+    sendDm: true,
   }
 }
 
@@ -802,11 +779,9 @@ function matchProfileLabel(profile?: string | null): string {
 function applyMatchPreset(profile: MatchProfile | string) {
   if (taskLocked.value) return
   const preset = matchPreset(profile)
-  form.value.matchEnabled = true
   form.value.matchProfile = preset.key
   form.value.matchDescription = preset.description
   form.value.matchExamples = [...preset.examples]
-  form.value.matchRules = []
   if (!form.value.dmDraft.trim() || MATCH_PRESETS.some(item => item.dmDraft === form.value.dmDraft.trim())) {
     form.value.dmDraft = preset.dmDraft
   }
@@ -847,12 +822,6 @@ function normalizeMatchRules(rules?: DouyinLeadMatchRule[] | null): DouyinLeadMa
   return normalized.length ? normalized : [{ mode: 'keyword', value: '' }]
 }
 
-function normalizedFormMatchRules(): DouyinLeadMatchRule[] {
-  if (form.value.matchEnabled) return []
-  return normalizeMatchRules(form.value.matchRules)
-    .filter(rule => rule.value.length > 0 && !isPresetMatchRule(rule))
-}
-
 function isPresetMatchRule(rule: DouyinLeadMatchRule): boolean {
   const value = String(rule.value || '')
   return rule.mode === 'semantic' && (
@@ -888,7 +857,6 @@ function profileFromPresetRules(rules?: DouyinLeadMatchRule[] | null): MatchProf
 }
 
 function templateMatchRulesPayload(): DouyinLeadMatchRule[] {
-  if (!form.value.matchEnabled) return normalizedFormMatchRules()
   return [{ mode: 'semantic', value: matchSemanticRule(form.value.matchProfile, form.value.matchDescription, form.value.matchExamples) }]
 }
 
@@ -927,11 +895,6 @@ function resetForm() {
 
 function applyTemplate(template: LeadTemplate | DouyinLeadTemplate) {
   const templateRules = normalizeMatchRules(template.matchRules)
-  const matchEnabled = 'matchEnabled' in template
-    ? template.matchEnabled !== false
-    : 'matchHighIntent' in template
-    ? template.matchHighIntent !== false
-    : templateRules.some(isPresetMatchRule)
   const profile = normalizeMatchProfile(
     'matchProfile' in template && template.matchProfile
       ? String(template.matchProfile)
@@ -952,13 +915,11 @@ function applyTemplate(template: LeadTemplate | DouyinLeadTemplate) {
     keyword: template.keyword || '',
     sort: normalizeSortMode(template.sort),
     videoLimit: template.videoLimit || 2,
-    matchRules: matchEnabled ? [] : templateRules,
-    matchEnabled,
     matchProfile: profile,
     matchDescription: description,
     matchExamples: examples.length ? examples : [...preset.examples],
     dmDraft: template.dmDraft || preset.dmDraft,
-    engage: template.engage ?? matchEnabled,
+    engage: template.engage ?? true,
     sendDm: template.sendDm ?? false,
   }
   matchExampleDraft.value = ''
@@ -1041,12 +1002,12 @@ async function submitDouyinRun() {
       keyword: form.value.keyword.trim(),
       sort: form.value.sort,
       videoLimit: form.value.videoLimit,
-      matchRules: normalizedFormMatchRules(),
+      matchRules: [],
       matchHighIntent: false,
       highIntentExamples: [],
       matchProfile: form.value.matchProfile,
-      matchDescription: form.value.matchEnabled ? form.value.matchDescription.trim() : '',
-      matchExamples: form.value.matchEnabled ? normalizeMatchExamples(form.value.matchExamples) : [],
+      matchDescription: form.value.matchDescription.trim(),
+      matchExamples: normalizeMatchExamples(form.value.matchExamples),
       dmDraft: form.value.dmDraft.trim() || '你好',
       engage: form.value.engage,
       sendDm: form.value.sendDm,
@@ -1689,14 +1650,6 @@ function buildChatPrompt(): string {
   border: 1px solid color-mix(in srgb, var(--mc-primary) 22%, var(--mc-border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--mc-primary) 5%, var(--mc-bg));
-  cursor: pointer;
-}
-
-.match-target-switch input {
-  width: 18px;
-  height: 18px;
-  margin-top: 2px;
-  accent-color: var(--mc-primary);
 }
 
 .match-target-switch span {
@@ -1910,6 +1863,17 @@ function buildChatPrompt(): string {
 
 .switch-item.disabled {
   color: var(--mc-text-tertiary);
+}
+
+.switch-hint-icon {
+  color: var(--mc-text-tertiary);
+  font-size: 15px;
+  cursor: help;
+  transition: color 0.15s ease;
+}
+
+.switch-hint-icon:hover {
+  color: var(--mc-text-primary);
 }
 
 .primary-button,

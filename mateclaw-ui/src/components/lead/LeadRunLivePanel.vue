@@ -7,7 +7,7 @@
         <p>
           任务 {{ runId || '-' }}
           <span v-if="taskId"> · 子任务 {{ taskId }}</span>
-          <span> · {{ statusLabel(displayRun?.status) }}</span>
+          <span> · {{ cancelRequested && !terminal ? '停止中…' : statusLabel(displayRun?.status) }}</span>
         </p>
       </div>
       <div class="live-actions">
@@ -25,16 +25,26 @@
         <button
           class="danger-button"
           type="button"
-          :disabled="terminal || cancelling"
+          :disabled="terminal || cancelInFlight"
           @click="cancelRun"
         >
-          {{ cancelling ? '停止中' : '停止任务' }}
+          {{ cancelInFlight ? '停止中…' : '停止任务' }}
         </button>
       </div>
     </header>
 
-    <div v-if="fallbackActive" class="fallback-banner">
-      实时连接恢复中，已切换为 2 秒刷新一次。
+    <div v-if="cancelRequested && !terminal" class="cancel-banner">
+      <span class="cancel-spinner" aria-hidden="true"></span>
+      <span>
+        正在停止：已发送停止指令，将在当前步骤安全结束后中断<template v-if="cancelWaitSeconds > 0">（已等待 {{ cancelWaitSeconds }} 秒）</template>。
+        <template v-if="cancelWaitSeconds >= 12">当前步骤较长（如正在采集评论），仍在尝试中断…</template>
+      </span>
+    </div>
+    <div v-else-if="fallbackActive && !terminal" class="fallback-banner">
+      实时连接中断，正在尝试重连…（数据仍每 2 秒自动刷新，不受影响）
+    </div>
+    <div v-else-if="pollingMode && !terminal" class="polling-banner">
+      实时推送暂不可用，已自动改用定时刷新（每 2 秒），任务数据正常更新。
     </div>
 
     <div class="live-layout">
@@ -188,17 +198,24 @@ const sseEventNames = [
 const liveRun = ref<DouyinLeadAcquisitionRunResponse | null>(normalizeRun(props.initialRun))
 const connected = ref(false)
 const fallbackActive = ref(false)
+const pollingMode = ref(false)
+const reconnectAttempts = ref(0)
+const MAX_RECONNECT_ATTEMPTS = 3
 const refreshing = ref(false)
 const cancelling = ref(false)
+const cancelRequested = ref(false)
+const cancelWaitSeconds = ref(0)
 const lastEventId = ref<string | null>(null)
 
 let source: EventSource | null = null
 let pollTimer: ReturnType<typeof window.setInterval> | null = null
 let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null
+let cancelTimer: ReturnType<typeof window.setInterval> | null = null
 
 const displayRun = computed(() => normalizeRun(liveRun.value))
 const events = computed(() => displayRun.value?.events ?? [])
 const terminal = computed(() => isTerminalStatus(displayRun.value?.status))
+const cancelInFlight = computed(() => cancelling.value || cancelRequested.value)
 const taskId = computed(() => props.taskId ?? displayRun.value?.taskId ?? null)
 
 const summaryPayload = computed<JsonRecord>(() => {
@@ -375,6 +392,8 @@ const currentStageText = computed(() => {
 
 const connectionTone = computed(() => {
   if (terminal.value) return 'done'
+  if (cancelRequested.value) return 'warn'
+  if (pollingMode.value) return 'idle'
   if (fallbackActive.value) return 'warn'
   if (connected.value) return 'live'
   return 'idle'
@@ -382,7 +401,9 @@ const connectionTone = computed(() => {
 
 const connectionText = computed(() => {
   if (terminal.value) return '已结束'
-  if (fallbackActive.value) return '实时连接恢复中'
+  if (cancelRequested.value) return '停止中…'
+  if (pollingMode.value) return '定时刷新'
+  if (fallbackActive.value) return '重连中…'
   if (connected.value) return '实时连接中'
   return '连接中'
 })
@@ -396,6 +417,13 @@ watch(() => props.runId, () => {
   if (props.runId && !terminal.value) {
     startPolling()
     connectStream()
+  }
+})
+
+watch(terminal, (isTerminal) => {
+  if (isTerminal) {
+    cancelRequested.value = false
+    stopCancelWatch()
   }
 })
 
@@ -422,16 +450,27 @@ function connectStream() {
   source.onopen = () => {
     connected.value = true
     fallbackActive.value = false
+    pollingMode.value = false
+    reconnectAttempts.value = 0
   }
 
   source.onerror = () => {
     connected.value = false
     stopStream()
-    if (!terminal.value) {
+    if (terminal.value) return
+    startPolling()
+    reconnectAttempts.value += 1
+    if (reconnectAttempts.value <= MAX_RECONNECT_ATTEMPTS) {
+      // 前几次：短暂“重连中”，快速退避重试
       fallbackActive.value = true
-      startPolling()
-      scheduleReconnect()
+      pollingMode.value = false
+    } else {
+      // 多次失败：稳定降级到定时刷新，不再无限重试、不再焦虑提示。
+      // 轮询本就在兜底，任务数据持续更新，因此这是优雅降级而非故障。
+      fallbackActive.value = false
+      pollingMode.value = true
     }
+    scheduleReconnect()
   }
 
   for (const name of sseEventNames) {
@@ -483,10 +522,14 @@ function stopPolling() {
 
 function scheduleReconnect() {
   if (reconnectTimer || terminal.value) return
+  // 重连退避：第 1/2/3 次约 5s/10s/20s；进入定时刷新模式后每 30s 静默自愈尝试一次。
+  const delay = pollingMode.value
+    ? 30_000
+    : Math.min(20_000, 5_000 * Math.pow(2, Math.max(0, reconnectAttempts.value - 1)))
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null
     if (!terminal.value) connectStream()
-  }, 5_000)
+  }, delay)
 }
 
 function stopStream() {
@@ -500,11 +543,15 @@ function stopStream() {
 function resetConnection() {
   stopStream()
   stopPolling()
+  stopCancelWatch()
+  cancelRequested.value = false
   if (reconnectTimer) {
     window.clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
   fallbackActive.value = false
+  pollingMode.value = false
+  reconnectAttempts.value = 0
 }
 
 async function refreshSnapshot() {
@@ -523,11 +570,13 @@ async function refreshSnapshot() {
 }
 
 async function cancelRun() {
-  if (!props.runId || terminal.value) return
+  if (!props.runId || terminal.value || cancelRequested.value) return
   cancelling.value = true
   try {
     await leadAcquisitionApi.cancelRun(props.runId)
-    mcToast.success('已请求停止获客任务')
+    cancelRequested.value = true
+    startCancelWatch()
+    mcToast.success('已发送停止指令，正在等待当前步骤安全结束…')
     await refreshSnapshot()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -535,6 +584,30 @@ async function cancelRun() {
   } finally {
     cancelling.value = false
   }
+}
+
+function startCancelWatch() {
+  cancelWaitSeconds.value = 0
+  if (cancelTimer) return
+  // 取消等待期内每秒刷新一次快照（比默认 2s 轮询更快感知任务真正停止），
+  // 同时驱动 banner 的“已等待 N 秒”计时。
+  cancelTimer = window.setInterval(() => {
+    cancelWaitSeconds.value += 1
+    if (terminal.value) {
+      stopCancelWatch()
+      cancelRequested.value = false
+      return
+    }
+    refreshSnapshot()
+  }, 1_000)
+}
+
+function stopCancelWatch() {
+  if (cancelTimer) {
+    window.clearInterval(cancelTimer)
+    cancelTimer = null
+  }
+  cancelWaitSeconds.value = 0
 }
 
 function mergeRun(candidate: unknown, emitUpdate = true) {
@@ -1095,6 +1168,44 @@ button:disabled {
   color: #92400e;
   font-size: 13px;
   font-weight: 650;
+}
+
+.polling-banner {
+  padding: 10px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cancel-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--mc-danger, #dc2626) 30%, var(--mc-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-danger, #dc2626) 8%, transparent);
+  color: var(--mc-danger, #dc2626);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.cancel-spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--mc-danger, #dc2626) 28%, transparent);
+  border-top-color: var(--mc-danger, #dc2626);
+  border-radius: 50%;
+  animation: cancel-spin .7s linear infinite;
+}
+
+@keyframes cancel-spin {
+  to { transform: rotate(360deg); }
 }
 
 .live-layout {

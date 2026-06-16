@@ -332,8 +332,12 @@ export class DirectBridgeClient {
  * only purpose is to reset the MV3 service-worker idle timer. getPlatformInfo
  * has no side effects and is available without any permission. Guarded so it is
  * a harmless no-op outside an extension (unit tests) and never throws.
+ *
+ * Exported so {@link ./native-bridge.NativeBridge} can reuse the identical
+ * MV3 keep-alive tick instead of duplicating it — both transports must keep the
+ * service worker awake the same way.
  */
-function defaultResetIdleTimer(): void {
+export function defaultResetIdleTimer(): void {
   try {
     const runtime = (globalThis as unknown as { chrome?: typeof chrome }).chrome?.runtime
     const result = runtime?.getPlatformInfo?.()

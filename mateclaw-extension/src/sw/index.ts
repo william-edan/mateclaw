@@ -1,11 +1,13 @@
 // Service Worker entry point — Chrome MV3 background service worker.
 //
-// Phase 3.1: owns the transport to the backend. Two transports share one
-// public surface (send/onMessage/onDisconnect/disconnect):
-//   - DirectBridgeClient — direct WSS to /api/v1/browser/edge (the default
-//     once paired). Connected on startup iff config-store holds {serverUrl,pat}.
-//   - NativeBridge — Chrome Native Messaging to the Go host. Now OPT-IN; no
-//     longer auto-connected on SW start (the Claude-Code path).
+// Phase 3.1: owns the transport to the backend. Transports share one public
+// surface (connect/send/onMessage/onStateChange/onDisconnect/disconnect):
+//   - NativeBridge — Chrome Native Messaging to the local bridge host. Now the
+//     STARTUP transport: connectNative() runs at SW load so the desktop
+//     ("装好即连") path comes online with no pairing/config.
+//   - DirectBridgeClient / OffscreenBridgeProxy — direct WSS to
+//     /api/v1/browser/edge. Retained for the paired / Claude-Code path and
+//     reachable via pair/unpair, but NO LONGER auto-connected on SW start.
 //
 // Wires the TabGroupManager + DebuggerManager + ActionExecutor + ActionRouter
 // + snapshot/screenshot/visual handlers to whichever transport is active, and
@@ -99,11 +101,21 @@ const usingOffscreen = typeof chrome.offscreen?.createDocument === 'function'
 
 const sendUp = (msg: EdgeMessage): void => {
   try {
-    if (usingOffscreen) {
-      // Post straight to the offscreen socket host. Stateless on purpose: a
-      // reply emitted on a cold SW wake must not depend on connectDirect having
-      // re-created the proxy yet. If the socket is mid-reconnect the dropped
-      // frame is reissued by the server on its next request.
+    // Route to the offscreen document ONLY when an offscreen-hosted transport
+    // actually owns the socket: either the active bridge IS the offscreen proxy,
+    // or this is a cold SW wake before startup rebuilt the proxy (activeBridge
+    // still null) on an offscreen-capable runtime — there the offscreen doc may
+    // hold the socket and the reply must not wait for reconnection (stateless on
+    // purpose). The in-SW transports — NativeBridge on the desktop path, or the
+    // fallback in-SW DirectBridgeClient — own their socket inside the worker, so
+    // they send directly.
+    //
+    // Keying this on `usingOffscreen` alone (the old code) silently dropped EVERY
+    // outbound frame on the native path: usingOffscreen is true on chrome116+, but
+    // connectNative never creates an offscreen document, so action.result/snapshot/
+    // heartbeat/HELLO were all posted into the void and swallowed by .catch() —
+    // the desktop "connected but no round-trips" failure.
+    if (activeBridge instanceof OffscreenBridgeProxy || (!activeBridge && usingOffscreen)) {
       chrome.runtime.sendMessage({ type: OFFSCREEN_SEND, message: msg }).catch(() => {})
     } else {
       activeBridge?.send(msg)
@@ -203,11 +215,17 @@ function disconnectActive(): void {
   activeBridge = null
 }
 
-/** True iff the active direct transport (in-SW or offscreen-hosted) is connected. */
+/**
+ * True iff the active transport is connected. Recognises all three transports —
+ * the in-SW DirectBridgeClient, the offscreen-hosted proxy, and the
+ * Native-Messaging bridge — since the desktop path connects via NativeBridge on
+ * startup and the sidepanel pill / external `ping` read this.
+ */
 function isConnected(): boolean {
   return (
     (activeBridge instanceof DirectBridgeClient ||
-      activeBridge instanceof OffscreenBridgeProxy) &&
+      activeBridge instanceof OffscreenBridgeProxy ||
+      activeBridge instanceof NativeBridge) &&
     activeBridge.connected
   )
 }
@@ -402,22 +420,22 @@ function dispatchInbound(m: EdgeMessage): void {
 }
 
 // -----------------------------------------------------------------
-// Startup: connect the direct transport iff we have stored credentials.
-// Native Messaging is no longer auto-connected (opt-in path only).
+// Startup: connect to the local Native Messaging host immediately.
+//
+// In the desktop ("装好即连") path the bridge host is already installed and
+// Chrome launches it on demand, so the extension needs no pairing/config to
+// come online — it just calls connectNative() at SW load. NativeBridge owns
+// reconnect + MV3 keepalive, so a suspended-then-woken SW re-launches the host
+// automatically. The direct-WSS transport (connectDirect / DirectBridgeClient /
+// OffscreenBridgeProxy) is retained for the paired/Claude-Code path and is
+// still reachable via pair/unpair, but is NOT called on startup.
 // -----------------------------------------------------------------
 
-configStore
-  .getConfig()
-  .then(cfg => {
-    if (cfg.serverUrl && cfg.pat) {
-      return connectDirect(cfg.serverUrl, cfg.pat)
-    }
-    console.info('[mateclaw][sw] no pairing stored — idle until paired')
-    return undefined
-  })
-  .catch(e => {
-    console.error('[mateclaw][sw] startup connect failed', e)
-  })
+try {
+  connectNative()
+} catch (e) {
+  console.error('[mateclaw][sw] startup native connect failed', e)
+}
 
 // -----------------------------------------------------------------
 // Re-show indicators after page navigation.
@@ -670,12 +688,22 @@ chrome.runtime.onMessage.addListener(
 )
 
 // -----------------------------------------------------------------
-// Native Messaging — OPT-IN. Exposed for the Claude-Code path; never auto-run.
+// Native Messaging — the STARTUP transport (called at SW load above) and also
+// exported for the Claude-Code path. Tears down any active bridge subscription,
+// builds a fresh NativeBridge (which owns reconnect + MV3 keepalive), wires the
+// inbound dispatcher, and connects to the local host.
 // -----------------------------------------------------------------
 
 export function connectNative(): void {
   bridgeUnsub?.()
   bridgeUnsub = null
+  if (activeBridge && 'disconnect' in activeBridge) {
+    try {
+      activeBridge.disconnect()
+    } catch {
+      // ignore
+    }
+  }
   const nb = new NativeBridge(HOST)
   bridgeUnsub = nb.onMessage(dispatchInbound)
   activeBridge = nb

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "build:bundle": "node scripts/build-exe.mjs --bundle-only",
+    "build:exe": "node scripts/build-exe.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node dist/cmd/bridge.js",
@@ -17,6 +19,8 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/ws": "^8.0.0",
+    "esbuild": "^0.28.0",
+    "postject": "1.0.0-alpha.6",
     "tinybench": "^6.0.2",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",

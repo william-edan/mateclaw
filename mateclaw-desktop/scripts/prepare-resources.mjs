@@ -11,6 +11,8 @@ const serverTarget = path.join(repoRoot, 'mateclaw-server', 'target')
 const resourcesDir = path.join(desktopDir, 'resources')
 const serverResourceDir = path.join(resourcesDir, 'server')
 const runtimeResourceDir = path.join(resourcesDir, 'runtime')
+const bridgeResourceDir = path.join(resourcesDir, 'bridge')
+const bridgeArtifact = path.join(repoRoot, 'mateclaw-browser-bridge', 'dist', 'cmd', 'bridge.exe')
 
 function findServerJar() {
   const explicit = process.env.MATECLAW_SERVER_JAR
@@ -53,6 +55,20 @@ function copyServerJar() {
   const dest = path.join(serverResourceDir, 'mateclaw-server.jar')
   fs.copyFileSync(jar, dest)
   console.log(`[desktop] copied server jar: ${jar} -> ${dest}`)
+}
+
+function copyBridgeBinary() {
+  if (!fs.existsSync(bridgeArtifact)) {
+    console.warn(
+      `[desktop] bridge.exe not found at ${bridgeArtifact}; skipping. ` +
+        'Build it in mateclaw-browser-bridge first to bundle the native host.',
+    )
+    return
+  }
+  fs.mkdirSync(bridgeResourceDir, { recursive: true })
+  const dest = path.join(bridgeResourceDir, 'bridge.exe')
+  fs.copyFileSync(bridgeArtifact, dest)
+  console.log(`[desktop] copied bridge binary: ${bridgeArtifact} -> ${dest}`)
 }
 
 function createRuntime() {
@@ -108,4 +124,5 @@ function createRuntime() {
 }
 
 copyServerJar()
+copyBridgeBinary()
 createRuntime()
