@@ -417,7 +417,7 @@ export default {
     agentContext: '智能体上下文',
     skills: '技能',
     wiki: '知识库',
-    enterprise: '企业场景',
+    enterprise: '企业场景（示例）',
     tools: '工具',
     plugins: '插件',
     contactSupport: '联系客服',
@@ -2185,6 +2185,11 @@ export default {
     download: '下载原始文件',
     downloadFailed: '下载失败',
     processAll: '处理所有待处理材料',
+    embeddingUnavailable: {
+      title: 'Embedding 模型不可用',
+      banner: '当前没有可用的 Embedding 模型，无法构建知识库。请前往 设置 → 模型 → Embedding 添加模型，并确保其所属 Provider 已通过连接测试（显示"已就绪"）。',
+      toast: '请先配置可用的 Embedding 模型并确保其 Provider 已就绪',
+    },
     materialTitle: '标题',
     materialContent: '内容',
     pasteContent: '粘贴或输入文本内容...',
@@ -2807,6 +2812,12 @@ export default {
     eyebrow: '企业场景',
     title: '企业 AI 工作台',
     subtitle: '把 AI 判断、证据引用、审批责任一体化 —— 让 AI 进入企业流程，而不是又一个聊天框。',
+    contactCta: '联系我们，定制专属你自己的企业场景',
+    contactModal: {
+      title: '联系我们',
+      desc: '扫码添加商务，定制专属你自己的企业场景。',
+      close: '关闭',
+    },
     tabs: {
       overview: '总览',
       contract: '合同审查',

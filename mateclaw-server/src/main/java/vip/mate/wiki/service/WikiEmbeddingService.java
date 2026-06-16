@@ -9,6 +9,7 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.stereotype.Service;
+import vip.mate.exception.MateClawException;
 import vip.mate.llm.embedding.EmbeddingModelFactory;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
@@ -142,6 +143,53 @@ public class WikiEmbeddingService {
     }
 
     /**
+     * True only when at least one embedding model is resolvable for the KB AND
+     * its provider is live (init-probe passed). Mirrors {@link #resolveForKb}'s
+     * three-tier selection (KB binding → system default → any enabled) but stops
+     * at usability — it does not build the model instance.
+     * <p>
+     * Unlike {@link #isAvailable()} (which only checks that an enabled embedding
+     * row exists), this reflects real availability: a KB whose only embedding
+     * provider returns 401 reports {@code false}.
+     */
+    public boolean hasUsableEmbeddingModel(Long kbId) {
+        try {
+            if (kbId != null) {
+                WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
+                if (kb != null && kb.getEmbeddingModelId() != null
+                        && isUsable(safeGetModel(kb.getEmbeddingModelId()))) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[WikiEmbedding] KB binding usability check failed for kbId={}: {}", kbId, e.getMessage());
+        }
+        if (isUsable(resolveSystemDefaultEmbedding())) {
+            return true;
+        }
+        try {
+            return isUsable(modelConfigService.findFirstEnabledEmbedding());
+        } catch (Exception e) {
+            log.debug("[WikiEmbedding] Enabled embedding usability check failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Guard for knowledge-base ingestion / build entry points. Throws when no
+     * usable embedding model is available so the caller never silently produces
+     * a KB without vectors. The message points the user at Settings → Models →
+     * Embedding and is translated via {@code err.wiki.embedding.unavailable}.
+     */
+    public void requireUsableEmbeddingModel(Long kbId) {
+        if (!hasUsableEmbeddingModel(kbId)) {
+            throw new MateClawException("err.wiki.embedding.unavailable", 400,
+                    "未配置可用的 Embedding 模型，无法构建知识库。请前往 设置 → 模型 → Embedding 添加模型，"
+                            + "并确保其所属 Provider 已通过连接测试（已就绪）。");
+        }
+    }
+
+    /**
      * 解析指定 KB 应使用的 embedding 模型与模型实例
      */
     public Resolved resolveForKb(Long kbId) {
@@ -160,18 +208,19 @@ public class WikiEmbeddingService {
             log.debug("[WikiEmbedding] KB binding resolve failed for kbId={}: {}", kbId, e.getMessage());
         }
 
-        // 优先级 2：系统默认
-        Long defaultId = readSystemDefaultEmbeddingId();
-        if (defaultId != null) {
-            ModelConfigEntity model = safeGetModel(defaultId);
-            if (isUsable(model)) {
+        // 优先级 2：系统默认（全局指针 → 当前工作区等价行，见 resolveSystemDefaultEmbedding）
+        ModelConfigEntity defaultModel = resolveSystemDefaultEmbedding();
+        if (defaultModel != null) {
+            if (isUsable(defaultModel)) {
                 try {
-                    return new Resolved(factory.build(model), model.getModelName());
+                    return new Resolved(factory.build(defaultModel), defaultModel.getModelName());
                 } catch (Exception e) {
-                    log.warn("[WikiEmbedding] System default embedding model {} build failed: {}", defaultId, e.getMessage());
+                    log.warn("[WikiEmbedding] System default embedding model {} build failed: {}",
+                            defaultModel.getId(), e.getMessage());
                 }
             } else {
-                log.warn("[WikiEmbedding] System default embedding model {} is unusable, falling back", defaultId);
+                log.warn("[WikiEmbedding] System default embedding model {} is unusable, falling back",
+                        defaultModel.getId());
             }
         }
 
@@ -625,13 +674,52 @@ public class WikiEmbeddingService {
                 || !"embedding".equals(model.getModelType())) {
             return false;
         }
-        // Skip models whose provider lacks a valid API key (mirrors chat model path fix 341ad1f)
+        // Require the provider to be LIVE (init-probe passed, in the failover
+        // pool), not merely configured. isProviderConfigured only checks a
+        // non-placeholder key is present, so a provider whose key returns 401
+        // would still be picked and the KB would be "built" with no real
+        // vectors. Gating on liveness makes a 401 / removed provider unusable.
         try {
-            return modelProviderService.isProviderConfigured(model.getProvider());
+            return modelProviderService.isProviderLive(model.getProvider());
         } catch (Exception e) {
             log.debug("[WikiEmbedding] Provider check failed for model {}: {}", model.getId(), e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Resolve the system-default embedding model <em>for the current workspace</em>.
+     * <p>
+     * {@code embedding.default.model.id} is a single global {@code mate_system_setting}
+     * row (UNIQUE key) but model ids are workspace-scoped: the seeded default
+     * (text-embedding-v3, id 1000001001) lives in the template workspace, and every
+     * registered workspace gets its <em>own</em> copy under a fresh id. Dereferencing
+     * the global id directly only resolves inside the one workspace that owns it — for
+     * everyone else the workspace-guarded {@link #safeGetModel} returned null and this
+     * tier silently went dead, so a freshly-registered user fell straight through to
+     * the tier-3 "first enabled" fallback.
+     * <p>
+     * So: try the id directly first (covers the template workspace, and an admin who
+     * set the default from this same workspace), otherwise map the referenced row's
+     * {@code (provider, modelName)} onto this workspace's enabled copy. Returns
+     * {@code null} when no equivalent model exists here.
+     */
+    private ModelConfigEntity resolveSystemDefaultEmbedding() {
+        Long defaultId = readSystemDefaultEmbeddingId();
+        if (defaultId == null) {
+            return null;
+        }
+        ModelConfigEntity direct = safeGetModel(defaultId);
+        if (direct != null) {
+            return direct;
+        }
+        // Global pointer references another workspace's row (typically the template's).
+        // Re-resolve it to this workspace by (provider, modelName).
+        ModelConfigEntity reference = modelConfigService.findModelByIdAnyWorkspace(defaultId);
+        if (reference == null) {
+            return null;
+        }
+        return modelConfigService.findEnabledModel(reference.getProvider(), reference.getModelName());
     }
 
     private Long readSystemDefaultEmbeddingId() {

@@ -36,7 +36,7 @@ public class DashboardController {
     @RequireWorkspaceRole("member")
     public R<Map<String, Object>> overview(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        return R.ok(dashboardService.getOverview(workspaceId));
+        return R.ok(dashboardService.getOverview(requireWorkspaceId(workspaceId)));
     }
 
     @Operation(summary = "获取日用量趋势")
@@ -45,7 +45,7 @@ public class DashboardController {
     public R<List<Map<String, Object>>> trend(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestParam(defaultValue = "30") int days) {
-        return R.ok(dashboardService.getTrend(workspaceId, Math.min(days, 90)));
+        return R.ok(dashboardService.getTrend(requireWorkspaceId(workspaceId), Math.min(days, 90)));
     }
 
     @Operation(summary = "获取 CronJob 执行历史")
@@ -55,12 +55,12 @@ public class DashboardController {
             @PathVariable Long cronJobId,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestParam(defaultValue = "20") int limit) {
+        long wsId = requireWorkspaceId(workspaceId);
         // Verify the cron job belongs to the caller's workspace. Checked
         // against the job's own workspace_id so agent-less system jobs
         // (e.g. wiki_process) verify the same way as agent-bound jobs.
         CronJobEntity job = cronJobMapper.selectById(cronJobId);
         if (job != null && job.getWorkspaceId() != null) {
-            long wsId = workspaceId != null ? workspaceId : 1L;
             if (!job.getWorkspaceId().equals(wsId)) {
                 throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
             }
@@ -74,7 +74,14 @@ public class DashboardController {
     public R<List<CronJobRunEntity>> recentRuns(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestParam(defaultValue = "20") int limit) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         return R.ok(cronJobRunService.listRecentByWorkspace(wsId, Math.min(limit, 100)));
+    }
+
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
     }
 }

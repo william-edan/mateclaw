@@ -84,6 +84,15 @@ public class ConversationService {
         this.toolResultStorage = toolResultStorage;
     }
 
+    private ConversationEntity findConversation(String conversationId, Long workspaceId) {
+        LambdaQueryWrapper<ConversationEntity> wrapper = new LambdaQueryWrapper<ConversationEntity>()
+                .eq(ConversationEntity::getConversationId, conversationId);
+        if (workspaceId != null) {
+            wrapper.eq(ConversationEntity::getWorkspaceId, workspaceId);
+        }
+        return conversationMapper.selectOne(wrapper);
+    }
+
     /**
      * List conversations for a user, returned as VOs that include
      * {@code agentName} / {@code agentIcon} / {@code status}.
@@ -235,14 +244,14 @@ public class ConversationService {
     @Transactional
     public ConversationEntity getOrCreateConversation(String conversationId, Long agentId,
                                                        String username, Long workspaceId) {
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        long scopedWorkspaceId = workspaceId != null ? workspaceId : 1L;
+        ConversationEntity conv = findConversation(conversationId, scopedWorkspaceId);
         if (conv == null) {
             conv = new ConversationEntity();
             conv.setConversationId(conversationId);
             conv.setAgentId(agentId);
             conv.setUsername(username != null ? username : "anonymous");
-            conv.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+            conv.setWorkspaceId(scopedWorkspaceId);
             conv.setTitle("新对话");
             conv.setMessageCount(0);
             conv.setLastActiveTime(LocalDateTime.now());
@@ -327,8 +336,8 @@ public class ConversationService {
     @Transactional
     public ConversationEntity getOrCreateSharedConversation(String conversationId, Long agentId, Long workspaceId,
                                                             String defaultModelProvider, String defaultModelName) {
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        long scopedWorkspaceId = workspaceId != null ? workspaceId : 1L;
+        ConversationEntity conv = findConversation(conversationId, scopedWorkspaceId);
         boolean seedModel = defaultModelProvider != null && !defaultModelProvider.isBlank()
                 && defaultModelName != null && !defaultModelName.isBlank();
         if (conv == null) {
@@ -336,7 +345,7 @@ public class ConversationService {
             conv.setConversationId(conversationId);
             conv.setAgentId(agentId);
             conv.setUsername(SYSTEM_USER);
-            conv.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+            conv.setWorkspaceId(scopedWorkspaceId);
             conv.setTitle("新对话");
             conv.setMessageCount(0);
             conv.setLastActiveTime(LocalDateTime.now());
@@ -353,10 +362,10 @@ public class ConversationService {
                 // Concurrent insert: another thread won the race — re-query
                 // and fall through to the owner-correction block below.
                 // 并发插入：另一个线程已创建，回退到查询；继续走下面的 owner 修正逻辑。
-                conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                        .eq(ConversationEntity::getConversationId, conversationId));
+                conv = findConversation(conversationId, scopedWorkspaceId);
                 if (conv == null) {
-                    throw new IllegalStateException("Conversation vanished after duplicate key: " + conversationId, e);
+                    throw new IllegalStateException("Conversation vanished after duplicate key: "
+                            + conversationId + " in workspace " + scopedWorkspaceId, e);
                 }
             }
         }
@@ -501,8 +510,12 @@ public class ConversationService {
      */
     @Transactional
     public void renameConversation(String conversationId, String title) {
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        renameConversation(conversationId, title, null);
+    }
+
+    @Transactional
+    public void renameConversation(String conversationId, String title, Long workspaceId) {
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         if (conv != null) {
             conv.setTitle(title);
             conversationMapper.updateById(conv);
@@ -514,8 +527,11 @@ public class ConversationService {
      * ones in the sidebar list regardless of last-active time.
      */
     public void setPinned(String conversationId, boolean pinned) {
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        setPinned(conversationId, pinned, null);
+    }
+
+    public void setPinned(String conversationId, boolean pinned, Long workspaceId) {
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         if (conv != null) {
             conv.setPinned(pinned ? 1 : 0);
             conversationMapper.updateById(conv);
@@ -546,12 +562,16 @@ public class ConversationService {
      */
     @Transactional
     public void updateConversationModel(String conversationId, String modelProvider, String modelName) {
+        updateConversationModel(conversationId, modelProvider, modelName, null);
+    }
+
+    @Transactional
+    public void updateConversationModel(String conversationId, String modelProvider, String modelName, Long workspaceId) {
         if (modelProvider == null || modelProvider.isBlank()
                 || modelName == null || modelName.isBlank()) {
             return;
         }
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         if (conv == null) {
             return;
         }
@@ -807,6 +827,12 @@ public class ConversationService {
                 .toList();
     }
 
+    public List<MessageVO> listMessageViews(String conversationId, Long workspaceId) {
+        return findConversation(conversationId, workspaceId) == null
+                ? List.of()
+                : listMessageViews(conversationId);
+    }
+
     /**
      * Delete a conversation and cascade-clean every row that referenced it.
      * <p>
@@ -837,6 +863,14 @@ public class ConversationService {
      */
     @Transactional
     public void deleteConversation(String conversationId) {
+        deleteConversation(conversationId, null);
+    }
+
+    @Transactional
+    public void deleteConversation(String conversationId, Long workspaceId) {
+        if (workspaceId != null && findConversation(conversationId, workspaceId) == null) {
+            return;
+        }
         int messages = messageMapper.delete(new LambdaQueryWrapper<MessageEntity>()
                 .eq(MessageEntity::getConversationId, conversationId));
         int approvals = toolApprovalMapper.delete(new LambdaQueryWrapper<ToolApprovalEntity>()
@@ -909,10 +943,17 @@ public class ConversationService {
      */
     @Transactional
     public void clearMessages(String conversationId) {
+        clearMessages(conversationId, null);
+    }
+
+    @Transactional
+    public void clearMessages(String conversationId, Long workspaceId) {
+        if (workspaceId != null && findConversation(conversationId, workspaceId) == null) {
+            return;
+        }
         messageMapper.delete(new LambdaQueryWrapper<MessageEntity>()
                 .eq(MessageEntity::getConversationId, conversationId));
-        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         if (conv != null) {
             conv.setMessageCount(0);
             conv.setLastMessage(null);
@@ -1295,6 +1336,10 @@ public class ConversationService {
                         .eq(ConversationEntity::getConversationId, conversationId)) > 0;
     }
 
+    public boolean conversationExists(String conversationId, Long workspaceId) {
+        return findConversation(conversationId, workspaceId) != null;
+    }
+
     /**
      * Check whether a user owns the conversation, treating system-owned
      * rows (e.g. from scheduled jobs / IM channels) as visible to every
@@ -1311,9 +1356,7 @@ public class ConversationService {
     }
 
     public boolean isConversationOwner(String conversationId, String username, Long workspaceId) {
-        ConversationEntity conv = conversationMapper.selectOne(
-                new LambdaQueryWrapper<ConversationEntity>()
-                        .eq(ConversationEntity::getConversationId, conversationId));
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         if (conv == null) {
             return false;
         }
@@ -1354,9 +1397,12 @@ public class ConversationService {
      * <p>获取会话的持久化流状态。
      */
     public String getStreamStatus(String conversationId) {
-        ConversationEntity conv = conversationMapper.selectOne(
-                new LambdaQueryWrapper<ConversationEntity>()
-                        .eq(ConversationEntity::getConversationId, conversationId));
+        ConversationEntity conv = findConversation(conversationId, null);
+        return conv != null ? conv.getStreamStatus() : null;
+    }
+
+    public String getStreamStatus(String conversationId, Long workspaceId) {
+        ConversationEntity conv = findConversation(conversationId, workspaceId);
         return conv != null ? conv.getStreamStatus() : null;
     }
 

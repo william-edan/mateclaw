@@ -37,6 +37,7 @@ public class ConversationController {
     public R<List<ConversationVO>> list(
             Authentication auth,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
         return R.ok(conversationService.listConversations(username, workspaceId));
     }
@@ -53,6 +54,7 @@ public class ConversationController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String keyword) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
         return R.ok(conversationService.pageConversations(username, workspaceId, page, size, keyword));
     }
@@ -71,14 +73,15 @@ public class ConversationController {
                              @RequestParam(required = false) Integer limit,
                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                              Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权访问该会话");
         }
 
         // 向后兼容：不传 limit 则返回全部消息（旧前端行为）
         if (limit == null || limit <= 0) {
-            return R.ok(conversationService.listMessageViews(conversationId));
+            return R.ok(conversationService.listMessageViews(conversationId, workspaceId));
         }
 
         // 分页模式
@@ -118,11 +121,12 @@ public class ConversationController {
     public R<Void> delete(@PathVariable String conversationId,
                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                           Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
-        conversationService.deleteConversation(conversationId);
+        conversationService.deleteConversation(conversationId, workspaceId);
         return R.ok();
     }
 
@@ -134,15 +138,16 @@ public class ConversationController {
     public R<Void> rename(@PathVariable String conversationId, @RequestBody Map<String, String> body,
                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                           Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         String title = body.getOrDefault("title", "").trim();
         if (title.isEmpty() || title.length() > 100) {
             return R.fail("标题不合法");
         }
-        conversationService.renameConversation(conversationId, title);
+        conversationService.renameConversation(conversationId, title, workspaceId);
         return R.ok();
     }
 
@@ -155,11 +160,12 @@ public class ConversationController {
                              @RequestBody Map<String, Boolean> body,
                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                              Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
-        conversationService.setPinned(conversationId, Boolean.TRUE.equals(body.get("pinned")));
+        conversationService.setPinned(conversationId, Boolean.TRUE.equals(body.get("pinned")), workspaceId);
         return R.ok();
     }
 
@@ -182,8 +188,9 @@ public class ConversationController {
                             @RequestBody Map<String, String> body,
                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                             Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
         String provider = body.get("modelProvider");
@@ -191,7 +198,7 @@ public class ConversationController {
         if (provider == null || provider.isBlank() || modelName == null || modelName.isBlank()) {
             return R.fail("modelProvider 和 modelName 都必须提供");
         }
-        conversationService.updateConversationModel(conversationId, provider.trim(), modelName.trim());
+        conversationService.updateConversationModel(conversationId, provider.trim(), modelName.trim(), workspaceId);
         return R.ok();
     }
 
@@ -203,8 +210,9 @@ public class ConversationController {
     public R<Integer> batchDelete(@RequestBody Map<String, List<String>> body,
                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                                   Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        long ws = workspaceId == null ? 1L : workspaceId;
+        long ws = workspaceId;
         List<String> ids = body.get("conversationIds");
         if (ids == null || ids.isEmpty()) {
             return R.fail("未指定要删除的会话");
@@ -217,7 +225,7 @@ public class ConversationController {
             if (!conversationService.isConversationOwner(conversationId, username, ws)) {
                 continue;
             }
-            conversationService.deleteConversation(conversationId);
+            conversationService.deleteConversation(conversationId, ws);
             deleted++;
         }
         return R.ok(deleted);
@@ -231,11 +239,12 @@ public class ConversationController {
     public R<Void> clearMessages(@PathVariable String conversationId,
                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                                  Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权操作该会话");
         }
-        conversationService.clearMessages(conversationId);
+        conversationService.clearMessages(conversationId, workspaceId);
         return R.ok();
     }
 
@@ -248,21 +257,26 @@ public class ConversationController {
     public R<Map<String, String>> getStreamStatus(@PathVariable String conversationId,
                                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                                                   Authentication auth) {
+        if (workspaceId == null) return missingWorkspace();
         String username = auth != null ? auth.getName() : "anonymous";
         // A freshly opened chat uses a client-generated id that is not persisted
         // until the first message lands. The console polls this endpoint on an
         // interval, so report idle for an unknown conversation instead of failing.
-        if (!conversationService.conversationExists(conversationId)) {
+        if (!conversationService.conversationExists(conversationId, workspaceId)) {
             return R.ok(Map.of("streamStatus", "idle"));
         }
-        if (!conversationService.isConversationOwner(conversationId, username, workspaceId == null ? 1L : workspaceId)) {
+        if (!conversationService.isConversationOwner(conversationId, username, workspaceId)) {
             return R.fail(403, "无权访问该会话");
         }
         if (streamTracker.isRunning(conversationId)) {
             return R.ok(Map.of("streamStatus", "running"));
         }
         // 回退到数据库持久化的 stream_status（处理服务重启/节点切换场景）
-        String dbStatus = conversationService.getStreamStatus(conversationId);
+        String dbStatus = conversationService.getStreamStatus(conversationId, workspaceId);
         return R.ok(Map.of("streamStatus", dbStatus != null ? dbStatus : "idle"));
+    }
+
+    private <T> R<T> missingWorkspace() {
+        return R.fail(400, "X-Workspace-Id header is required");
     }
 }

@@ -1090,6 +1090,10 @@ export const wikiApi = {
   getConfig: (id: number) => http.get(`/wiki/knowledge-bases/${id}/config`),
   updateConfig: (id: number, content: string) =>
     http.put(`/wiki/knowledge-bases/${id}/config`, { content }),
+  // Whether a usable embedding model is available for this KB (provider live).
+  // Drives the pre-check banner + disabled upload/build controls.
+  getEmbeddingStatus: (id: number) =>
+    http.get(`/wiki/knowledge-bases/${id}/embedding-status`),
 
   // Directory Scan
   setSourceDirectory: (id: number, path: string) =>

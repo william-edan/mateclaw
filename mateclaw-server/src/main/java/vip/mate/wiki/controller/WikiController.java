@@ -18,6 +18,7 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
 import vip.mate.wiki.service.WikiDirectoryScanService;
+import vip.mate.wiki.service.WikiEmbeddingService;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.wiki.service.WikiLintJobService;
 import vip.mate.wiki.service.WikiPageService;
@@ -51,6 +52,7 @@ public class WikiController {
     private final WikiPageService pageService;
     private final WikiProcessingService processingService;
     private final WikiDirectoryScanService scanService;
+    private final WikiEmbeddingService embeddingService;
     private final WikiLintJobService lintJobService;
     private final WikiProperties properties;
     private final WikiProgressBus progressBus;
@@ -63,7 +65,7 @@ public class WikiController {
     @GetMapping("/knowledge-bases")
     public R<List<WikiKnowledgeBaseEntity>> listKBs(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         return R.ok(withLivePageCount(kbService.listByWorkspace(wsId)));
     }
 
@@ -102,7 +104,7 @@ public class WikiController {
     @GetMapping("/knowledge-bases/agent/{agentId}")
     public R<List<WikiKnowledgeBaseEntity>> listKBsByAgent(@PathVariable Long agentId,
                                                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         // 按 agent 查询后，过滤出属于当前 workspace 的知识库
         List<WikiKnowledgeBaseEntity> kbs = kbService.listByAgentId(agentId);
         return R.ok(withLivePageCount(kbs.stream()
@@ -118,7 +120,7 @@ public class WikiController {
         String name = (String) body.get("name");
         String description = (String) body.get("description");
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId, wsId);
         return R.ok(kb);
     }
@@ -200,6 +202,7 @@ public class WikiController {
     public R<Map<String, Object>> scanDirectory(@PathVariable Long id,
                                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(id, workspaceId);
+        embeddingService.requireUsableEmbeddingModel(id);
         WikiDirectoryScanService.ScanResult result = scanService.scan(id);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("scanned", result.scanned());
@@ -247,6 +250,7 @@ public class WikiController {
     public R<WikiRawMaterialEntity> addRawText(@PathVariable Long kbId, @RequestBody Map<String, String> body,
                                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
+        embeddingService.requireUsableEmbeddingModel(kbId);
         String title = body.get("title");
         String content = body.get("content");
         return R.ok(rawService.addText(kbId, title, content));
@@ -259,6 +263,7 @@ public class WikiController {
                                                @RequestParam("file") MultipartFile file,
                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) throws IOException {
         verifyKBWorkspace(kbId, workspaceId);
+        embeddingService.requireUsableEmbeddingModel(kbId);
         String originalName = file.getOriginalFilename();
         String extension = originalName != null && originalName.contains(".")
                 ? originalName.substring(originalName.lastIndexOf(".") + 1).toLowerCase()
@@ -323,6 +328,7 @@ public class WikiController {
         if (raw == null || !kbId.equals(raw.getKbId())) {
             return R.fail(404, "Raw material not found in this knowledge base");
         }
+        embeddingService.requireUsableEmbeddingModel(kbId);
         // Force reprocessing by clearing the hash used to skip unchanged inputs.
         if (force) {
             rawService.setLastProcessedHash(rawId, null);
@@ -533,7 +539,7 @@ public class WikiController {
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String slug,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         List<Map<String, Object>> matches = new java.util.ArrayList<>();
         if ((title == null || title.isBlank()) && (slug == null || slug.isBlank())) {
             return R.ok(matches);
@@ -735,8 +741,20 @@ public class WikiController {
                                              @RequestParam(value = "force", defaultValue = "false") boolean force,
                                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
+        embeddingService.requireUsableEmbeddingModel(kbId);
         int queued = processingService.processKB(kbId, force);
         return R.ok(Map.of("queued", queued, "force", force));
+    }
+
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "查询知识库 Embedding 模型可用性（用于前端在上传/构建前预检与禁用）")
+    @GetMapping("/knowledge-bases/{kbId}/embedding-status")
+    public R<Map<String, Object>> embeddingStatus(@PathVariable Long kbId,
+                                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("available", embeddingService.hasUsableEmbeddingModel(kbId));
+        return R.ok(response);
     }
 
     @RequireWorkspaceRole("viewer")
@@ -881,12 +899,19 @@ public class WikiController {
 
     // ==================== Workspace Verification ====================
 
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
+    }
+
     private void verifyKBWorkspace(Long kbId, Long headerWorkspaceId) {
+        long wsId = requireWorkspaceId(headerWorkspaceId);
         WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
         if (kb == null) {
             throw new MateClawException(404, "Knowledge base not found");
         }
-        long wsId = headerWorkspaceId != null ? headerWorkspaceId : 1L;
         if (kb.getWorkspaceId() != null && !kb.getWorkspaceId().equals(wsId)) {
             throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
         }

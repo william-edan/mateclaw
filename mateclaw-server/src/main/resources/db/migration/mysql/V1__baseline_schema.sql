@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS mate_channel (
 -- 会话表
 CREATE TABLE IF NOT EXISTS mate_conversation (
     id               BIGINT       NOT NULL PRIMARY KEY,
-    conversation_id  VARCHAR(64)  NOT NULL UNIQUE,
+    conversation_id  VARCHAR(64)  NOT NULL,
     title            VARCHAR(256),
     agent_id         BIGINT,
     username         VARCHAR(64),
@@ -164,7 +164,8 @@ CREATE TABLE IF NOT EXISTS mate_conversation (
     create_time      DATETIME     NOT NULL,
     update_time      DATETIME     NOT NULL,
     deleted          INT          NOT NULL DEFAULT 0,
-    INDEX idx_conversation_username (username)
+    INDEX idx_conversation_username (username),
+    UNIQUE KEY uk_conversation_workspace_id (workspace_id, conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 消息表

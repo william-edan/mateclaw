@@ -1,5 +1,6 @@
 package vip.mate.workspace.conversation;
 
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,9 +14,14 @@ import vip.mate.workspace.conversation.repository.ConversationMapper;
 import vip.mate.workspace.conversation.repository.MessageMapper;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -82,5 +88,65 @@ class ConversationServiceWorkspaceIsolationTest {
     void differentUserIsDenied() {
         givenConversation("bob", 1L);
         assertFalse(service.isConversationOwner("c1", "alice", 1L));
+    }
+
+    @Test
+    void getOrCreateDoesNotReuseSameConversationIdFromAnotherWorkspace() {
+        ConversationEntity foreign = new ConversationEntity();
+        foreign.setConversationId("shared-client-id");
+        foreign.setUsername("alice");
+        foreign.setWorkspaceId(1L);
+
+        returnOnlyWhenWorkspaceMatches(foreign);
+
+        ConversationEntity created = service.getOrCreateConversation(
+                "shared-client-id", 10L, "alice", 2L);
+
+        assertNotSame(foreign, created,
+                "workspace 2 must create its own row instead of reusing workspace 1's conversation");
+        verify(conversationMapper).insert(any(ConversationEntity.class));
+    }
+
+    @Test
+    void getOrCreateDoesNotMutateForeignConversationWhenUserDiffers() {
+        ConversationEntity foreign = new ConversationEntity();
+        foreign.setConversationId("shared-client-id");
+        foreign.setUsername("bob");
+        foreign.setWorkspaceId(1L);
+
+        returnOnlyWhenWorkspaceMatches(foreign);
+
+        ConversationEntity created = service.getOrCreateConversation(
+                "shared-client-id", 10L, "alice", 2L);
+
+        assertNotSame(foreign, created,
+                "a foreign conversation with the same client id must be ignored before owner checks");
+        verify(conversationMapper).insert(any(ConversationEntity.class));
+        verify(conversationMapper, never()).updateById(foreign);
+    }
+
+    @Test
+    void renameWithWorkspaceOnlyUpdatesMatchingWorkspaceConversation() {
+        ConversationEntity own = new ConversationEntity();
+        own.setConversationId("shared-client-id");
+        own.setUsername("alice");
+        own.setWorkspaceId(2L);
+        when(conversationMapper.selectOne(any())).thenReturn(own);
+
+        service.renameConversation("shared-client-id", "workspace 2 title", 2L);
+
+        assertEquals("workspace 2 title", own.getTitle());
+        verify(conversationMapper).updateById(own);
+    }
+
+    private void returnOnlyWhenWorkspaceMatches(ConversationEntity row) {
+        doAnswer(invocation -> {
+            Object wrapper = invocation.getArgument(0);
+            if (wrapper instanceof AbstractWrapper<?, ?, ?> query
+                    && query.getParamNameValuePairs().containsValue(row.getWorkspaceId())) {
+                return row;
+            }
+            return null;
+        }).when(conversationMapper).selectOne(any());
     }
 }

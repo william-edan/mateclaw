@@ -1,9 +1,14 @@
 <template>
   <div class="enterprise-shell">
     <header class="enterprise-head">
-      <div class="enterprise-eyebrow">{{ t('enterprise.eyebrow') }}</div>
-      <h1 class="enterprise-title">{{ t('enterprise.title') }}</h1>
-      <p class="enterprise-subtitle">{{ t('enterprise.subtitle') }}</p>
+      <div class="enterprise-head-main">
+        <div class="enterprise-eyebrow">{{ t('enterprise.eyebrow') }}</div>
+        <h1 class="enterprise-title">{{ t('enterprise.title') }}</h1>
+        <p class="enterprise-subtitle">{{ t('enterprise.subtitle') }}</p>
+      </div>
+      <button class="enterprise-contact-cta" @click="showContactDialog = true">
+        {{ t('enterprise.contactCta') }}
+      </button>
     </header>
 
     <nav class="enterprise-tabs">
@@ -24,6 +29,26 @@
       <Approvals v-else-if="activeTab === 'approvals'" />
       <Audit v-else-if="activeTab === 'audit'" />
     </section>
+
+    <Teleport to="body">
+      <div v-if="showContactDialog" class="modal-overlay" @click.self="showContactDialog = false">
+        <div class="modal business-modal" role="dialog" aria-modal="true">
+          <div class="modal-header">
+            <h3>{{ t('enterprise.contactModal.title') }}</h3>
+            <button class="modal-close" @click="showContactDialog = false">&times;</button>
+          </div>
+          <div class="modal-body business-modal-body">
+            <p>{{ t('enterprise.contactModal.desc') }}</p>
+            <img :src="wechatBusinessQr" :alt="t('enterprise.contactModal.desc')" class="business-qr" />
+          </div>
+          <div class="modal-footer">
+            <button class="btn-primary" @click="showContactDialog = false">
+              {{ t('enterprise.contactModal.close') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -35,11 +60,13 @@ import ContractReview from './ContractReview.vue'
 import AccountIntel from './AccountIntel.vue'
 import Approvals from './Approvals.vue'
 import Audit from './Audit.vue'
+import wechatBusinessQr from '@/assets/qrcode/wechat.png'
 
 const { t } = useI18n()
 type TabKey = 'overview' | 'contract' | 'account' | 'approvals' | 'audit'
 const activeTab = ref<TabKey>('overview')
 const caseFocus = ref<string | null>(null)
+const showContactDialog = ref(false)
 
 const tabs = computed<{ key: TabKey; label: string; count: number | null }[]>(() => [
   { key: 'overview', label: t('enterprise.tabs.overview'), count: null },
@@ -71,7 +98,29 @@ function onOpenCase(id: string) {
   overflow: hidden;
 }
 
-.enterprise-head { display: flex; flex-direction: column; gap: 4px; }
+.enterprise-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.enterprise-head-main { display: flex; flex-direction: column; gap: 4px; }
+.enterprise-contact-cta {
+  flex-shrink: 0;
+  border: 1px solid var(--mc-primary);
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary-hover);
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.enterprise-contact-cta:hover {
+  background: var(--mc-primary);
+  color: #fff;
+}
 .enterprise-eyebrow {
   font-size: var(--mc-text-xs);
   color: var(--mc-primary);
@@ -143,5 +192,79 @@ function onOpenCase(id: string) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Contact-us business QR dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border);
+  border-radius: 12px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--mc-border-light);
+}
+.modal-header h3 { font-size: 16px; font-weight: 600; color: var(--mc-text-primary); margin: 0; }
+.modal-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--mc-text-tertiary);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-close:hover { background: var(--mc-bg-hover); }
+.modal-body { padding: 20px; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--mc-border-light);
+}
+.btn-primary {
+  padding: 8px 16px;
+  background: var(--mc-primary, #D97757);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-primary:hover { opacity: 0.9; }
+.business-modal { width: 360px; max-width: 360px; }
+.business-modal-body { text-align: center; }
+.business-modal-body p {
+  margin: 0;
+  color: var(--mc-text-secondary);
+  line-height: 1.6;
+}
+.business-qr {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  margin-top: 12px;
 }
 </style>
