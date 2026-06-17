@@ -636,3 +636,25 @@ agent 是 reactive Flux，靠 [ChatOriginHolder](../../../mateclaw-server/src/ma
 **第 1 部分本次已由主会话直接实现（TDD，测试通过并提交）**，见下文进度。第 2–5 部分两种执行方式：
 1. **Subagent-Driven（推荐）**：每个 Task 派新 subagent + 两段式 review，迭代快。
 2. **Inline**：本会话内按 executing-plans 批量执行 + 检查点。
+
+---
+
+## 6. 收尾：部署/运维项已落地 + 灰度开关清单（2026-06-17）
+
+「部署/运维决策」1–4 项的**代码已全部落地并测试**；剩下的是按下面顺序在部署时翻开关 + 跑回归。
+
+**已直接生效（安全、默认行为）**：
+- **4a** Wiki `pagesByRawId/pagesByChunkId` 补工作区守卫（真·越权修复，已生效）。
+- **4b** V144 防御纵深补列（skill_file/workflow_revision/workflow_run_step/agent_pause，下一迁移 V145）。
+- **item2 回填** `WorkspaceBasePathBackfillRunner`（@Order 6）启动即给存量工作区补 basePath（幂等、非致命）。
+
+**灰度开关（默认全关 = 生产零变化，按此顺序开）**：
+
+| 顺序 | 开关 | 作用 | 前置/注意 |
+|---|---|---|---|
+| ① | `mateclaw.tenant.reactive-context-propagation-enabled` | reactive 链传播工作区（闭合 §2.1、解锁 skill 目录） | 全局 Reactor Hook，影响 19 Flux/12 SSE/8 WebClient，单独窗口灰度 + 回归 |
+| ② | `mateclaw.skill.per-workspace-dir` | skill 目录按工作区分子目录 | 与①同批；存量非默认工作区技能需迁移目录到 `{root}/{wsId}/` |
+| ③ | `mateclaw.workspace.path-guard-fail-closed` | 空 basePath 的文件/Shell 工具改拒绝 | 先确认回填 Runner 已让全量 basePath 非空 |
+| ④ | `mateclaw.tenant.line-interceptor-enabled` + `-tables` | 逐表挂租户拦截器 | 无 100% 干净表；研究推荐首表 **mate_datasource**；忌 mate_agent/conversation（全量扫+跨 ws seed）；INSERT 注入会盖 seed/copy 目标 ws |
+
+> 关键：①②③④**串行灰度、不要叠加**，出问题才能二分定位。④的 fail-closed `getTenantId` 依赖所有路径上下文已绑（off-request 由第 1 部分覆盖、reactive 由①覆盖）。
