@@ -550,6 +550,11 @@ public void verifyKbWorkspace(Long kbId) {
 
 ## 第 3 部分 · P1 注册开通完整性
 
+> 🟡 **部分完成**（2026-06-17，TDD，3 新增测试 + 既有回归全绿）：
+> - ✅ **3.1 默认 Agent**：`WorkspaceService.seedDefaultAgent`（幂等，无 agent 时建 react/enabled 默认 agent）。
+> - ✅ **3.2a basePath 目录创建**：`seedBasePath` 按 `{mateclaw.workspace.base-root:~/.huafanai/workspaces}/{id}` 建目录并回填（仅新工作区）。提交于 Part 3 单次提交。
+> - ⏸ **3.2b PathGuard fail-closed + 存量 basePath 回填**：**延后（部署决策）**——把 [WorkspacePathGuard:55](../../../mateclaw-server/src/main/java/vip/mate/tool/guard/WorkspacePathGuard.java) 的「空 basePath → 不限制」改 fail-closed 会**突然限制/打断存量 null-basePath 工作区**的 file-tool；需先回填存量工作区 basePath（且确认 basePath 可靠流入 ChatOrigin），再灰度切换。
+
 ### Task 3.1: 注册创建默认 Agent
 
 新工作区无 agent → Chat/工具/automation/memory/cron/trigger 全废。[WorkspaceService.create](../../../mateclaw-server/src/main/java/vip/mate/workspace/core/service/WorkspaceService.java) 在 `seedModelConfiguration` 之后补 `seedDefaultAgent(workspaceId)`（幂等：已有 agent 则跳过）。Test: `WorkspaceServiceSeedAgentTest`（create 后该 ws 至少 1 个 agent 且 workspaceId 正确）。完整 TDD。
