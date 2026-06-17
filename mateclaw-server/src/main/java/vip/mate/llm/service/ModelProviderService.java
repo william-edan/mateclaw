@@ -468,6 +468,31 @@ public class ModelProviderService {
         return copy;
     }
 
+    /**
+     * 对所有工作区里 {@link #MANAGED_DEFAULT_PROVIDER_IDS} 的 provider：当 api_key 为空/占位
+     * 且配置文件提供了平台 key 时，回填该 key 并置 enabled=TRUE。幂等，无请求上下文依赖
+     * （按 PK 更新，不经工作区 resolver）。web 模式由 {@code DefaultProviderKeyBootstrap}
+     * 在启动后调用；桌面延迟 seed 模式由 {@code SetupController.init} 调用。
+     */
+    public void applyManagedDefaultProviderKeys() {
+        List<ModelProviderEntity> rows = modelProviderMapper.selectList(
+                new LambdaQueryWrapper<ModelProviderEntity>()
+                        .in(ModelProviderEntity::getProviderId, MANAGED_DEFAULT_PROVIDER_IDS));
+        boolean changed = false;
+        for (ModelProviderEntity row : rows) {
+            String key = managedDefaultKeyFor(row.getProviderId());
+            if (StringUtils.hasText(key) && !hasUsableApiKey(row.getApiKey())) {
+                row.setApiKey(key.trim());
+                row.setEnabled(true);
+                modelProviderMapper.updateById(row);
+                changed = true;
+            }
+        }
+        if (changed) {
+            eventPublisher.publishEvent(new ModelConfigChangedEvent("managed-default-keys-applied"));
+        }
+    }
+
     private void applyRegistrationDefaultProviderKey(ModelProviderEntity copy) {
         String defaultKey = defaultProviderKey(copy.getProviderId());
         if (!StringUtils.hasText(defaultKey)) {

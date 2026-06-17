@@ -65,6 +65,9 @@ public class SetupController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Application already initialized");
         }
 
+        // 桌面延迟 seed：provider 行此刻才插入，立即回填平台默认 key。
+        modelProviderService.applyManagedDefaultProviderKeys();
+
         log.info("Application initialized with language={}", language);
         return R.ok("Initialized with " + language);
     }

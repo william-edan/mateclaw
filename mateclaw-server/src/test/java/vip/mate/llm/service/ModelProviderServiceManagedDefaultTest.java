@@ -130,4 +130,43 @@ class ModelProviderServiceManagedDefaultTest {
         assertEquals("sk-user-own-key-1234", captor.getValue().getApiKey());
         assertEquals("https://api.deepseek.com", captor.getValue().getBaseUrl());
     }
+
+    @Test
+    void applyManagedDefaultKeysFillsEmptyKeyAndEnables() {
+        ModelProviderEntity row = provider("dashscope-default");
+        row.setApiKey("");          // 空 key
+        row.setEnabled(false);
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(row));
+
+        service.applyManagedDefaultProviderKeys();
+
+        ArgumentCaptor<ModelProviderEntity> captor = ArgumentCaptor.forClass(ModelProviderEntity.class);
+        verify(providerMapper).updateById(captor.capture());
+        assertEquals("sk-platform-dash", captor.getValue().getApiKey());
+        assertEquals(Boolean.TRUE, captor.getValue().getEnabled());
+        verify(eventPublisher).publishEvent(any(ModelConfigChangedEvent.class));
+    }
+
+    @Test
+    void applyManagedDefaultKeysSkipsWhenAlreadyConfigured() {
+        ModelProviderEntity row = provider("dashscope-default");
+        row.setApiKey("sk-already-set-1234567890");
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(row));
+
+        service.applyManagedDefaultProviderKeys();
+
+        verify(providerMapper, never()).updateById(any(ModelProviderEntity.class));
+    }
+
+    @Test
+    void applyManagedDefaultKeysSkipsWhenConfigKeyBlank() {
+        keyProps.setDashscope("");   // 平台没配 key
+        ModelProviderEntity row = provider("dashscope-default");
+        row.setApiKey("");
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(row));
+
+        service.applyManagedDefaultProviderKeys();
+
+        verify(providerMapper, never()).updateById(any(ModelProviderEntity.class));
+    }
 }
