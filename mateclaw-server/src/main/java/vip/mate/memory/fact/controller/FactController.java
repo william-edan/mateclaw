@@ -15,7 +15,9 @@ import vip.mate.memory.fact.projection.FactProjectionBuilder;
 import vip.mate.memory.fact.query.FactQueryService;
 import vip.mate.memory.fact.repository.FactContradictionMapper;
 import vip.mate.memory.fact.repository.FactMapper;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.security.AgentWorkspaceVerifier;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -41,12 +43,23 @@ public class FactController {
     private final FactProjectionBuilder projectionBuilder;
     private final WorkspaceFileService workspaceFileService;
     private final MemoryProperties properties;
+    private final AgentWorkspaceVerifier agentWorkspaceVerifier;
+
+    /**
+     * Fail-closed: the path {@code agentId} must belong to the caller's workspace.
+     * Sub-resource checks below only prove the fact/contradiction belongs to that
+     * agentId — not that the agentId belongs to the current workspace.
+     */
+    private void verifyAgent(Long agentId) {
+        agentWorkspaceVerifier.verify(agentId, ModelWorkspaceResolver.currentWorkspaceId());
+    }
 
     @Operation(summary = "List facts for an agent")
     @GetMapping
     @RequireWorkspaceRole("member")
     public R<List<FactEntity>> listFacts(@PathVariable Long agentId,
                                           @RequestParam(required = false) String keyword) {
+        verifyAgent(agentId);
         LambdaQueryWrapper<FactEntity> query = new LambdaQueryWrapper<FactEntity>()
                 .eq(FactEntity::getAgentId, agentId)
                 .eq(FactEntity::getDeleted, 0);
@@ -64,6 +77,7 @@ public class FactController {
     public R<Void> forgetFact(@PathVariable Long agentId,
                                @PathVariable Long factId,
                                Authentication auth) {
+        verifyAgent(agentId);
         if (!properties.getFact().isForgetEnabled()) {
             return R.fail(410, "Forget is disabled");
         }
@@ -119,6 +133,7 @@ public class FactController {
     public R<Void> feedbackFact(@PathVariable Long agentId,
                                  @PathVariable Long factId,
                                  @RequestBody Map<String, String> body) {
+        verifyAgent(agentId);
         String kind = body.get("kind"); // HELPFUL or UNHELPFUL
         if (kind == null || (!kind.equals("HELPFUL") && !kind.equals("UNHELPFUL"))) {
             return R.fail("kind must be HELPFUL or UNHELPFUL");
@@ -167,6 +182,7 @@ public class FactController {
     @GetMapping("/contradictions")
     @RequireWorkspaceRole("member")
     public R<List<FactContradictionEntity>> listContradictions(@PathVariable Long agentId) {
+        verifyAgent(agentId);
         return R.ok(contradictionMapper.selectList(
                 new LambdaQueryWrapper<FactContradictionEntity>()
                         .eq(FactContradictionEntity::getAgentId, agentId)
@@ -182,6 +198,7 @@ public class FactController {
                                          @PathVariable Long contradictionId,
                                          @RequestBody Map<String, String> body,
                                          Authentication auth) {
+        verifyAgent(agentId);
         String resolution = body.get("resolution");
         if (resolution == null || !List.of("KEEP_A", "KEEP_B", "MERGE", "IGNORE").contains(resolution)) {
             return R.fail("resolution must be KEEP_A, KEEP_B, MERGE, or IGNORE");
