@@ -47,6 +47,17 @@ public class ModelProviderService {
     static final java.util.regex.Pattern PROVIDER_ID_PATTERN =
             java.util.regex.Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$");
 
+    /**
+     * 平台托管的「默认版」云端 provider：api_key 由 {@link DefaultProviderKeyProperties}
+     * 注入，UI 上只读、不可删除。新增/调整时与 {@link #managedDefaultKeyFor} 同步。
+     */
+    static final java.util.Set<String> MANAGED_DEFAULT_PROVIDER_IDS = java.util.Set.of(
+            "dashscope-default", "dashscope-compat-default", "deepseek-default");
+
+    static boolean isManagedDefaultProvider(String providerId) {
+        return providerId != null && MANAGED_DEFAULT_PROVIDER_IDS.contains(providerId);
+    }
+
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
@@ -463,12 +474,20 @@ public class ModelProviderService {
     }
 
     private String defaultProviderKey(String providerId) {
+        return managedDefaultKeyFor(providerId);
+    }
+
+    /**
+     * 受管「默认版」provider 的平台 key（来自配置文件）；非受管或未配置返回 null。
+     * 两个 dashscope 默认版共用 dashscope 字段，deepseek 默认版用 deepseek 字段。
+     */
+    public String managedDefaultKeyFor(String providerId) {
         if (defaultProviderKeyProperties == null || providerId == null) {
             return null;
         }
         return switch (providerId) {
-            case "dashscope" -> defaultProviderKeyProperties.getDashscope();
-            case "deepseek" -> defaultProviderKeyProperties.getDeepseek();
+            case "dashscope-default", "dashscope-compat-default" -> defaultProviderKeyProperties.getDashscope();
+            case "deepseek-default" -> defaultProviderKeyProperties.getDeepseek();
             default -> null;
         };
     }
@@ -516,6 +535,7 @@ public class ModelProviderService {
         dto.setAvailable(available);
         dto.setLiveness(providerLiveness);
         dto.setEnabled(Boolean.TRUE.equals(provider.getEnabled()));
+        dto.setManagedKey(isManagedDefaultProvider(provider.getProviderId()));
         applyLivenessDetails(dto, provider.getProviderId(), providerLiveness, liveness);
         dto.setApiKey(maskApiKey(provider.getApiKey()));
         dto.setBaseUrl(provider.getBaseUrl());
