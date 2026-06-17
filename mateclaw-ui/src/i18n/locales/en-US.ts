@@ -760,6 +760,8 @@ export default {
       inlineApiKeyTitle: 'API Key',
       inlineApiKeyPlaceholder: 'Paste API key and press Enter',
       inlineApiKeyMasked: 'Set ••••••••',
+      managedKeyBadge: 'Platform-provided',
+      managedKeyHint: 'Managed by the platform and cannot be changed',
       inlineApiKeyChange: 'Change',
       inlineApiKeySaving: 'Saving…',
       inlineApiKeySaved: 'API key saved',

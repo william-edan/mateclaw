@@ -112,12 +112,14 @@ class ModelProviderServiceWorkspaceIsolationTest {
 
     @Test
     void seedWorkspaceModelsInjectsConfiguredDefaultKeysForNewRegistrations() {
+        // 新设计：平台 key 只注入受管「默认版」provider（dashscope-default / deepseek-default），
+        // 原版 dashscope/deepseek 保持空 key（自带 key 模式），不被平台 key 覆盖。
         when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of())
                 .thenReturn(List.of(
-                        provider("dashscope", 1L, ""),
-                        provider("deepseek", 1L, ""),
-                        provider("openai", 1L, "sk-template")));
+                        provider("dashscope-default", 1L, ""),
+                        provider("deepseek-default", 1L, ""),
+                        provider("dashscope", 1L, "")));
 
         service.seedWorkspaceModels(20L);
 
@@ -127,18 +129,19 @@ class ModelProviderServiceWorkspaceIsolationTest {
         verify(providerMapper, times(3)).insert(captor.capture());
         List<ModelProviderEntity> copies = captor.getAllValues();
 
+        ModelProviderEntity dashscopeDefault = copyByProvider(copies, "dashscope-default");
+        assertEquals(20L, dashscopeDefault.getWorkspaceId());
+        assertEquals("sk-test-dashscope-default", dashscopeDefault.getApiKey());
+        assertTrue(dashscopeDefault.getEnabled());
+
+        ModelProviderEntity deepseekDefault = copyByProvider(copies, "deepseek-default");
+        assertEquals(20L, deepseekDefault.getWorkspaceId());
+        assertEquals("sk-test-deepseek-default", deepseekDefault.getApiKey());
+        assertTrue(deepseekDefault.getEnabled());
+
+        // 原版 dashscope 留空，用户自带 key
         ModelProviderEntity dashscope = copyByProvider(copies, "dashscope");
-        assertEquals(20L, dashscope.getWorkspaceId());
-        assertEquals("sk-test-dashscope-default", dashscope.getApiKey());
-        assertTrue(dashscope.getEnabled());
-
-        ModelProviderEntity deepseek = copyByProvider(copies, "deepseek");
-        assertEquals(20L, deepseek.getWorkspaceId());
-        assertEquals("sk-test-deepseek-default", deepseek.getApiKey());
-        assertTrue(deepseek.getEnabled());
-
-        ModelProviderEntity openai = copyByProvider(copies, "openai");
-        assertEquals("", openai.getApiKey());
+        assertEquals("", dashscope.getApiKey());
         verify(quotaService).ensureDefaultQuotas(20L);
     }
 
