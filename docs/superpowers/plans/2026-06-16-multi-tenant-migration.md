@@ -333,6 +333,12 @@ git commit -m "fix(cron): cronDeliveryExecutor 挂 WorkspaceContextTaskDecorator
 
 ## 第 2 部分 · P0 跨工作区越权修复
 
+> ✅ **本部分已完成**（2026-06-17，TDD，36 个新增/扩展测试全绿，无回归）。提交：
+> §2.0 `895ea8c9`、§2.4 `86802052`、§2.3 `4024b632`、§2.6 `0bf6756a`、§2.1 `c38a8dc2`、§2.5 `f06e54af`、§2.2 `2ebb601d`。
+> **两处有意保留的残留**（不阻断本部分，已在对应任务说明）：
+> - §2.1 skill-secret 采用 **enforce-when-bound**：holder 未绑的 reactive agent 路径暂不强制（避免误伤非 ws1 合法技能），待**第 5 部分**的 reactive 上下文传播落地后自动生效。
+> - §2.2 Wiki 的 `pagesByRawId` / `pagesByChunkId`（按 rawId/chunkId，非 kbId）未加守卫，需 raw/chunk→KB 二跳解析，列为后续。
+
 > 先做 §2.0 公共组件，再做 6 项破口。skill-secret（§2.1）需在**第 1 部分**之后合入。
 
 ### Task 2.0: 公共 AgentWorkspaceVerifier（消除三处重复）
