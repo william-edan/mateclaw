@@ -253,7 +253,12 @@ const totalModelCount = computed(() =>
   (props.provider.models?.length || 0) + (props.provider.extraModels?.length || 0)
 )
 
-const hasQuota = computed(() => props.provider.quotaRemainingTokens !== undefined)
+// Only managed providers (built-in credits) carry a quota; custom providers
+// configured with the user's own key return null from the backend. Use a loose
+// null check so a serialized `null` doesn't slip through `!== undefined`.
+const hasQuota = computed(
+  () => !props.provider.isCustom && props.provider.quotaRemainingTokens != null
+)
 
 /**
  * Single source of truth for the headline pill — collapses liveness + configured

@@ -21,6 +21,7 @@ import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -231,7 +232,7 @@ class AuthServiceRegisterTest {
     }
 
     @Test
-    void loginAllowsExpiredUserAndReturnsExpiryFields() {
+    void loginAllowsExpiredUserAndReturnsExpiryFieldsAndCurrentWorkspace() {
         LocalDateTime expiresAt = LocalDateTime.now().minusDays(1);
         UserEntity user = new UserEntity();
         user.setId(99L);
@@ -247,6 +248,9 @@ class AuthServiceRegisterTest {
         when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(user);
         when(passwordEncoder.matches("pass1234", "$2a$hash")).thenReturn(true);
         when(entitlementService.isExpired(user)).thenReturn(true);
+        WorkspaceEntity workspace = new WorkspaceEntity();
+        workspace.setId(321L);
+        when(workspaceService.listByUserId(99L)).thenReturn(List.of(workspace));
 
         LoginResponse response = authService.login(request);
 
@@ -257,7 +261,7 @@ class AuthServiceRegisterTest {
         assertNotNull(response.getToken());
         assertEquals(expiresAt, response.getExpiresAt());
         assertTrue(response.isExpired());
-        assertEquals(null, response.getCurrentWorkspaceId());
+        assertEquals(321L, response.getCurrentWorkspaceId());
         verify(entitlementService).isExpired(user);
         verify(entitlementService, never()).requireActive(any(UserEntity.class));
     }

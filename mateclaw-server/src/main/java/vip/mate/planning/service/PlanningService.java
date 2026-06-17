@@ -5,6 +5,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
+import vip.mate.exception.MateClawException;
 import vip.mate.planning.model.PlanEntity;
 import vip.mate.planning.model.SubPlanEntity;
 import vip.mate.planning.repository.PlanMapper;
@@ -28,6 +31,7 @@ public class PlanningService {
 
     private final PlanMapper planMapper;
     private final SubPlanMapper subPlanMapper;
+    private final AgentMapper agentMapper;
 
     /**
      * 创建执行计划（由 StateGraphPlanExecuteAgent 调用）
@@ -103,20 +107,22 @@ public class PlanningService {
     }
 
     /**
-     * 获取 Agent 的计划列表
+     * 获取 Agent 的计划列表（限定调用方所在工作区）
      */
-    public List<PlanEntity> listPlansByAgent(String agentId) {
+    public List<PlanEntity> listPlansByAgent(String agentId, long workspaceId) {
+        verifyAgentWorkspace(agentId, workspaceId);
         return planMapper.selectList(new LambdaQueryWrapper<PlanEntity>()
                 .eq(PlanEntity::getAgentId, agentId)
                 .orderByDesc(PlanEntity::getCreateTime));
     }
 
     /**
-     * 获取计划详情（含子计划）
+     * 获取计划详情（含子计划，限定调用方所在工作区）
      */
-    public PlanEntity getPlanWithSteps(Long planId) {
+    public PlanEntity getPlanWithSteps(Long planId, long workspaceId) {
         PlanEntity plan = planMapper.selectById(planId);
         if (plan != null) {
+            verifyAgentWorkspace(plan.getAgentId(), workspaceId);
             List<SubPlanEntity> steps = subPlanMapper.selectList(
                     new LambdaQueryWrapper<SubPlanEntity>()
                             .eq(SubPlanEntity::getPlanId, planId)
@@ -201,6 +207,32 @@ public class PlanningService {
     /** replay 恢复上下文 DTO */
     public record PlanResumeContext(Long planId, List<String> steps, int awaitingStepIndex,
                                     List<String> completedResults) {}
+
+    /**
+     * Reject access when the plan's owning agent does not belong to the caller's
+     * workspace. A plan has no {@code workspace_id} of its own, so the agent
+     * (which is workspace-scoped) is the source of truth.
+     */
+    private void verifyAgentWorkspace(String agentId, long workspaceId) {
+        Long agentWorkspaceId = resolveAgentWorkspace(agentId);
+        if (agentWorkspaceId != null && agentWorkspaceId != workspaceId) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
+        }
+    }
+
+    private Long resolveAgentWorkspace(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            return null;
+        }
+        Long id;
+        try {
+            id = Long.valueOf(agentId.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+        AgentEntity agent = agentMapper.selectById(id);
+        return agent == null ? null : agent.getWorkspaceId();
+    }
 
     private SubPlanEntity getSubPlan(Long planId, int stepIndex) {
         return subPlanMapper.selectOne(new LambdaQueryWrapper<SubPlanEntity>()

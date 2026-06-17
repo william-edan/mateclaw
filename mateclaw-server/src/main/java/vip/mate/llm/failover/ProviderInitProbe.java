@@ -191,11 +191,15 @@ public class ProviderInitProbe {
         if (!StringUtils.hasText(providerId)) {
             return ProbeResult.fail(0, "providerId is blank");
         }
-        ModelProviderEntity provider = providerMapper.selectById(providerId);
+        // Resolve by the providerId COLUMN (scoped to the current workspace),
+        // not selectById — providerId is the business id string, not the numeric
+        // primary key, so selectById never matched and reprobe always reported
+        // "provider not found".
+        ModelProviderEntity provider = providerService.getProviderOrNull(providerId);
         if (provider == null) {
             return ProbeResult.fail(0, "provider not found: " + providerId);
         }
-        if (!providerService.isProviderConfigured(providerId)) {
+        if (!providerService.isProviderConfigured(provider)) {
             ProbeResult r = ProbeResult.fail(0, "provider not configured");
             pool.remove(providerId, AvailableProviderPool.RemovalSource.INIT_PROBE, r.errorMessage());
             return r;
@@ -233,9 +237,15 @@ public class ProviderInitProbe {
         // RFC-074: skip rows the user hasn't opted into — no point spending
         // probe budget on disabled built-ins (Ollama / LM Studio / etc.) that
         // wouldn't show up in the dropdown anyway.
+        // Check configuration against the entity in hand, NOT a workspace-scoped
+        // re-lookup by providerId. This probe runs on an async thread with no
+        // request context, so the resolver falls back to the default workspace;
+        // re-querying by id would throw for any provider that lives in another
+        // workspace (e.g. a user-created custom provider) and abort the whole
+        // batch, leaving that provider stuck UNPROBED.
         return providerMapper.selectList(null).stream()
                 .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
-                .filter(p -> providerService.isProviderConfigured(p.getProviderId()))
+                .filter(providerService::isProviderConfigured)
                 .toList();
     }
 

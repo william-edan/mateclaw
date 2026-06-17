@@ -25,7 +25,7 @@ import java.util.Map;
  * <p>
  * 对标注了 {@link RequireWorkspaceRole} 的 Controller 方法，自动校验：
  * 1. 当前用户已认证
- * 2. 请求中有 X-Workspace-Id header（否则使用默认 workspace=1）
+ * 2. 请求中有合法的 X-Workspace-Id header
  * 3. 用户是该 workspace 的成员且角色 ≥ 注解要求的最低角色
  * <p>
  * 成员资格查询使用 Caffeine 缓存（60s TTL），避免每次请求查库。
@@ -40,9 +40,6 @@ public class WorkspaceAccessInterceptor implements HandlerInterceptor {
     private final WorkspaceService workspaceService;
     private final AuthService authService;
     private final AgentMapper agentMapper;
-
-    /** 默认 workspace ID（未传 header 时使用） */
-    private static final long DEFAULT_WORKSPACE_ID = 1L;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -89,7 +86,13 @@ public class WorkspaceAccessInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        long workspaceId = resolveWorkspaceId(request);
+        Long workspaceId = resolveWorkspaceId(request);
+        if (workspaceId == null) {
+            log.warn("Workspace access denied: missing or invalid X-Workspace-Id, user={}, path={}",
+                    username, request.getRequestURI());
+            sendError(response, HttpServletResponse.SC_BAD_REQUEST, "X-Workspace-Id header is required");
+            return false;
+        }
         String minRole = annotation.value();
         if (!workspaceService.hasPermissionCached(workspaceId, user.getId(), minRole)) {
             log.warn("Workspace access denied: user={}, workspaceId={}, requiredRole={}", username, workspaceId, minRole);
@@ -141,21 +144,25 @@ public class WorkspaceAccessInterceptor implements HandlerInterceptor {
         return agent.getWorkspaceId() == workspaceId;
     }
 
-    private long resolveWorkspaceId(HttpServletRequest request) {
+    private Long resolveWorkspaceId(HttpServletRequest request) {
         String header = request.getHeader("X-Workspace-Id");
         if (header != null && !header.isBlank()) {
             try {
                 return Long.parseLong(header.trim());
             } catch (NumberFormatException e) {
-                return DEFAULT_WORKSPACE_ID;
+                return null;
             }
         }
-        return DEFAULT_WORKSPACE_ID;
+        return null;
     }
 
     private void sendForbidden(HttpServletResponse response, String message) throws Exception {
-        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        sendError(response, HttpServletResponse.SC_FORBIDDEN, message);
+    }
+
+    private void sendError(HttpServletResponse response, int status, String message) throws Exception {
+        response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write("{\"code\":403,\"msg\":\"" + message + "\",\"data\":null}");
+        response.getWriter().write("{\"code\":" + status + ",\"msg\":\"" + message + "\",\"data\":null}");
     }
 }

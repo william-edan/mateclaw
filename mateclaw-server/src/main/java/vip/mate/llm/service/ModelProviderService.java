@@ -248,6 +248,27 @@ public class ModelProviderService {
         return isProviderEnabledAndConfigured(provider) && hasModels(providerId);
     }
 
+    /**
+     * RFC-073: true only when the provider has completed init probe and is
+     * currently {@link Liveness#LIVE} in the failover pool — i.e. it passed
+     * authentication and is not REMOVED (auth/billing failure), COOLDOWN,
+     * UNPROBED or UNCONFIGURED.
+     * <p>
+     * Stronger than {@link #isProviderConfigured} (only checks a non-placeholder
+     * key is present) and {@link #isProviderAvailable} (enabled + configured +
+     * has models) — both of which ignore the probe result. A provider whose key
+     * returns 401 passes those two but fails this one. The wiki embedding path
+     * uses this so a knowledge base is never built against a provider that
+     * cannot actually authenticate.
+     */
+    public boolean isProviderLive(String providerId) {
+        ModelProviderEntity provider = getProviderOrNull(providerId);
+        if (provider == null) {
+            return false;
+        }
+        return computeLiveness(provider, isProviderConfigured(provider), livenessContext()) == Liveness.LIVE;
+    }
+
     public String getProviderUnavailableReason(String providerId) {
         ModelProviderEntity provider = getProvider(providerId);
         if (!Boolean.TRUE.equals(provider.getEnabled())) {
@@ -452,7 +473,14 @@ public class ModelProviderService {
         };
     }
 
-    private ModelProviderEntity getProviderOrNull(String providerId) {
+    /**
+     * Look up a provider in the current workspace by its {@code providerId}
+     * string, returning {@code null} when absent. Public so callers like the
+     * manual-reprobe path can resolve the entity without the not-found throw of
+     * {@link #getProviderConfig(String)} — and without misusing the numeric
+     * primary key (the {@code providerId} column is not the {@code id} PK).
+     */
+    public ModelProviderEntity getProviderOrNull(String providerId) {
         return modelProviderMapper.selectOne(new LambdaQueryWrapper<ModelProviderEntity>()
                 .eq(ModelProviderEntity::getWorkspaceId, ModelWorkspaceResolver.currentWorkspaceId())
                 .eq(ModelProviderEntity::getProviderId, providerId)
@@ -627,7 +655,7 @@ public class ModelProviderService {
         return !modelConfigService.listModelsByProvider(providerId).isEmpty();
     }
 
-    private boolean isProviderConfigured(ModelProviderEntity provider) {
+    public boolean isProviderConfigured(ModelProviderEntity provider) {
         if (provider == null) {
             return false;
         }

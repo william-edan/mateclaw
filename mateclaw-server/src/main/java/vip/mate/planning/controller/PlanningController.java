@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.planning.model.PlanEntity;
 import vip.mate.planning.service.PlanningService;
+import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.List;
 
@@ -25,13 +26,19 @@ public class PlanningController {
 
     @Operation(summary = "获取 Agent 的计划列表")
     @GetMapping
-    public R<List<PlanEntity>> listByAgent(@RequestParam String agentId) {
-        return R.ok(planningService.listPlansByAgent(agentId));
+    @RequireWorkspaceRole("viewer")
+    public R<List<PlanEntity>> listByAgent(
+            @RequestParam String agentId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(planningService.listPlansByAgent(agentId, workspaceId == null ? 1L : workspaceId));
     }
 
     @Operation(summary = "获取计划详情（含步骤）")
     @GetMapping("/{id}")
-    public R<PlanEntity> getPlan(@PathVariable Long id) {
-        return R.ok(planningService.getPlanWithSteps(id));
+    @RequireWorkspaceRole("viewer")
+    public R<PlanEntity> getPlan(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(planningService.getPlanWithSteps(id, workspaceId == null ? 1L : workspaceId));
     }
 }

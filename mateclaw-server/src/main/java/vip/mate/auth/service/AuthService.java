@@ -67,7 +67,7 @@ public class AuthService {
         }
 
         String token = generateToken(user);
-        return loginResponse(user, token, null);
+        return loginResponse(user, token, resolveCurrentWorkspaceId(user.getId()));
     }
 
     /**
@@ -125,6 +125,19 @@ public class AuthService {
                 user.getExpiresAt(),
                 accountEntitlementService.isExpired(user),
                 currentWorkspaceId);
+    }
+
+    private Long resolveCurrentWorkspaceId(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        try {
+            List<WorkspaceEntity> workspaces = workspaceService.listByUserId(userId);
+            return workspaces == null || workspaces.isEmpty() ? null : workspaces.get(0).getId();
+        } catch (Exception e) {
+            log.warn("[AuthService] Failed to resolve current workspace for user {}: {}", userId, e.getMessage());
+            return null;
+        }
     }
 
     /**

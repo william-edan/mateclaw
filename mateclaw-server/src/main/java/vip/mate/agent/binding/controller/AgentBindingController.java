@@ -139,13 +139,20 @@ public class AgentBindingController {
     // ==================== Workspace Verification ====================
 
     private void verifyAgentWorkspace(Long agentId, Long headerWorkspaceId) {
+        long requestedWs = requireWorkspaceId(headerWorkspaceId);
         AgentEntity agent = agentService.getAgent(agentId);
         if (agent == null) {
             throw new MateClawException("Agent not found");
         }
-        long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
         if (agent.getWorkspaceId() != null && !agent.getWorkspaceId().equals(requestedWs)) {
             throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
         }
+    }
+
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
     }
 }

@@ -201,6 +201,33 @@ class ApprovalGrantControllerTest {
     class ListRevoke {
 
         @Test
+        void list_requires_workspace_header() {
+            assertThatThrownBy(() ->
+                    controller.list(null, null, null, true, 1L, 20L, null, memberAuth))
+                    .isInstanceOf(MateClawException.class)
+                    .extracting("code")
+                    .isEqualTo(400);
+        }
+
+        @Test
+        void active_summary_requires_workspace_header() {
+            assertThatThrownBy(() -> controller.activeSummary(null))
+                    .isInstanceOf(MateClawException.class)
+                    .extracting("code")
+                    .isEqualTo(400);
+        }
+
+        @Test
+        void revoke_requires_workspace_header_before_lookup() {
+            assertThatThrownBy(() -> controller.revoke(123L, null, memberAuth))
+                    .isInstanceOf(MateClawException.class)
+                    .extracting("code")
+                    .isEqualTo(400);
+
+            verify(grantMapper, never()).selectById(anyLong());
+        }
+
+        @Test
         void list_mine_does_not_require_admin() {
             // selectPage returns a Page object; the test only cares about the auth
             // path, so the mapper stub just needs to not NPE.
@@ -271,6 +298,15 @@ class ApprovalGrantControllerTest {
 
     @Nested
     class Resolutions {
+
+        @Test
+        void list_resolutions_requires_workspace_header() {
+            assertThatThrownBy(() ->
+                    controller.listResolutions(null, "conv-1", 100, null, memberAuth))
+                    .isInstanceOf(MateClawException.class)
+                    .extracting("code")
+                    .isEqualTo(400);
+        }
 
         @Test
         void grant_id_query_requires_admin() {

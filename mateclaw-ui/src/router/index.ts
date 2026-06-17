@@ -121,7 +121,7 @@ const router = createRouter({
           path: 'plugins',
           name: 'Plugins',
           component: () => import('@/views/Plugins.vue'),
-          meta: { title: 'Plugins', requiredCapability: 'manage:settings' },
+          meta: { title: 'Plugins', requireAdmin: true },
         },
         // ==================== Settings (absorbs advanced pages) ====================
         {
@@ -139,7 +139,7 @@ const router = createRouter({
               path: 'system',
               name: 'SettingsSystem',
               component: () => import('@/views/Settings/System/index.vue'),
-              meta: { title: 'Settings - System', requiredCapability: 'manage:settings' },
+              meta: { title: 'Settings - System', requireAdmin: true },
             },
             {
               path: 'image',
@@ -254,7 +254,7 @@ const router = createRouter({
               path: 'feature-flags',
               name: 'SettingsFeatureFlags',
               component: () => import('@/views/Settings/FeatureFlags/index.vue'),
-              meta: { title: 'Settings - Feature Flags', requiredCapability: 'manage:settings' },
+              meta: { title: 'Settings - Feature Flags', requireAdmin: true },
             },
             {
               path: 'about',
@@ -274,13 +274,13 @@ const router = createRouter({
               path: 'tool-guard',
               name: 'SecurityToolGuard',
               component: () => import('@/views/Security/ToolGuard/index.vue'),
-              meta: { title: 'Security - Tool Guard', requiredCapability: 'manage:security' },
+              meta: { title: 'Security - Tool Guard', requireAdmin: true },
             },
             {
               path: 'file-guard',
               name: 'SecurityFileGuard',
               component: () => import('@/views/Security/FileGuard/index.vue'),
-              meta: { title: 'Security - File Guard', requiredCapability: 'manage:security' },
+              meta: { title: 'Security - File Guard', requireAdmin: true },
             },
             {
               path: 'audit-logs',

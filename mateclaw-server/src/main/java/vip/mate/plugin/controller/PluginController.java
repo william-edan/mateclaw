@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.plugin.PluginManager;
 import vip.mate.plugin.model.PluginInfo;
+import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.List;
@@ -41,7 +42,7 @@ public class PluginController {
 
     @Operation(summary = "Disable a plugin")
     @PostMapping("/{name}/disable")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> disable(@PathVariable String name) {
         pluginManager.disablePlugin(name);
         return R.ok();
@@ -49,7 +50,7 @@ public class PluginController {
 
     @Operation(summary = "Enable a plugin")
     @PostMapping("/{name}/enable")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> enable(@PathVariable String name) {
         pluginManager.enablePlugin(name);
         return R.ok();
@@ -57,7 +58,7 @@ public class PluginController {
 
     @Operation(summary = "Update plugin configuration")
     @PutMapping("/{name}/config")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> updateConfig(@PathVariable String name,
                                 @RequestBody Map<String, Object> config) {
         pluginManager.updateConfig(name, config);

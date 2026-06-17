@@ -17,6 +17,7 @@ import vip.mate.os.run.repository.LeadCommentMapper;
 import vip.mate.os.run.repository.LeadEngagementMapper;
 import vip.mate.os.run.repository.LeadProfileMapper;
 import vip.mate.os.run.repository.LeadTaskMapper;
+import vip.mate.exception.MateClawException;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -456,6 +457,39 @@ public class DouyinLeadAcquisitionQueryService {
                 .stream()
                 .map(RunTimelineEventDTO::from)
                 .toList();
+    }
+
+    /**
+     * Reject a request whose {@code runId} does not belong to {@code workspaceId}.
+     * Controller-facing guard for run-scoped endpoints — closes the cross-workspace
+     * IDOR where {@code @RequireWorkspaceRole} only proves membership, not ownership.
+     */
+    public void assertRunInWorkspace(long workspaceId, Long runId) {
+        AgentRunEntity run = requireRun(runId);
+        if (run.getWorkspaceId() != null && run.getWorkspaceId() != workspaceId) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
+        }
+    }
+
+    /**
+     * Reject a request whose {@code taskId} does not belong to {@code workspaceId}.
+     * Guards the comment / profile / engagement read paths that key off taskId.
+     */
+    public void assertTaskInWorkspace(long workspaceId, Long taskId) {
+        LeadTaskEntity task = requireTask(taskId);
+        if (task.getWorkspaceId() != null && task.getWorkspaceId() != workspaceId) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
+        }
+    }
+
+    /**
+     * The owning workspace of a run, for SSE endpoints that cannot carry an
+     * {@code X-Workspace-Id} header (native {@code EventSource}). The caller
+     * derives the workspace from the run itself and verifies the authenticated
+     * user's membership server-side — never trusting a client-supplied value.
+     */
+    public Long runWorkspaceId(Long runId) {
+        return requireRun(runId).getWorkspaceId();
     }
 
     private AgentRunEntity requireRun(Long runId) {
