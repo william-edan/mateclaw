@@ -819,10 +819,13 @@ function showRechargeQr() {
   color: var(--mc-danger);
 }
 .cred-managed-badge {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--mc-fill-secondary, rgba(127, 127, 127, 0.12));
-  color: var(--mc-text-secondary, #888);
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(156, 163, 175, 0.14);
+  color: var(--mc-text-tertiary, #888);
 }
 </style>

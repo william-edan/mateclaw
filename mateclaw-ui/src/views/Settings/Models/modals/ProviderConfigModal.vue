@@ -87,12 +87,12 @@
               autocomplete="off"
             />
             <div class="field-hint">
-              {{ editingProvider?.managedKey ? t('settings.model.managedKeyBadge') : t('settings.model.leaveBlankKeep') }}
+              {{ editingProvider?.managedKey ? t('settings.model.managedKeyHint') : t('settings.model.leaveBlankKeep') }}
             </div>
           </div>
           <div v-if="editingProvider?.authType !== 'oauth' && (form.protocol !== 'openai-compatible' || form.requireApiKey)" class="form-group">
             <label class="form-label">{{ t('settings.model.fields.apiKeyPrefix') }}</label>
-            <input v-model="form.apiKeyPrefix" class="form-input" />
+            <input v-model="form.apiKeyPrefix" class="form-input" :disabled="!!editingProvider?.managedKey" />
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('settings.model.fields.protocol') }}</label>
