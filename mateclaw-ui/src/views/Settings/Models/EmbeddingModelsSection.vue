@@ -167,14 +167,19 @@ const form = reactive({
 async function loadAll() {
   loading.value = true
   try {
-    const [listRes, defaultRes, providerRes] = await Promise.all([
+    // allSettled, not all: getDefaultEmbedding()/listProviders() can 403 for a
+    // non-global-admin workspace owner; a single rejection must never discard the
+    // embedding list (the bug where a freshly-registered user saw "no models").
+    const [listRes, defaultRes, providerRes] = await Promise.allSettled([
       modelApi.listByType('embedding'),
       modelApi.getDefaultEmbedding(),
       modelApi.listProviders(),
     ])
-    models.value = (listRes.data as EmbeddingModel[]) || []
-    defaultModelId.value = String((defaultRes.data as any)?.defaultModelId || '')
-    providers.value = ((providerRes.data as any[]) || []).map(p => ({ id: p.id, name: p.name }))
+    models.value = listRes.status === 'fulfilled' ? ((listRes.value.data as EmbeddingModel[]) || []) : []
+    defaultModelId.value = defaultRes.status === 'fulfilled' ? String((defaultRes.value.data as any)?.defaultModelId || '') : ''
+    providers.value = providerRes.status === 'fulfilled'
+      ? (((providerRes.value.data as any[]) || []).map(p => ({ id: p.id, name: p.name })))
+      : []
   } catch (e: any) {
     console.error('[EmbeddingModels] Load failed:', e?.message)
   } finally {

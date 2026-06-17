@@ -295,7 +295,9 @@ const AUTO_OPEN_KEY = 'rfc074-add-provider-auto-opened'
 
 onMounted(async () => {
   try {
-    await Promise.all([loadProviders(), loadActiveModel()])
+    // allSettled: loadProviders() is admin-only; a member's 403 must not block
+    // loadActiveModel() (viewer-readable) nor leave the page stuck loading.
+    await Promise.allSettled([loadProviders(), loadActiveModel()])
   } finally {
     loading.value = false
   }
