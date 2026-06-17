@@ -105,4 +105,21 @@ class WorkspaceServiceSeedTest {
 
         verify(agentMapper, org.mockito.Mockito.never()).insert(any(AgentEntity.class));
     }
+
+    @Test
+    void backfillMissingBasePathsFixesOnlyNullOnes() {
+        WorkspaceEntity withPath = new WorkspaceEntity();
+        withPath.setId(1L);
+        withPath.setBasePath("/already/set");
+        WorkspaceEntity withoutPath = new WorkspaceEntity();
+        withoutPath.setId(2L);
+        when(workspaceMapper.selectList(any())).thenReturn(java.util.List.of(withPath, withoutPath));
+
+        int fixed = service.backfillMissingBasePaths();
+
+        assertThat(fixed).isEqualTo(1);
+        assertThat(withPath.getBasePath()).isEqualTo("/already/set"); // untouched
+        assertThat(withoutPath.getBasePath()).isEqualTo(tempRoot.resolve("2").toString());
+        assertThat(Files.isDirectory(Path.of(withoutPath.getBasePath()))).isTrue();
+    }
 }

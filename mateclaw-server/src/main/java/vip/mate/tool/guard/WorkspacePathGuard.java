@@ -29,6 +29,21 @@ public final class WorkspacePathGuard {
     private WorkspacePathGuard() {}
 
     /**
+     * When true, a tool call whose workspace has no basePath is DENIED instead of
+     * running unsandboxed (the historical fail-open behaviour that let a null-basePath
+     * workspace's file/shell tools reach the whole filesystem). OFF by default; set
+     * via {@code mateclaw.workspace.path-guard-fail-closed} by WorkspacePathGuardConfig.
+     * Must only be enabled after WorkspaceBasePathBackfillRunner has populated every
+     * workspace's basePath. Kept as {@link IllegalArgumentException} so existing tool
+     * catch-blocks surface it as a normal tool error rather than a 500.
+     */
+    private static volatile boolean failClosed = false;
+
+    public static void setFailClosed(boolean value) {
+        failClosed = value;
+    }
+
+    /**
      * 校验文件路径是否在当前工作区活动目录范围内。
      * <p>
      * 从 {@link ToolExecutionContext#workspaceBasePath()} 读取当前活动目录。
@@ -53,7 +68,11 @@ public final class WorkspacePathGuard {
 
         String basePath = resolveBasePath(ctx);
         if (basePath == null || basePath.isBlank()) {
-            return normalized; // 未配置活动目录，不限制
+            if (failClosed) {
+                throw new IllegalArgumentException(
+                        "Workspace has no configured basePath; file access denied (path-guard fail-closed)");
+            }
+            return normalized; // 未配置活动目录，不限制（fail-open，灰度前的旧行为）
         }
 
         Path root = Paths.get(basePath).toAbsolutePath().normalize();
@@ -145,7 +164,13 @@ public final class WorkspacePathGuard {
     public static void validateShellCommand(String command, @Nullable ToolContext ctx) {
         if (command == null || command.isEmpty()) return;
         String basePath = resolveBasePath(ctx);
-        if (basePath == null || basePath.isBlank()) return;
+        if (basePath == null || basePath.isBlank()) {
+            if (failClosed) {
+                throw new IllegalArgumentException(
+                        "Workspace has no configured basePath; shell command denied (path-guard fail-closed)");
+            }
+            return; // fail-open（灰度前的旧行为）
+        }
         Path root = Paths.get(basePath).toAbsolutePath().normalize();
 
         // 1. Tilde — expands to $HOME, always outside a non-$HOME workspace.

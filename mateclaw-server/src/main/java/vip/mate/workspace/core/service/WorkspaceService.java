@@ -258,6 +258,28 @@ public class WorkspaceService {
         }
     }
 
+    /**
+     * Backfill the basePath of existing workspaces created before basePath
+     * seeding existed (their column is null → file-tool sandbox is unbounded).
+     * Idempotent: {@link #seedBasePath} skips workspaces that already have one.
+     * Run once at startup; a prerequisite for enabling WorkspacePathGuard
+     * fail-closed mode (every workspace must have a basePath first).
+     *
+     * @return number of workspaces that got a freshly-created basePath
+     */
+    public int backfillMissingBasePaths() {
+        int fixed = 0;
+        for (WorkspaceEntity ws : listAll()) {
+            if (ws.getBasePath() == null || ws.getBasePath().isBlank()) {
+                seedBasePath(ws);
+                if (ws.getBasePath() != null && !ws.getBasePath().isBlank()) {
+                    fixed++;
+                }
+            }
+        }
+        return fixed;
+    }
+
     private void seedModelConfiguration(Long workspaceId) {
         if (workspaceId == null || modelProviderService == null) return;
         try {
