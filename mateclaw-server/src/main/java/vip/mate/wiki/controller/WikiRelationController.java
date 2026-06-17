@@ -12,7 +12,9 @@ import vip.mate.wiki.job.event.WikiJobCreatedEvent;
 import vip.mate.wiki.repository.WikiProcessingJobMapper;
 import vip.mate.wiki.job.model.WikiProcessingJobEntity;
 import vip.mate.wiki.model.WikiPageEntity;
+import vip.mate.wiki.repository.WikiChunkMapper;
 import vip.mate.wiki.repository.WikiPageCitationMapper;
+import vip.mate.wiki.repository.WikiRawMaterialMapper;
 import vip.mate.wiki.service.*;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
@@ -39,6 +41,8 @@ public class WikiRelationController {
     private final ObjectMapper objectMapper;
     private final WikiEmbeddingService embeddingService;
     private final WikiKnowledgeBaseService kbService;
+    private final WikiRawMaterialMapper rawMaterialMapper;
+    private final WikiChunkMapper chunkMapper;
 
     // ==================== RFC-029: Relations ====================
 
@@ -62,13 +66,28 @@ public class WikiRelationController {
         return relationService.explain(kbId, slugA, slugB);
     }
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/raw/{rawId}/pages")
     public List<WikiPageLite> pagesByRawId(@PathVariable Long rawId) {
+        // raw/chunk carry no reliable workspace_id (V143's column is nullable +
+        // not written on insert → fail-open). The owning KB is the authority:
+        // resolve raw → kbId and reuse the same fail-closed guard as /kb/** endpoints.
+        var raw = rawMaterialMapper.selectById(rawId);
+        if (raw == null) {
+            return List.of();
+        }
+        kbService.verifyKbWorkspace(raw.getKbId());
         return relationService.pagesByRawId(rawId);
     }
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/chunks/{chunkId}/pages")
     public List<WikiPageLite> pagesByChunkId(@PathVariable Long chunkId) {
+        var chunk = chunkMapper.selectById(chunkId);
+        if (chunk == null) {
+            return List.of();
+        }
+        kbService.verifyKbWorkspace(chunk.getKbId());
         return relationService.pagesByChunkId(chunkId);
     }
 
