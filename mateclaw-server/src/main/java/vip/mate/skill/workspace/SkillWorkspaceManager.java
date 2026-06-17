@@ -2,8 +2,10 @@ package vip.mate.skill.workspace;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -29,6 +31,18 @@ public class SkillWorkspaceManager {
     private final SkillWorkspaceProperties properties;
     private final ApplicationEventPublisher eventPublisher;
 
+    /**
+     * Gated per-workspace skill directory isolation. OFF by default → flat legacy
+     * layout {@code {root}/{skillName}} (current behaviour, zero migration). When ON,
+     * non-default workspaces get an isolated subtree {@code {root}/{wsId}/...} while
+     * the default workspace keeps the legacy flat root. Couple this with
+     * {@code mateclaw.tenant.reactive-context-propagation-enabled}: without reactive
+     * propagation the agent path resolves ws=1 and skills of other workspaces would be
+     * looked up under the legacy root.
+     */
+    @Value("${mateclaw.skill.per-workspace-dir:false}")
+    private boolean perWorkspaceDir;
+
     private static final DateTimeFormatter ARCHIVE_TS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
     // ==================== 路径解析 ====================
@@ -38,6 +52,14 @@ public class SkillWorkspaceManager {
      */
     public Path getWorkspaceRoot() {
         Path root = Paths.get(properties.getRoot());
+        if (perWorkspaceDir) {
+            long ws = ModelWorkspaceResolver.currentWorkspaceId();
+            if (ws != ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID) {
+                // Default workspace keeps the legacy flat layout so existing skill
+                // dirs resolve unchanged; others get an isolated numeric subtree.
+                root = root.resolve(Long.toString(ws));
+            }
+        }
         try {
             Files.createDirectories(root);
         } catch (IOException e) {
