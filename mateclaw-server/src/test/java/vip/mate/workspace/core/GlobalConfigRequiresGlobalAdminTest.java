@@ -5,6 +5,7 @@ import vip.mate.plugin.controller.PluginController;
 import vip.mate.system.controller.SystemSettingController;
 import vip.mate.system.featureflag.FeatureFlagController;
 import vip.mate.tool.guard.controller.SecurityController;
+import vip.mate.tool.mcp.controller.McpServerController;
 import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
@@ -59,6 +60,18 @@ class GlobalConfigRequiresGlobalAdminTest {
                 "deleteRuleByPk",
                 "importRules")) {
             assertGlobalAdmin(SecurityController.class, method);
+        }
+    }
+
+    @Test
+    void mcpServerEndpointsRequireGlobalAdmin() {
+        // mate_mcp_server is a GLOBAL table (no workspace_id). A workspace admin
+        // (every registered user is admin/owner of their own workspace) must not
+        // read or mutate global external-integration config / credentials.
+        for (String method : List.of(
+                "list", "get", "create", "update", "delete", "toggle",
+                "setDisclosureTier", "test", "listTools", "refresh")) {
+            assertGlobalAdmin(McpServerController.class, method);
         }
     }
 

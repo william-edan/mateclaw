@@ -11,6 +11,7 @@ import vip.mate.os.run.runtime.RunEvent;
 import vip.mate.os.run.runtime.RunEventPublisher;
 import vip.mate.os.run.runtime.StepCloseRequest;
 import vip.mate.os.run.runtime.StepLedgerService;
+import vip.mate.workspace.core.WorkspaceContextHolder;
 
 import java.util.List;
 import java.util.Map;
@@ -89,9 +90,21 @@ public class DefaultWorkflowRuntimeV2 implements WorkflowRuntimeV2 {
         return kernel.finishFailed(run.getId(), result.failureCode(), result.failureMessage());
     }
 
-    private static Long resolveWorkspaceId(Map<String, Object> input) {
+    static Long resolveWorkspaceId(Map<String, Object> input) {
         Long value = resolveLong(input.get("workspaceId"));
-        return value == null ? 1L : value;
+        if (value != null) {
+            return value;
+        }
+        // Off-request fallback: a workflow started from cron/async carries its
+        // workspace on the holder. Fail-closed when both are absent — never
+        // silently default to workspace 1, which would cross-tenant the run.
+        Long bound = WorkspaceContextHolder.get();
+        if (bound != null) {
+            return bound;
+        }
+        throw new IllegalStateException(
+                "workflow.v2 start requires a workspaceId: both the input and WorkspaceContextHolder "
+                        + "are empty; refusing to default to workspace 1");
     }
 
     private static Long resolveLong(Object value) {

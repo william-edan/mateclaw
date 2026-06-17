@@ -6,7 +6,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.security.AgentWorkspaceVerifier;
 import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.service.*;
 import vip.mate.memory.scheduler.DreamingScheduler;
@@ -37,11 +39,22 @@ public class MemoryController {
     private final MemoryProperties memoryProperties;
     private final DreamingScheduler dreamingScheduler;
     private final WorkspaceFileService workspaceFileService;
+    private final AgentWorkspaceVerifier agentWorkspaceVerifier;
+
+    /**
+     * Fail-closed: reject when the path {@code agentId} does not belong to the
+     * caller's workspace. {@code @RequireWorkspaceRole} only proves membership;
+     * it does not stop a member from passing another workspace's agentId.
+     */
+    private void verifyAgent(Long agentId) {
+        agentWorkspaceVerifier.verify(agentId, ModelWorkspaceResolver.currentWorkspaceId());
+    }
 
     @Operation(summary = "手动触发记忆整合（daily notes → MEMORY.md，NIGHTLY 模式）")
     @PostMapping("/{agentId}/emergence")
     @RequireWorkspaceRole("member")
     public R<DreamReport> triggerEmergence(@PathVariable Long agentId) {
+        verifyAgent(agentId);
         try {
             DreamReport report = emergenceService.consolidate(agentId, DreamMode.NIGHTLY, null);
             return R.ok(report);
@@ -56,6 +69,7 @@ public class MemoryController {
     @RequireWorkspaceRole("member")
     public R<DreamReport> triggerFocusedDream(@PathVariable Long agentId,
                                               @RequestBody Map<String, String> body) {
+        verifyAgent(agentId);
         if (!memoryProperties.getDream().isFocusedEnabled()) {
             return R.fail(410, "Focused dream is disabled");
         }
@@ -78,6 +92,7 @@ public class MemoryController {
     public R<Map<String, String>> triggerSummarize(
             @PathVariable Long agentId,
             @PathVariable String conversationId) {
+        verifyAgent(agentId);
         try {
             summarizationService.analyzeAndUpdateMemory(agentId, conversationId);
             return R.ok(Map.of("status", "completed"));
@@ -94,6 +109,7 @@ public class MemoryController {
     @GetMapping("/{agentId}/dreaming/status")
     @RequireWorkspaceRole("member")
     public R<Map<String, Object>> getDreamingStatus(@PathVariable Long agentId) {
+        verifyAgent(agentId);
         Map<String, Object> status = recallService.getDreamingStatus(agentId);
         status.put("lastRunTime", dreamingScheduler.getLastRunTime());
         return R.ok(status);
@@ -103,6 +119,7 @@ public class MemoryController {
     @GetMapping("/{agentId}/dreaming/candidates")
     @RequireWorkspaceRole("member")
     public R<List<Map<String, Object>>> getDreamingCandidates(@PathVariable Long agentId) {
+        verifyAgent(agentId);
         return R.ok(recallService.listCandidatesWithDetails(agentId));
     }
 
@@ -110,6 +127,7 @@ public class MemoryController {
     @GetMapping("/{agentId}/dreaming/dreams")
     @RequireWorkspaceRole("member")
     public R<Map<String, Object>> getDreams(@PathVariable Long agentId) {
+        verifyAgent(agentId);
         WorkspaceFileEntity file = workspaceFileService.getFile(agentId, "DREAMS.md");
         Map<String, Object> result = new LinkedHashMap<>();
         if (file != null && file.getContent() != null) {

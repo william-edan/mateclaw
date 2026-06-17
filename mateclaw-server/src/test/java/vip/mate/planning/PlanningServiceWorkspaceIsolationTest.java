@@ -14,10 +14,13 @@ import vip.mate.planning.model.SubPlanEntity;
 import vip.mate.planning.repository.PlanMapper;
 import vip.mate.planning.repository.SubPlanMapper;
 import vip.mate.planning.service.PlanningService;
+import vip.mate.workspace.core.WorkspaceContextHolder;
+import vip.mate.workspace.core.security.AgentWorkspaceVerifier;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -49,7 +52,7 @@ class PlanningServiceWorkspaceIsolationTest {
         planMapper = mock(PlanMapper.class);
         subPlanMapper = mock(SubPlanMapper.class);
         agentMapper = mock(AgentMapper.class);
-        service = new PlanningService(planMapper, subPlanMapper, agentMapper);
+        service = new PlanningService(planMapper, subPlanMapper, new AgentWorkspaceVerifier(agentMapper));
     }
 
     @Test
@@ -102,5 +105,40 @@ class PlanningServiceWorkspaceIsolationTest {
         when(subPlanMapper.selectList(any())).thenReturn(List.of());
 
         assertDoesNotThrow(() -> service.getPlanWithSteps(10L, 1L));
+    }
+
+    /**
+     * findAwaitingApprovalContext 此前全局取最近一条 running 计划不校归属。
+     * 现在当最近的 running 计划属于别的工作区时,当前工作区必须取不到它。
+     */
+    @Test
+    void findAwaitingApprovalContextSkipsRunningPlanOfOtherWorkspace() {
+        PlanEntity foreign = new PlanEntity();
+        foreign.setId(10L);
+        foreign.setAgentId("5");
+        foreign.setStatus("running");
+        when(planMapper.selectList(any())).thenReturn(List.of(foreign));
+        AgentEntity agent = new AgentEntity();
+        agent.setId(5L);
+        agent.setWorkspaceId(99L);
+        when(agentMapper.selectById(5L)).thenReturn(agent);
+
+        PlanningService.PlanResumeContext ctx =
+                WorkspaceContextHolder.callWith(1L, () -> service.findAwaitingApprovalContext());
+
+        assertNull(ctx, "a running plan owned by workspace 99 must not be resumable from workspace 1");
+    }
+
+    /** fail-closed: agentId 非数字(resolveAgentWorkspace 旧逻辑会短路放行)现在必须拒绝。 */
+    @Test
+    void listPlansByAgentRejectsNonNumericAgentId() {
+        assertThrows(MateClawException.class, () -> service.listPlansByAgent("not-a-number", 1L));
+    }
+
+    /** fail-closed: agent 不存在也必须拒绝,不能回落放行。 */
+    @Test
+    void listPlansByAgentRejectsNonexistentAgent() {
+        when(agentMapper.selectById(404L)).thenReturn(null);
+        assertThrows(MateClawException.class, () -> service.listPlansByAgent("404", 1L));
     }
 }

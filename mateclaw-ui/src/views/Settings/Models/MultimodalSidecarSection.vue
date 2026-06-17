@@ -124,14 +124,16 @@ const videoDirty = computed(() => videoModelId.value !== initialVideo.value)
 async function loadAll() {
   loading.value = true
   try {
-    const [visionRes, videoRes, settingsRes] = await Promise.all([
+    // allSettled, not all: settingsApi.get() is admin-only and 403s for a plain
+    // member; that must not blank the vision/video model lists (member-readable).
+    const [visionRes, videoRes, settingsRes] = await Promise.allSettled([
       modelApi.listByType('chat', 'vision'),
       modelApi.listByType('chat', 'video'),
       settingsApi.get(),
     ])
-    visionModels.value = (visionRes.data as any[]) || []
-    videoModels.value = (videoRes.data as any[]) || []
-    const dto = (settingsRes.data as any) || {}
+    visionModels.value = visionRes.status === 'fulfilled' ? ((visionRes.value.data as any[]) || []) : []
+    videoModels.value = videoRes.status === 'fulfilled' ? ((videoRes.value.data as any[]) || []) : []
+    const dto = settingsRes.status === 'fulfilled' ? ((settingsRes.value.data as any) || {}) : {}
     visionModelId.value = dto.defaultVisionModelId ? String(dto.defaultVisionModelId) : null
     videoModelId.value = dto.defaultVideoModelId ? String(dto.defaultVideoModelId) : null
     initialVision.value = visionModelId.value

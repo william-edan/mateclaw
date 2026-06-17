@@ -9,6 +9,10 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.common.result.R;
+import vip.mate.exception.MateClawException;
+import vip.mate.llm.service.ModelWorkspaceResolver;
+import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.core.security.AgentWorkspaceVerifier;
 import vip.mate.tool.guard.model.ToolGuardAuditLogEntity;
 import vip.mate.tool.guard.model.ToolGuardConfigEntity;
 import vip.mate.tool.guard.model.ToolGuardRuleEntity;
@@ -40,6 +44,8 @@ public class SecurityController {
     private final ToolGuardRuleService ruleService;
     private final ToolGuardAuditService auditService;
     private final ApprovalWorkflowService approvalWorkflowService;
+    private final AgentWorkspaceVerifier agentWorkspaceVerifier;
+    private final ConversationService conversationService;
 
     // ==================== Guard Config ====================
 
@@ -227,11 +233,33 @@ public class SecurityController {
     public R<Object> listApprovals(
             @RequestParam(required = false) String conversationId,
             @RequestParam(required = false, defaultValue = "0") int limit) {
+        long workspaceId = ModelWorkspaceResolver.currentWorkspaceId();
         if (conversationId != null && !conversationId.isBlank()) {
+            // Reject reading another workspace's conversation by a guessed id.
+            // The in-memory per-conversation payload carries no agentId, so the
+            // conversation itself is the authorization source.
+            if (!conversationService.isConversationInWorkspace(conversationId, workspaceId)) {
+                throw new MateClawException("err.common.wrong_workspace", 403, "会话不属于当前工作区");
+            }
             return R.ok(approvalWorkflowService.getPendingByConversation(conversationId));
         }
         // Global view — reads from mate_tool_approval directly so the result
-        // survives in-memory map drift after a restart/recovery cycle.
-        return R.ok(approvalWorkflowService.listPendingFromDb(limit));
+        // survives in-memory map drift after a restart/recovery cycle. Scope to
+        // the caller's workspace via each row's agent (tool_approval has no
+        // workspace_id of its own); rows whose agent can't be resolved are
+        // excluded (fail-closed).
+        List<Map<String, Object>> scoped = approvalWorkflowService.listPendingFromDb(limit).stream()
+                .filter(approval -> approvalInWorkspace(approval, workspaceId))
+                .toList();
+        return R.ok(scoped);
+    }
+
+    private boolean approvalInWorkspace(Map<String, Object> approval, long workspaceId) {
+        Object agentId = approval.get("agentId");
+        if (agentId == null) {
+            return false;
+        }
+        Long agentWorkspaceId = agentWorkspaceVerifier.resolveWorkspace(String.valueOf(agentId));
+        return agentWorkspaceId != null && agentWorkspaceId == workspaceId;
     }
 }

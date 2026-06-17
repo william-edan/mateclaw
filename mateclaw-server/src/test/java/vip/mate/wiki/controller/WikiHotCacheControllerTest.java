@@ -8,6 +8,7 @@ import vip.mate.wiki.hotcache.HotCacheUpdateReason;
 import vip.mate.wiki.hotcache.HotCacheUpdateScheduler;
 import vip.mate.wiki.hotcache.WikiHotCacheService;
 import vip.mate.wiki.model.WikiHotCacheEntity;
+import vip.mate.wiki.service.WikiKnowledgeBaseService;
 
 import java.util.Optional;
 
@@ -34,7 +35,7 @@ class WikiHotCacheControllerTest {
     void setUp() {
         service = mock(WikiHotCacheService.class);
         scheduler = mock(HotCacheUpdateScheduler.class);
-        controller = new WikiHotCacheController(service, scheduler);
+        controller = new WikiHotCacheController(service, scheduler, mock(WikiKnowledgeBaseService.class));
     }
 
     @Test

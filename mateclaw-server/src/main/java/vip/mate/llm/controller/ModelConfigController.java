@@ -14,9 +14,6 @@ import vip.mate.llm.embedding.EmbeddingModelFactory;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.service.ModelDiscoveryService;
 import vip.mate.llm.service.ModelProviderService;
-import vip.mate.system.model.SystemSettingEntity;
-import vip.mate.system.repository.SystemSettingMapper;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 import java.util.HashMap;
 import java.util.List;
@@ -35,9 +32,6 @@ public class ModelConfigController {
     private final ModelProviderService modelProviderService;
     private final ModelDiscoveryService modelDiscoveryService;
     private final EmbeddingModelFactory embeddingModelFactory;
-    private final SystemSettingMapper systemSettingMapper;
-
-    private static final String SYSTEM_SETTING_DEFAULT_EMBEDDING_ID = "embedding.default.model.id";
 
     @Operation(summary = "获取 Provider 列表（仅 enabled）")
     @GetMapping
@@ -173,7 +167,7 @@ public class ModelConfigController {
 
     @Operation(summary = "创建模型")
     @PostMapping
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<ModelConfigEntity> create(@RequestBody ModelConfigEntity entity) {
         return R.ok(modelConfigService.createModel(entity));
     }
@@ -188,7 +182,7 @@ public class ModelConfigController {
 
     @Operation(summary = "删除模型")
     @DeleteMapping("/{id}")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Void> delete(@PathVariable Long id) {
         modelConfigService.deleteModel(id);
         return R.ok();
@@ -247,7 +241,7 @@ public class ModelConfigController {
 
     @Operation(summary = "测试 Embedding 模型连通性（嵌入一个短文本验证 API key）")
     @PostMapping("/embedding/{modelId}/test")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("member")
     public R<Map<String, Object>> testEmbedding(@PathVariable Long modelId) {
         Map<String, Object> result = new HashMap<>();
         try {
@@ -278,40 +272,25 @@ public class ModelConfigController {
         return R.ok(result);
     }
 
-    @Operation(summary = "获取系统默认 Embedding 模型 ID")
+    @Operation(summary = "获取当前工作区默认 Embedding 模型 ID")
     @GetMapping("/embedding/default")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("member")
     public R<Map<String, Object>> getDefaultEmbedding() {
-        SystemSettingEntity entity = systemSettingMapper.selectOne(
-                new LambdaQueryWrapper<SystemSettingEntity>()
-                        .eq(SystemSettingEntity::getSettingKey, SYSTEM_SETTING_DEFAULT_EMBEDDING_ID)
-                        .last("LIMIT 1"));
-        if (entity == null || entity.getSettingValue() == null || entity.getSettingValue().isBlank()) {
-            return R.ok(Map.of("defaultModelId", ""));
-        }
-        return R.ok(Map.of("defaultModelId", entity.getSettingValue()));
+        ModelConfigEntity def = modelConfigService.getDefaultEmbeddingModel();
+        return R.ok(Map.of("defaultModelId", def != null ? String.valueOf(def.getId()) : ""));
     }
 
-    @Operation(summary = "设置系统默认 Embedding 模型")
+    @Operation(summary = "设置当前工作区默认 Embedding 模型")
     @PostMapping("/embedding/default")
-    @RequireGlobalAdmin
+    @RequireWorkspaceRole("admin")
     public R<Void> setDefaultEmbedding(@RequestBody Map<String, Object> body) {
         Object v = body.get("modelId");
-        String value = v == null ? "" : v.toString();
-
-        SystemSettingEntity existing = systemSettingMapper.selectOne(
-                new LambdaQueryWrapper<SystemSettingEntity>()
-                        .eq(SystemSettingEntity::getSettingKey, SYSTEM_SETTING_DEFAULT_EMBEDDING_ID)
-                        .last("LIMIT 1"));
-        if (existing != null) {
-            existing.setSettingValue(value);
-            systemSettingMapper.updateById(existing);
+        String value = v == null ? "" : v.toString().trim();
+        if (value.isBlank()) {
+            // 前端删除当前默认 embedding 模型时传空串 → 清除本工作区默认标记
+            modelConfigService.clearDefaultEmbedding();
         } else {
-            SystemSettingEntity fresh = new SystemSettingEntity();
-            fresh.setSettingKey(SYSTEM_SETTING_DEFAULT_EMBEDDING_ID);
-            fresh.setSettingValue(value);
-            fresh.setDescription("Default embedding model id for wiki semantic search");
-            systemSettingMapper.insert(fresh);
+            modelConfigService.setDefaultEmbeddingModel(Long.parseLong(value));
         }
         return R.ok();
     }

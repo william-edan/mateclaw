@@ -14,6 +14,8 @@ import vip.mate.wiki.hotcache.HotCacheUpdateReason;
 import vip.mate.wiki.hotcache.HotCacheUpdateScheduler;
 import vip.mate.wiki.hotcache.WikiHotCacheService;
 import vip.mate.wiki.model.WikiHotCacheEntity;
+import vip.mate.wiki.service.WikiKnowledgeBaseService;
+import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 /**
  * Operator endpoints for the KB hot cache: inspect the current snapshot,
@@ -30,11 +32,14 @@ public class WikiHotCacheController {
 
     private final WikiHotCacheService service;
     private final HotCacheUpdateScheduler scheduler;
+    private final WikiKnowledgeBaseService kbService;
 
     @Operation(summary = "Get the current hot cache snapshot for a KB",
                description = "Returns null data if no rebuild has run yet.")
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/{kbId}")
     public R<WikiHotCacheEntity> get(@PathVariable Long kbId) {
+        kbService.verifyKbWorkspace(kbId);
         return R.ok(service.findByKb(kbId).orElse(null));
     }
 
@@ -42,8 +47,10 @@ public class WikiHotCacheController {
                description = "Async — the scheduler runs the LLM call on a virtual thread. "
                            + "MANUAL bypasses the debounce window so operator triggers always run. "
                            + "Poll GET to see progress.")
+    @RequireWorkspaceRole("member")
     @PostMapping("/{kbId}/regenerate")
     public R<Void> regenerate(@PathVariable Long kbId) {
+        kbService.verifyKbWorkspace(kbId);
         scheduler.scheduleRebuild(kbId, HotCacheUpdateReason.MANUAL);
         return R.ok();
     }
@@ -51,8 +58,10 @@ public class WikiHotCacheController {
     @Operation(summary = "Soft-delete the hot cache row",
                description = "The next event-driven rebuild will create a fresh row. "
                            + "Use this to clear a wedged cache without waiting for the staleness window.")
+    @RequireWorkspaceRole("member")
     @DeleteMapping("/{kbId}")
     public R<Void> reset(@PathVariable Long kbId) {
+        kbService.verifyKbWorkspace(kbId);
         service.findByKb(kbId).ifPresent(row -> service.softDelete(row.getId()));
         return R.ok();
     }

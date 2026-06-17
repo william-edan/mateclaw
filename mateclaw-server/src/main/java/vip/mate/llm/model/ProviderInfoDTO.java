@@ -43,6 +43,12 @@ public class ProviderInfoDTO {
     /** RFC-074: whether the user has explicitly enabled this provider. False = lives in the catalog drawer only. */
     private Boolean enabled;
 
+    /**
+     * 平台托管的「默认版」provider（dashscope-default 等）：其 api_key 由配置文件
+     * 注入，前端据此隐藏/禁用 key 输入并隐藏删除。普通 provider 为 false/null。
+     */
+    private Boolean managedKey;
+
     /** Workspace-level quota for built-in provider credits. Null for unmanaged providers. */
     private Long quotaLimitTokens;
     private Long quotaUsedTokens;

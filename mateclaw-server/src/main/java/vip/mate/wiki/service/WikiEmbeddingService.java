@@ -705,6 +705,15 @@ public class WikiEmbeddingService {
      * {@code null} when no equivalent model exists here.
      */
     private ModelConfigEntity resolveSystemDefaultEmbedding() {
+        // Per-workspace default (is_default flag) is now the source of truth, consistent
+        // with the Settings → Models → Embedding UI. Only honour it when enabled so a
+        // disabled default doesn't shadow a usable fallback.
+        ModelConfigEntity wsDefault = modelConfigService.getDefaultEmbeddingModel();
+        if (wsDefault != null && Boolean.TRUE.equals(wsDefault.getEnabled())) {
+            return wsDefault;
+        }
+        // Legacy fallback: the global embedding.default.model.id pointer. Re-resolve it
+        // to this workspace by (provider, modelName) since model ids are workspace-scoped.
         Long defaultId = readSystemDefaultEmbeddingId();
         if (defaultId == null) {
             return null;
@@ -713,8 +722,6 @@ public class WikiEmbeddingService {
         if (direct != null) {
             return direct;
         }
-        // Global pointer references another workspace's row (typically the template's).
-        // Re-resolve it to this workspace by (provider, modelName).
         ModelConfigEntity reference = modelConfigService.findModelByIdAnyWorkspace(defaultId);
         if (reference == null) {
             return null;

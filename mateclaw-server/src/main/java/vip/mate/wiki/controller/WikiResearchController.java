@@ -55,9 +55,9 @@ public class WikiResearchController {
         if (kbId == null || topic == null || topic.isBlank()) {
             return R.fail("kbId and topic are required");
         }
-        if (kbService.getById(kbId) == null) {
-            return R.fail("Knowledge base not found");
-        }
+        // Was an existence-only check (any workspace's kbId passed). Now also
+        // rejects a KB that belongs to another workspace (404 not-found / 403 cross-ws).
+        kbService.verifyKbWorkspace(kbId);
 
         // 生成 SSE 会话 ID
         String sessionId = "research-" + UUID.randomUUID();

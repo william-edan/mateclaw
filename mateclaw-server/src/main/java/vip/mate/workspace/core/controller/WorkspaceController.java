@@ -78,9 +78,11 @@ public class WorkspaceController {
 
     @Operation(summary = "删除工作区")
     @DeleteMapping("/{id}")
-    public R<Void> delete(@PathVariable Long id, Authentication auth) {
-        Long userId = resolveUserId(auth);
-        workspaceService.requirePermission(id, userId, "owner");
+    @RequireGlobalAdmin
+    public R<Void> delete(@PathVariable Long id) {
+        // Workspace lifecycle (create/delete) is a global-admin operation; mirrors
+        // create() above. Regular users get one workspace at registration and manage
+        // it in place — they cannot create or delete workspaces from the UI or API.
         workspaceService.delete(id);
         return R.ok();
     }

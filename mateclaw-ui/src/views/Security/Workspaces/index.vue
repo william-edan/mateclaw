@@ -5,12 +5,6 @@
         <h2 class="section-title">{{ t('security.workspaces.title') }}</h2>
         <p class="section-desc">{{ t('security.workspaces.desc') }}</p>
       </div>
-      <button class="btn-primary" @click="openCreateDialog">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        {{ t('security.workspaces.newWorkspace') }}
-      </button>
     </div>
 
     <!-- Workspaces Table -->
@@ -48,18 +42,6 @@
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                   </svg>
                 </button>
-                <button
-                  v-if="ws.slug !== 'default'"
-                  class="action-btn danger"
-                  @click="confirmDelete(ws)"
-                  :title="t('security.workspaces.actions.delete')"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14H7L5 6"/>
-                    <path d="M10 11v6"/><path d="M14 11v6"/>
-                    <path d="M9 6V4h6v2"/>
-                  </svg>
-                </button>
               </div>
             </td>
           </tr>
@@ -67,7 +49,7 @@
       </table>
     </div>
 
-    <!-- Create / Edit Dialog -->
+    <!-- Edit Dialog (create removed: regular users manage their single workspace in place) -->
     <Teleport to="body">
       <div v-if="showDialog" class="modal-overlay">
         <div class="modal">
@@ -112,26 +94,6 @@
       </div>
     </Teleport>
 
-    <!-- Delete Confirmation -->
-    <Teleport to="body">
-      <div v-if="showDeleteConfirm" class="modal-overlay">
-        <div class="modal">
-          <div class="modal-header">
-            <h3>{{ t('security.workspaces.deleteDialog.title') }}</h3>
-            <button class="modal-close" @click="showDeleteConfirm = false">&times;</button>
-          </div>
-          <div class="modal-body">
-            <p class="delete-warning">
-              {{ t('security.workspaces.deleteDialog.confirm', { name: deletingWs?.name }) }}
-            </p>
-          </div>
-          <div class="modal-footer">
-            <button class="btn-secondary" @click="showDeleteConfirm = false">{{ t('security.workspaces.actions.cancel') }}</button>
-            <button class="btn-primary btn-danger-fill" @click="deleteWorkspace">{{ t('security.workspaces.actions.delete') }}</button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
@@ -149,9 +111,7 @@ const currentWorkspaceId = computed(() => wsStore.currentWorkspaceId)
 const workspaces = ref<Workspace[]>([])
 const loading = ref(false)
 const showDialog = ref(false)
-const showDeleteConfirm = ref(false)
 const editingWs = ref<Workspace | null>(null)
-const deletingWs = ref<Workspace | null>(null)
 
 const form = ref({
   name: '',
@@ -176,12 +136,6 @@ async function fetchWorkspaces() {
   }
 }
 
-function openCreateDialog() {
-  editingWs.value = null
-  form.value = { name: '', slug: '', description: '', basePath: '' }
-  showDialog.value = true
-}
-
 function openEditDialog(ws: Workspace) {
   editingWs.value = ws
   form.value = {
@@ -203,46 +157,19 @@ function autoSlug() {
 }
 
 async function saveWorkspace() {
+  if (!editingWs.value) return
   try {
-    if (editingWs.value) {
-      await workspaceTeamApi.update(editingWs.value.id, {
-        name: form.value.name,
-        description: form.value.description,
-        basePath: form.value.basePath || null,
-      })
-    } else {
-      await workspaceTeamApi.create({
-        name: form.value.name,
-        slug: form.value.slug,
-        description: form.value.description,
-        basePath: form.value.basePath || null,
-      })
-    }
+    await workspaceTeamApi.update(editingWs.value.id, {
+      name: form.value.name,
+      description: form.value.description,
+      basePath: form.value.basePath || null,
+    })
     showDialog.value = false
     mcToast.success(t('security.workspaces.messages.saveSuccess'))
     await fetchWorkspaces()
     wsStore.fetchWorkspaces()
   } catch (e: any) {
     mcToast.error(t('security.workspaces.messages.saveFailed'))
-  }
-}
-
-function confirmDelete(ws: Workspace) {
-  deletingWs.value = ws
-  showDeleteConfirm.value = true
-}
-
-async function deleteWorkspace() {
-  if (!deletingWs.value) return
-  try {
-    await workspaceTeamApi.delete(deletingWs.value.id)
-    showDeleteConfirm.value = false
-    deletingWs.value = null
-    mcToast.success(t('security.workspaces.messages.deleteSuccess'))
-    await fetchWorkspaces()
-    wsStore.fetchWorkspaces()
-  } catch (e: any) {
-    mcToast.error(t('security.workspaces.messages.deleteFailed'))
   }
 }
 

@@ -47,6 +47,17 @@ public class ModelProviderService {
     static final java.util.regex.Pattern PROVIDER_ID_PATTERN =
             java.util.regex.Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$");
 
+    /**
+     * 平台托管的「默认版」云端 provider：api_key 由 {@link DefaultProviderKeyProperties}
+     * 注入，UI 上只读、不可删除。新增/调整时与 {@link #managedDefaultKeyFor} 同步。
+     */
+    static final java.util.Set<String> MANAGED_DEFAULT_PROVIDER_IDS = java.util.Set.of(
+            "dashscope-default", "dashscope-compat-default", "deepseek-default");
+
+    static boolean isManagedDefaultProvider(String providerId) {
+        return providerId != null && MANAGED_DEFAULT_PROVIDER_IDS.contains(providerId);
+    }
+
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
@@ -128,10 +139,14 @@ public class ModelProviderService {
 
     public ProviderInfoDTO updateProviderConfig(String providerId, ProviderConfigRequest request) {
         ModelProviderEntity provider = getProvider(providerId);
-        if (StringUtils.hasText(request.getApiKey())) {
+        boolean managed = isManagedDefaultProvider(providerId);
+        // 受管「默认版」：平台 key / baseUrl 只读，静默忽略外部改动（UI 已禁用，此处为纵深防御）。
+        if (!managed && StringUtils.hasText(request.getApiKey())) {
             provider.setApiKey(request.getApiKey().trim());
         }
-        provider.setBaseUrl(request.getBaseUrl());
+        if (!managed) {
+            provider.setBaseUrl(request.getBaseUrl());
+        }
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
         if (request.getRequireApiKey() != null) {
@@ -418,6 +433,12 @@ public class ModelProviderService {
         }
         providerTokenQuotaService.ensureDefaultQuotas(workspaceId);
         modelConfigService.copyModelsToWorkspace(ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId);
+        // Hand the freshly-seeded (enabled + default-keyed) providers to ProviderInitProbe.
+        // Without this they stay Liveness.UNPROBED ("检测中") until an app restart, because the
+        // init probe only runs on ApplicationReadyEvent or this event. ProviderInitProbe listens
+        // via @TransactionalEventListener(AFTER_COMMIT), so the probe fires after the surrounding
+        // registration transaction commits and its selectList(null) sees these new rows.
+        eventPublisher.publishEvent(new ModelConfigChangedEvent("workspace-seeded"));
     }
 
     private ModelProviderEntity getProvider(String providerId) {
@@ -453,6 +474,31 @@ public class ModelProviderService {
         return copy;
     }
 
+    /**
+     * 对所有工作区里 {@link #MANAGED_DEFAULT_PROVIDER_IDS} 的 provider：当 api_key 为空/占位
+     * 且配置文件提供了平台 key 时，回填该 key 并置 enabled=TRUE。幂等，无请求上下文依赖
+     * （按 PK 更新，不经工作区 resolver）。web 模式由 {@code DefaultProviderKeyBootstrap}
+     * 在启动后调用；桌面延迟 seed 模式由 {@code SetupController.init} 调用。
+     */
+    public void applyManagedDefaultProviderKeys() {
+        List<ModelProviderEntity> rows = modelProviderMapper.selectList(
+                new LambdaQueryWrapper<ModelProviderEntity>()
+                        .in(ModelProviderEntity::getProviderId, MANAGED_DEFAULT_PROVIDER_IDS));
+        boolean changed = false;
+        for (ModelProviderEntity row : rows) {
+            String key = managedDefaultKeyFor(row.getProviderId());
+            if (StringUtils.hasText(key) && !hasUsableApiKey(row.getApiKey())) {
+                row.setApiKey(key.trim());
+                row.setEnabled(true);
+                modelProviderMapper.updateById(row);
+                changed = true;
+            }
+        }
+        if (changed) {
+            eventPublisher.publishEvent(new ModelConfigChangedEvent("managed-default-keys-applied"));
+        }
+    }
+
     private void applyRegistrationDefaultProviderKey(ModelProviderEntity copy) {
         String defaultKey = defaultProviderKey(copy.getProviderId());
         if (!StringUtils.hasText(defaultKey)) {
@@ -463,12 +509,20 @@ public class ModelProviderService {
     }
 
     private String defaultProviderKey(String providerId) {
+        return managedDefaultKeyFor(providerId);
+    }
+
+    /**
+     * 受管「默认版」provider 的平台 key（来自配置文件）；非受管或未配置返回 null。
+     * 两个 dashscope 默认版共用 dashscope 字段，deepseek 默认版用 deepseek 字段。
+     */
+    String managedDefaultKeyFor(String providerId) {
         if (defaultProviderKeyProperties == null || providerId == null) {
             return null;
         }
         return switch (providerId) {
-            case "dashscope" -> defaultProviderKeyProperties.getDashscope();
-            case "deepseek" -> defaultProviderKeyProperties.getDeepseek();
+            case "dashscope-default", "dashscope-compat-default" -> defaultProviderKeyProperties.getDashscope();
+            case "deepseek-default" -> defaultProviderKeyProperties.getDeepseek();
             default -> null;
         };
     }
@@ -516,6 +570,7 @@ public class ModelProviderService {
         dto.setAvailable(available);
         dto.setLiveness(providerLiveness);
         dto.setEnabled(Boolean.TRUE.equals(provider.getEnabled()));
+        dto.setManagedKey(isManagedDefaultProvider(provider.getProviderId()));
         applyLivenessDetails(dto, provider.getProviderId(), providerLiveness, liveness);
         dto.setApiKey(maskApiKey(provider.getApiKey()));
         dto.setBaseUrl(provider.getBaseUrl());

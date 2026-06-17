@@ -872,6 +872,8 @@ export interface ProviderInfo {
   cooldownRemainingMs?: number
   /** RFC-074: whether the user has explicitly opted this provider into the dropdown. */
   enabled?: boolean
+  /** 平台托管的默认版 provider：key 由平台预置，前端只读、不可删除。 */
+  managedKey?: boolean
   quotaLimitTokens?: number
   quotaUsedTokens?: number
   quotaRemainingTokens?: number

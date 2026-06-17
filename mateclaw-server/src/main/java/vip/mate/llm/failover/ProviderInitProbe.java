@@ -5,6 +5,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.util.StringUtils;
 import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.model.ModelProtocol;
@@ -94,9 +96,18 @@ public class ProviderInitProbe {
      * <p>Async so the user's "save provider config" call returns
      * immediately; the probe runs in the background and badges update on
      * the next poll.</p>
+     *
+     * <p>{@code @TransactionalEventListener(AFTER_COMMIT)} (not a plain
+     * {@code @EventListener}) so the probe runs only after the publishing
+     * transaction commits. This matters for {@code workspace-seeded} events
+     * fired inside the registration transaction: a plain async listener could
+     * run {@code selectList(null)} before commit and miss the just-inserted
+     * provider rows (READ_COMMITTED), leaving them stuck UNPROBED ("检测中").
+     * {@code fallbackExecution=true} keeps it working when published outside a
+     * transaction (e.g. the manual provider-config endpoints).</p>
      */
     @Async
-    @EventListener(ModelConfigChangedEvent.class)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onModelConfigChanged(ModelConfigChangedEvent event) {
         log.info("[ProviderInitProbe] re-probing after ModelConfigChangedEvent (reason={})", event.reason());
         probeAllConfigured();

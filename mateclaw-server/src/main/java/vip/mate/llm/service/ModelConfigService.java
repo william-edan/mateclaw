@@ -196,7 +196,7 @@ public class ModelConfigService {
         entity.setWorkspaceId(ModelWorkspaceResolver.currentWorkspaceId());
         validateModel(entity, null);
         if (Boolean.TRUE.equals(entity.getIsDefault())) {
-            clearDefaultFlag();
+            clearDefaultFlag(entity.getModelType());
         }
         if (entity.getEnabled() == null) {
             entity.setEnabled(true);
@@ -218,7 +218,7 @@ public class ModelConfigService {
         entity.setWorkspaceId(existing.getWorkspaceId());
         validateModel(entity, existing.getId());
         if (Boolean.TRUE.equals(entity.getIsDefault())) {
-            clearDefaultFlag();
+            clearDefaultFlag(entity.getModelType());
         }
         if (existing.getIsDefault() && Boolean.FALSE.equals(entity.getEnabled())) {
             throw new MateClawException("err.llm.cannot_disable_default", "默认模型不能被禁用，请先切换默认模型");
@@ -318,7 +318,7 @@ public class ModelConfigService {
         if (!Boolean.TRUE.equals(entity.getEnabled())) {
             throw new MateClawException("err.llm.only_enabled_default", "只有启用状态的模型才能设为默认");
         }
-        clearDefaultFlag();
+        clearDefaultFlag(entity.getModelType());
         entity.setIsDefault(true);
         modelConfigMapper.updateById(entity);
         publishConfigChanged("default-model-updated");
@@ -338,11 +338,53 @@ public class ModelConfigService {
             // Auto-enable when setting as default (e.g. local Ollama models)
             entity.setEnabled(true);
         }
-        clearDefaultFlag();
+        clearDefaultFlag(entity.getModelType());
         entity.setIsDefault(true);
         modelConfigMapper.updateById(entity);
         publishConfigChanged("default-model-updated");
         return entity;
+    }
+
+    /**
+     * 当前工作区的默认 embedding 模型（model_type='embedding' 且 is_default=true），
+     * 无则返回 {@code null}。每工作区独立，对齐 chat 模型的 is_default 机制——取代
+     * 原先指向模板工作区固定 id 的全局 system setting。
+     */
+    public ModelConfigEntity getDefaultEmbeddingModel() {
+        return modelConfigMapper.selectOne(new LambdaQueryWrapper<ModelConfigEntity>()
+                .eq(ModelConfigEntity::getWorkspaceId, ModelWorkspaceResolver.currentWorkspaceId())
+                .eq(ModelConfigEntity::getModelType, "embedding")
+                .eq(ModelConfigEntity::getIsDefault, true)
+                .last("LIMIT 1"));
+    }
+
+    /**
+     * 把当前工作区内的某个 embedding 模型设为默认。类型隔离：仅清除本工作区其它
+     * embedding 默认，不影响 chat 默认。模型不存在/不属于本工作区时由 getModel 抛出。
+     */
+    public ModelConfigEntity setDefaultEmbeddingModel(Long id) {
+        ModelConfigEntity entity = getModel(id);
+        if (!"embedding".equals(entity.getModelType())) {
+            throw new MateClawException("err.llm.not_embedding_model",
+                    "模型不是 embedding 类型，无法设为默认 Embedding 模型: " + id);
+        }
+        if (!Boolean.TRUE.equals(entity.getEnabled())) {
+            entity.setEnabled(true);
+        }
+        clearDefaultFlag("embedding");
+        entity.setIsDefault(true);
+        modelConfigMapper.updateById(entity);
+        publishConfigChanged("embedding-default-updated");
+        return entity;
+    }
+
+    /**
+     * 清除当前工作区的默认 embedding 标记（供前端删除当前默认 embedding 模型时调用，
+     * 此时回退到 WikiEmbeddingService 的"第一个可用 embedding"逻辑）。
+     */
+    public void clearDefaultEmbedding() {
+        clearDefaultFlag("embedding");
+        publishConfigChanged("embedding-default-cleared");
     }
 
     public ModelConfigEntity resolveModel(String agentModelName) {
@@ -417,10 +459,24 @@ public class ModelConfigService {
         }
     }
 
-    private void clearDefaultFlag() {
-        List<ModelConfigEntity> defaults = modelConfigMapper.selectList(new LambdaQueryWrapper<ModelConfigEntity>()
+    /**
+     * Clear the {@code is_default} flag within a single model-type space for the
+     * current workspace. Chat and embedding defaults are independent: setting a
+     * chat default must not wipe the workspace's embedding default and vice versa.
+     * {@code "embedding"} clears only embedding rows; anything else (chat / legacy
+     * null) clears the chat-space.
+     */
+    private void clearDefaultFlag(String modelType) {
+        LambdaQueryWrapper<ModelConfigEntity> q = new LambdaQueryWrapper<ModelConfigEntity>()
                 .eq(ModelConfigEntity::getWorkspaceId, ModelWorkspaceResolver.currentWorkspaceId())
-                .eq(ModelConfigEntity::getIsDefault, true));
+                .eq(ModelConfigEntity::getIsDefault, true);
+        if ("embedding".equals(modelType)) {
+            q.eq(ModelConfigEntity::getModelType, "embedding");
+        } else {
+            q.and(w -> w.isNull(ModelConfigEntity::getModelType)
+                       .or().eq(ModelConfigEntity::getModelType, "chat"));
+        }
+        List<ModelConfigEntity> defaults = modelConfigMapper.selectList(q);
         for (ModelConfigEntity item : defaults) {
             item.setIsDefault(false);
             modelConfigMapper.updateById(item);
