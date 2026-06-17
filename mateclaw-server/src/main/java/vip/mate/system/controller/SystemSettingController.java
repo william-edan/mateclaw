@@ -28,7 +28,7 @@ public class SystemSettingController {
 
     @Operation(summary = "保存系统设置")
     @PutMapping
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<SystemSettingsDTO> saveSettings(@RequestBody SystemSettingsDTO dto) {
         return R.ok(systemSettingService.saveSettings(dto));
     }
@@ -60,7 +60,7 @@ public class SystemSettingController {
      */
     @Operation(summary = "更新多模态 sidecar 配置")
     @PutMapping("/sidecar")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<SystemSettingsDTO> saveSidecar(@RequestBody SidecarRequest request) {
         return R.ok(systemSettingService.updateSidecarSettings(
                 request.getDefaultVisionModelId(),

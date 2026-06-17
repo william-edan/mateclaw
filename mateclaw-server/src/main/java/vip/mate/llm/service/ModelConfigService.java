@@ -378,6 +378,23 @@ public class ModelConfigService {
                 .last("LIMIT 1"));
     }
 
+    /**
+     * Look up a model row by primary key WITHOUT the current-workspace guard that
+     * {@link #getModel(Long)} enforces. Used to dereference a cross-workspace
+     * pointer — specifically the global {@code embedding.default.model.id} system
+     * setting, whose value is a single id that lives in the template workspace
+     * while every workspace owns its own copy under a different id. Callers
+     * re-resolve the returned {@code (provider, modelName)} to their own
+     * workspace via {@link #findEnabledModel(String, String)}. Returns
+     * {@code null} when absent.
+     */
+    public ModelConfigEntity findModelByIdAnyWorkspace(Long id) {
+        if (id == null) {
+            return null;
+        }
+        return modelConfigMapper.selectById(id);
+    }
+
     private void validateModel(ModelConfigEntity entity, Long currentId) {
         if (!StringUtils.hasText(entity.getName())) {
             throw new MateClawException("err.llm.name_required", "模型名称不能为空");

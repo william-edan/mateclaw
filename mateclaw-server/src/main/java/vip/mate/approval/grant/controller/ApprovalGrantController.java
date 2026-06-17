@@ -52,8 +52,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ApprovalGrantController {
 
-    private static final long DEFAULT_WORKSPACE_ID = 1L;
-
     private final ApprovalGrantService grantService;
     private final ApprovalGrantMapper grantMapper;
     private final ApprovalResolutionLogMapper resolutionMapper;
@@ -70,7 +68,7 @@ public class ApprovalGrantController {
                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                                    Authentication auth) {
         Long actorId = resolveUserId(auth);
-        Long ws = workspaceId != null ? workspaceId : DEFAULT_WORKSPACE_ID;
+        Long ws = requireWorkspaceId(workspaceId);
 
         validate(body);
         enforceCreationAuthorization(body, actorId, ws);
@@ -113,7 +111,7 @@ public class ApprovalGrantController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             Authentication auth) {
         Long actorId = resolveUserId(auth);
-        Long ws = workspaceId != null ? workspaceId : DEFAULT_WORKSPACE_ID;
+        Long ws = requireWorkspaceId(workspaceId);
 
         // mine=false (看全部) 需要 admin；mine=true 任意 member 可以看自己的
         if (!mine) {
@@ -183,7 +181,7 @@ public class ApprovalGrantController {
     @RequireWorkspaceRole("member")
     public R<Map<String, Object>> activeSummary(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        Long ws = workspaceId != null ? workspaceId : DEFAULT_WORKSPACE_ID;
+        Long ws = requireWorkspaceId(workspaceId);
         // Cast to int: this is a per-workspace grant count, never bigger than a
         // few hundred. Returning Long here would be serialized as a JSON string
         // by the global Long→String serializer (CLAUDE.md precision convention
@@ -215,7 +213,7 @@ public class ApprovalGrantController {
                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                           Authentication auth) {
         Long actorId = resolveUserId(auth);
-        Long ws = workspaceId != null ? workspaceId : DEFAULT_WORKSPACE_ID;
+        Long ws = requireWorkspaceId(workspaceId);
 
         ApprovalGrant existing = grantMapper.selectById(id);
         if (existing == null || (existing.getDeleted() != null && existing.getDeleted() == 1)) {
@@ -249,7 +247,7 @@ public class ApprovalGrantController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             Authentication auth) {
         Long actorId = resolveUserId(auth);
-        Long ws = workspaceId != null ? workspaceId : DEFAULT_WORKSPACE_ID;
+        Long ws = requireWorkspaceId(workspaceId);
         int cappedLimit = Math.min(Math.max(limit, 1), 500);
 
         // grantId queries are admin-only; conversationId queries (member view) just
@@ -323,6 +321,13 @@ public class ApprovalGrantController {
                     "this scope requires password re-confirmation");
         }
         authService.verifyCurrentUserPassword(actorId, rawPassword);
+    }
+
+    private Long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
     }
 
     // ─── Validation ─────────────────────────────────────────────────────

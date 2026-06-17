@@ -48,9 +48,16 @@ public class TemplateController {
             // "Customer Support" agent in their list.
             @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
             Authentication auth) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         Long userId = resolveUserId(auth);
         return R.ok(templateService.applyTemplate(id, wsId, userId, acceptLanguage));
+    }
+
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
     }
 
     private Long resolveUserId(Authentication auth) {

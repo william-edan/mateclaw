@@ -6,13 +6,26 @@
 let isRedirecting = false
 
 /**
+ * Clear all per-user identity from localStorage. Shared by the in-page logout
+ * and the 401 handler so a second user on the same (desktop) instance never
+ * inherits the first user's workspace id / capabilities.
+ *
+ * <p>Intentionally does NOT touch the Pinia workspace store — importing it here
+ * would create a cycle (auth → store → api → auth). Callers that stay in-page
+ * (no full reload) must call {@code useWorkspaceStore().reset()} themselves.
+ */
+export function clearSession() {
+  ;['token', 'username', 'role', 'userId', 'mc-user-id', 'mc-workspace-id'].forEach((key) =>
+    localStorage.removeItem(key),
+  )
+}
+
+/**
  * 处理认证失败：清除 token 并跳转登录页
  * 使用 isRedirecting 标记防止多个并发请求同时触发跳转
  */
 export function handleAuthFailure() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('username')
-  localStorage.removeItem('role')
+  clearSession()
   // 已经在登录页则不再跳转，避免死循环
   if (window.location.pathname === '/login') {
     return

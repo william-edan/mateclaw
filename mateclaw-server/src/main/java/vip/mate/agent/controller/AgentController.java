@@ -57,8 +57,7 @@ public class AgentController {
     public R<List<AgentEntity>> list(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestParam(value = "enabled", required = false) Boolean enabled) {
-        // 无 header 时强制使用默认 workspace，不返回全局数据
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         // enabled=true: chat selectors hide disabled agents.
         // enabled=null: admin management page sees enabled + disabled.
         return R.ok(agentService.listAgentsByWorkspace(wsId, enabled));
@@ -69,8 +68,9 @@ public class AgentController {
     @RequireWorkspaceRole("viewer")
     public R<AgentEntity> get(@PathVariable Long id,
                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
         return R.ok(agent);
     }
 
@@ -80,8 +80,9 @@ public class AgentController {
     public R<AgentCapabilitiesVO> capabilities(
             @PathVariable Long id,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
 
         ModelConfigEntity primary;
         try {
@@ -132,8 +133,8 @@ public class AgentController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestBody AgentEntity agent,
             Authentication auth) {
-        // 始终注入 workspace_id，无 header 时使用默认
-        agent.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+        long wsId = requireWorkspaceId(workspaceId);
+        agent.setWorkspaceId(wsId);
         // RFC-077 §4.4: 记录创建者，让 member 后续可删除自建 Agent
         agent.setCreatorUserId(resolveUserId(auth));
         AgentEntity created = agentService.createAgent(agent);
@@ -146,8 +147,9 @@ public class AgentController {
     @RequireWorkspaceRole("member")
     public R<AgentEntity> update(@PathVariable Long id, @RequestBody AgentEntity agent,
                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity existing = agentService.getAgent(id);
-        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(existing.getWorkspaceId(), wsId);
         agent.setId(id);
         agent.setWorkspaceId(existing.getWorkspaceId()); // 不允许跨 workspace 迁移
         AgentEntity updated = agentService.updateAgent(agent);
@@ -161,8 +163,9 @@ public class AgentController {
     public R<Void> delete(@PathVariable Long id,
                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
                           Authentication auth) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
 
         // RFC-077 §4.4: 三选一鉴权 — 系统 admin / workspace admin+ / 创建者本人
         Long userId = resolveUserId(auth);
@@ -188,8 +191,9 @@ public class AgentController {
             @RequestParam String message,
             @RequestParam(defaultValue = "default") String conversationId,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
+        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
         verifyAgentEnabled(agent);
 
         // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
@@ -228,8 +232,9 @@ public class AgentController {
             @PathVariable Long id,
             @RequestBody ChatRequest request,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
+        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
         verifyAgentEnabled(agent);
         return R.ok(agentService.chat(id, request.getMessage(), request.getConversationId()));
     }
@@ -241,8 +246,9 @@ public class AgentController {
             @PathVariable Long id,
             @RequestBody ChatRequest request,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
+        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
         verifyAgentEnabled(agent);
         return R.ok(agentService.execute(id, request.getMessage(), request.getConversationId()));
     }
@@ -252,8 +258,9 @@ public class AgentController {
     @RequireWorkspaceRole("viewer")
     public R<AgentState> getState(@PathVariable Long id,
                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
+        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
         return R.ok(agentService.getAgentState(id));
     }
 
@@ -267,9 +274,15 @@ public class AgentController {
      * 校验目标资源实际归属的 workspace 与请求 header 一致。
      * 防止 "在 workspace A 鉴权，操作 workspace B 资源" 的跨域攻击。
      */
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
+    }
+
     private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
-        long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
-        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {
+        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(headerWorkspaceId)) {
             throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
         }
     }

@@ -292,6 +292,7 @@ import NavBadge from '@/components/common/NavBadge.vue'
 import McTooltip from '@/components/common/McTooltip.vue'
 import { useNotificationCenter } from '@/composables/useNotificationCenter'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import { clearSession } from '@/utils/auth'
 import { applyLocale, currentLocale, type AppLocale } from '@/i18n'
 import wechatBusinessQr from '@/assets/qrcode/wechat.png'
 import { SwitchButton, Lock, Unlock } from '@element-plus/icons-vue'
@@ -636,9 +637,9 @@ const navGroups = computed(() => [
       },
       {
         path: '/plugins',
+        globalAdmin: true,
         label: t('nav.plugins'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8v4h8V3z"/></svg>`,
-        requiredCapability: 'manage:settings',
       },
       // RFC-090 Phase 4: Activity 提升到顶层
       {
@@ -692,9 +693,11 @@ function isNavItemActive(item: NavItem) {
 const showChangePassword = ref(false)
 
 function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('username')
-  localStorage.removeItem('role')
+  // Clear localStorage identity AND the in-memory Pinia store: router.push does
+  // not reload the page, so a stale workspace id / capability set would otherwise
+  // leak to the next user who logs in on this same (desktop) instance.
+  clearSession()
+  workspaceStore.reset()
   router.push('/login')
 }
 

@@ -19,6 +19,7 @@ import vip.mate.tool.guard.service.ToolGuardRuleService;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 /**
@@ -51,7 +52,7 @@ public class SecurityController {
 
     @Operation(summary = "更新 Guard 配置")
     @PutMapping("/guard/config")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<ToolGuardConfigEntity> updateGuardConfig(@RequestBody ToolGuardConfigEntity config) {
         return R.ok(configService.updateConfig(config));
     }
@@ -69,7 +70,7 @@ public class SecurityController {
 
     @Operation(summary = "更新 File Guard 配置")
     @PutMapping("/guard/config/file-guard")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<ToolGuardConfigEntity> updateFileGuardConfig(@RequestBody ToolGuardConfigEntity config) {
         ToolGuardConfigEntity update = new ToolGuardConfigEntity();
         update.setFileGuardEnabled(config.getFileGuardEnabled());
@@ -103,7 +104,7 @@ public class SecurityController {
 
     @Operation(summary = "新增自定义规则")
     @PostMapping("/guard/rules")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<ToolGuardRuleEntity> createRule(@RequestBody ToolGuardRuleEntity rule) {
         try {
             return R.ok(ruleService.createRule(rule));
@@ -118,7 +119,7 @@ public class SecurityController {
 
     @Operation(summary = "更新规则")
     @PutMapping("/guard/rules/{ruleId}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<ToolGuardRuleEntity> updateRule(
             @PathVariable String ruleId,
             @RequestBody ToolGuardRuleEntity rule) {
@@ -131,7 +132,7 @@ public class SecurityController {
 
     @Operation(summary = "启用/禁用规则")
     @PutMapping("/guard/rules/{ruleId}/toggle")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<String> toggleRule(
             @PathVariable String ruleId,
             @RequestParam boolean enabled) {
@@ -145,7 +146,7 @@ public class SecurityController {
 
     @Operation(summary = "删除自定义规则")
     @DeleteMapping("/guard/rules/{ruleId}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<String> deleteRule(@PathVariable String ruleId) {
         try {
             ruleService.deleteRule(ruleId);
@@ -157,7 +158,7 @@ public class SecurityController {
 
     @Operation(summary = "按主键 ID 删除自定义规则（兜底，rule_id 异常时使用）")
     @DeleteMapping("/guard/rules/by-id/{id}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<String> deleteRuleByPk(@PathVariable Long id) {
         try {
             ruleService.deleteRuleByPk(id);
@@ -176,7 +177,7 @@ public class SecurityController {
 
     @Operation(summary = "从 JSON 批量导入规则（upsert 语义）")
     @PostMapping("/guard/rules/import")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Map<String, Object>> importRules(@RequestBody Map<String, Object> body) {
         try {
             Object rulesNode = body == null ? null : body.get("rules");

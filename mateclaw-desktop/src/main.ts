@@ -103,12 +103,17 @@ function createMainWindow(port: number): BrowserWindow {
     minHeight: 680,
     show: false,
     backgroundColor: '#f7f1e8',
+    autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
     },
   })
+
+  if (app.isPackaged && process.platform !== 'darwin') {
+    win.setMenu(null)
+  }
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
@@ -334,6 +339,11 @@ async function boot(): Promise<void> {
   const port = resolvePort()
   installMenu(port)
   ensureNativeHostRegistered()
+  if (!app.isPackaged) {
+    installMenu(port)
+  } else if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null)
+  }
   createSplashWindow()
 
   try {

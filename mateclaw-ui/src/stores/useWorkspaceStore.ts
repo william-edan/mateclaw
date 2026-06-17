@@ -115,6 +115,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     await refreshAccess()
   }
 
+  /**
+   * Wipe all per-user workspace state on logout. The in-page logout uses
+   * router.push (no reload), so without this the previous user's workspaces,
+   * current id and capability set would linger in memory for the next login.
+   */
+  function reset() {
+    workspaces.value = []
+    currentWorkspaceId.value = null
+    loading.value = false
+    currentCapabilities.value = new Set()
+    accessLoaded.value = false
+    accessInFlight = null
+  }
+
   return {
     workspaces,
     currentWorkspaceId,
@@ -129,6 +143,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     fetchWorkspaces,
     switchWorkspace,
     refreshAccess,
+    reset,
   }
 })
 

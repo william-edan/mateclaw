@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -72,7 +73,7 @@ class ModelConfigResolverTest {
 
         when(cfg.listEnabledModels()).thenReturn(List.of(chatModel("qwen3-vl-flash", "bailian-team")));
         when(cap.supports(any(), any(), eq(Modality.VISION))).thenReturn(true);
-        when(prov.isProviderConfigured(any())).thenReturn(false);
+        when(prov.isProviderConfigured(anyString())).thenReturn(false);
         when(settings.getString(DEFAULT_VISION_MODEL_KEY, "")).thenReturn("");
 
         assertThat(new ModelConfigResolver(cfg, cap, prov, settings, AUTO).resolveVisionModel()).isEmpty();

@@ -1,10 +1,23 @@
 <template>
   <div class="raw-panel">
+    <!-- Embedding-unavailable gate: a KB cannot be built without a usable
+         (provider-live) embedding model. Ingestion controls below are disabled. -->
+    <div v-if="canManageWiki && !embeddingAvailable" class="embedding-warning">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <div class="embedding-warning-text">
+        <strong>{{ t('wiki.embeddingUnavailable.title') }}</strong>
+        <span>{{ t('wiki.embeddingUnavailable.banner') }}</span>
+      </div>
+    </div>
+
     <!-- Upload + Add text row -->
     <div v-if="canManageWiki" class="upload-row">
       <div
         class="upload-zone"
-        :class="{ 'is-dragging': isDragging, 'is-uploading': uploadingFiles.length > 0 }"
+        :class="{ 'is-dragging': isDragging, 'is-uploading': uploadingFiles.length > 0, 'is-disabled': !embeddingAvailable }"
         @click="triggerFileInput"
         @dragover.prevent
         @dragenter.prevent="onDragEnter"
@@ -36,7 +49,7 @@
         </div>
       </div>
       <input ref="fileInput" type="file" style="display:none" accept=".txt,.md,.csv,.pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.html,.htm" multiple @change="handleFileSelect" />
-      <button class="btn-secondary add-text-btn" @click="showAddText = true">
+      <button class="btn-secondary add-text-btn" :disabled="!embeddingAvailable" @click="showAddText = true">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
@@ -58,7 +71,7 @@
           @keyup.enter="handleScanDir"
         />
       </div>
-      <button class="btn-secondary" @click="handleScanDir" :disabled="scanning || !dirPath.trim()">
+      <button class="btn-secondary" @click="handleScanDir" :disabled="scanning || !dirPath.trim() || !embeddingAvailable">
         <svg v-if="!scanning" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
@@ -255,6 +268,7 @@
     <button
       v-if="store.currentKB && store.rawMaterials.some(r => r.processingStatus === 'pending')"
       class="btn-primary process-btn"
+      :disabled="!embeddingAvailable"
       @click="processAll"
     >
       {{ t('wiki.processAll') }}
@@ -303,6 +317,25 @@ const workspace = useWorkspaceStore()
 // Viewers can still see the material list but get no write controls.
 const canManageWiki = computed(() => workspace.can('manage:wiki'))
 const fileInput = ref<HTMLInputElement | null>(null)
+
+// Embedding availability gate. A KB cannot be meaningfully built without a
+// usable (provider-live) embedding model, so we pre-check and disable the
+// ingestion controls + show a banner. The backend guards the same entry points,
+// so this is a UX hint, not the enforcement boundary. Defaults to true to avoid
+// a flash of disabled controls before the first check resolves.
+const embeddingAvailable = ref(true)
+async function refreshEmbeddingStatus(kbId: number) {
+  try {
+    const res: any = await wikiApi.getEmbeddingStatus(kbId)
+    embeddingAvailable.value = (res?.data?.available ?? res?.available) !== false
+  } catch {
+    // On error don't hard-block the UI — the backend still guards ingestion.
+    embeddingAvailable.value = true
+  }
+}
+watch(() => store.currentKB?.id, (id) => {
+  if (id != null) refreshEmbeddingStatus(id)
+}, { immediate: true })
 
 // While raw materials are active, subscribe to the backend SSE progress stream.
 // A slower polling fallback keeps the UI in sync if SSE reconnects or misses a
@@ -504,6 +537,7 @@ const { isDragging, onDragEnter, onDragLeave, onDrop: handleDrop } = useFileDrop
 
 async function uploadDroppedFiles(event: DragEvent) {
   if (!event.dataTransfer?.files || !store.currentKB) return
+  if (!embeddingAvailable.value) { mcToast.error(t('wiki.embeddingUnavailable.toast')); return }
   const kbId = store.currentKB.id
   await Promise.all(Array.from(event.dataTransfer.files).map(f => uploadFile(kbId, f)))
 }
@@ -553,12 +587,14 @@ async function uploadFile(kbId: number, file: File) {
 }
 
 function triggerFileInput() {
+  if (!embeddingAvailable.value) { mcToast.error(t('wiki.embeddingUnavailable.toast')); return }
   fileInput.value?.click()
 }
 
 async function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files || !store.currentKB) return
+  if (!embeddingAvailable.value) { mcToast.error(t('wiki.embeddingUnavailable.toast')); input.value = ''; return }
   const kbId = store.currentKB.id
   // Upload all files concurrently
   await Promise.all(Array.from(input.files).map(f => uploadFile(kbId, f)))
@@ -568,16 +604,25 @@ async function handleFileSelect(event: Event) {
 
 async function handleAddText() {
   if (!store.currentKB) return
-  await store.addRawText(store.currentKB.id, textTitle.value, textContent.value)
-  showAddText.value = false
-  textTitle.value = ''
-  textContent.value = ''
+  try {
+    await store.addRawText(store.currentKB.id, textTitle.value, textContent.value)
+    showAddText.value = false
+    textTitle.value = ''
+    textContent.value = ''
+  } catch (e: any) {
+    mcToast.error(e?.message || t('wiki.embeddingUnavailable.toast'))
+  }
 }
 
 async function reprocess(rawId: number) {
   if (!store.currentKB) return
   const kbId = store.currentKB.id
-  await wikiApi.reprocessRaw(kbId, rawId)
+  try {
+    await wikiApi.reprocessRaw(kbId, rawId)
+  } catch (e: any) {
+    mcToast.error(e?.message || t('wiki.embeddingUnavailable.toast'))
+    return
+  }
   // Immediately mark local state as processing so SSE connects and progress bar shows
   const raw = store.rawMaterials.find(r => r.id === rawId)
   if (raw) {
@@ -650,7 +695,12 @@ async function downloadRaw(raw: { id: number; title?: string }) {
 async function processAll() {
   if (!store.currentKB) return
   const kbId = store.currentKB.id
-  await wikiApi.processKB(kbId)
+  try {
+    await wikiApi.processKB(kbId)
+  } catch (e: any) {
+    mcToast.error(e?.message || t('wiki.embeddingUnavailable.toast'))
+    return
+  }
   // Mark all pending materials as processing so SSE connects
   store.rawMaterials
     .filter(r => r.processingStatus === 'pending')
@@ -680,7 +730,7 @@ async function handleScanDir() {
     const result = await store.scanDirectory(store.currentKB.id)
     scanResult.value = result
   } catch (e: any) {
-    console.error('Scan failed', e)
+    mcToast.error(e?.message || t('wiki.embeddingUnavailable.toast'))
   } finally {
     scanning.value = false
   }
@@ -724,6 +774,24 @@ async function handleScanDir() {
   color: var(--mc-text-tertiary);
 }
 .upload-zone:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
+.upload-zone.is-disabled { opacity: 0.55; cursor: not-allowed; }
+.upload-zone.is-disabled:hover { border-color: var(--mc-border); background: transparent; }
+
+/* Embedding-unavailable warning banner */
+.embedding-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--mc-danger);
+  background: var(--mc-danger-bg);
+  border-radius: 12px;
+  color: var(--mc-danger);
+}
+.embedding-warning svg { flex-shrink: 0; margin-top: 1px; }
+.embedding-warning-text { display: flex; flex-direction: column; gap: 2px; }
+.embedding-warning-text strong { font-size: 13px; font-weight: 600; }
+.embedding-warning-text span { font-size: 12px; color: var(--mc-text-secondary); line-height: 1.5; }
 .upload-zone.is-dragging {
   border-color: var(--mc-primary);
   background: var(--mc-primary-bg);

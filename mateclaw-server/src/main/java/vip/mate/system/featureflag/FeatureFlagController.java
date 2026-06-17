@@ -16,6 +16,7 @@ import vip.mate.common.result.R;
 import vip.mate.system.featureflag.repository.FeatureFlagMapper;
 
 import java.util.List;
+import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 /**
@@ -48,7 +49,7 @@ public class FeatureFlagController {
      * body are touched; unspecified fields preserve their current values.
      */
     @PutMapping("/{flagKey}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> update(@PathVariable @NotBlank String flagKey,
                            @RequestBody UpdateRequest req) {
         FeatureFlagEntity flag = mapper.selectOne(

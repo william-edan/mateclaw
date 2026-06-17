@@ -48,7 +48,7 @@ public class ChannelController {
     @GetMapping
     public R<List<ChannelEntity>> list(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         return R.ok(channelService.listChannelsByWorkspace(wsId));
     }
 
@@ -57,7 +57,7 @@ public class ChannelController {
     @GetMapping("/type/{channelType}")
     public R<List<ChannelEntity>> listByType(@PathVariable String channelType,
                                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long wsId = workspaceId != null ? workspaceId : 1L;
+        long wsId = requireWorkspaceId(workspaceId);
         return R.ok(channelService.listChannelsByTypeAndWorkspace(channelType, wsId));
     }
 
@@ -66,8 +66,9 @@ public class ChannelController {
     @GetMapping("/{id}")
     public R<ChannelEntity> get(@PathVariable Long id,
                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         ChannelEntity channel = channelService.getChannel(id);
-        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(channel.getWorkspaceId(), wsId);
         return R.ok(channel);
     }
 
@@ -77,7 +78,8 @@ public class ChannelController {
     public R<ChannelEntity> create(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestBody ChannelEntity channel) {
-        channel.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+        long wsId = requireWorkspaceId(workspaceId);
+        channel.setWorkspaceId(wsId);
         ChannelEntity created = channelService.createChannel(channel);
         // 创建后如果渠道已启用，自动启动（与 toggle 行为对齐）
         if (Boolean.TRUE.equals(created.getEnabled())) {
@@ -92,8 +94,9 @@ public class ChannelController {
     @PutMapping("/{id}")
     public R<ChannelEntity> update(@PathVariable Long id, @RequestBody ChannelEntity channel,
                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         ChannelEntity existing = channelService.getChannel(id);
-        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(existing.getWorkspaceId(), wsId);
         channel.setId(id);
         channel.setWorkspaceId(existing.getWorkspaceId());
         ChannelEntity updated = channelService.updateChannel(channel);
@@ -149,8 +152,9 @@ public class ChannelController {
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id,
                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         ChannelEntity channel = channelService.getChannel(id);
-        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(channel.getWorkspaceId(), wsId);
         channelManager.stopChannel(id);
         channelService.deleteChannel(id);
         auditEventService.record("DELETE", "CHANNEL", String.valueOf(id), channel.getName(), null);
@@ -162,8 +166,9 @@ public class ChannelController {
     @PutMapping("/{id}/toggle")
     public R<ChannelEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled,
                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         ChannelEntity existing = channelService.getChannel(id);
-        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(existing.getWorkspaceId(), wsId);
         ChannelEntity channel = channelService.toggleChannel(id, enabled);
         // 联动 ChannelManager：启用时启动，禁用时停止
         if (enabled) {
@@ -187,8 +192,9 @@ public class ChannelController {
     @GetMapping("/{id}/health")
     public R<Map<String, Object>> health(@PathVariable Long id,
                                           @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long wsId = requireWorkspaceId(workspaceId);
         ChannelEntity channel = channelService.getChannel(id);
-        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
+        verifyResourceWorkspace(channel.getWorkspaceId(), wsId);
         return R.ok(channelManager.getAdapter(id)
                 .map(adapter -> adapter.health().toMap())
                 .orElseGet(() -> {
@@ -210,7 +216,7 @@ public class ChannelController {
     @GetMapping("/health")
     public R<List<Map<String, Object>>> healthAll(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        long ws = workspaceId != null ? workspaceId : 1L;
+        long ws = requireWorkspaceId(workspaceId);
         return R.ok(channelService.listChannelsByWorkspace(ws).stream()
                 .map(c -> {
                     Map<String, Object> body = channelManager.getAdapter(c.getId())
@@ -253,7 +259,7 @@ public class ChannelController {
     public R<VerificationResult> preflight(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestBody PreflightRequest body) {
-        long ws = workspaceId != null ? workspaceId : 1L;
+        long ws = requireWorkspaceId(workspaceId);
         Map<String, Object> config = parseConfigJson(body.configJson());
         return verifierRegistry.find(body.channelType())
                 .map(v -> R.ok(v.verify(new VerificationRequest(body.channelType(), config, ws))))
@@ -275,9 +281,15 @@ public class ChannelController {
     /** Wizard Step 2 payload — channel type + draft configJson, no entity yet. */
     public record PreflightRequest(String channelType, String configJson) {}
 
+    private long requireWorkspaceId(Long workspaceId) {
+        if (workspaceId == null) {
+            throw new MateClawException("err.workspace.header_required", 400, "X-Workspace-Id header is required");
+        }
+        return workspaceId;
+    }
+
     private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
-        long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
-        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {
+        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(headerWorkspaceId)) {
             throw new MateClawException("err.common.wrong_workspace", 403, "资源不属于当前工作区");
         }
     }

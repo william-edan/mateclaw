@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.AsyncConfigurer;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.security.task.DelegatingSecurityContextTaskExecutor;
+import vip.mate.workspace.core.WorkspaceContextTaskDecorator;
 
 import java.util.concurrent.Executor;
 
@@ -29,6 +30,9 @@ public class AsyncSecurityConfig implements AsyncConfigurer {
         var delegate = new SimpleAsyncTaskExecutorBuilder()
                 .virtualThreads(true)
                 .threadNamePrefix("async-vt-")
+                // Carry the submitting thread's workspace onto the async thread so
+                // off-request work resolves the real workspace, not the default.
+                .taskDecorator(new WorkspaceContextTaskDecorator())
                 .build();
         return new DelegatingSecurityContextTaskExecutor(delegate);
     }
