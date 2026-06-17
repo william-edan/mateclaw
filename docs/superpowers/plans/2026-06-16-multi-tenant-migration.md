@@ -597,6 +597,11 @@ public void verifyKbWorkspace(Long kbId) {
 
 ## 第 5 部分 · P3 架构根治
 
+> 🟢 **机制已就位并测试，开启=部署灰度**（2026-06-17，配置开关默认关 → 生产零变化）：
+> - ✅ **5.1 TenantLineInnerInterceptor**：`WorkspaceTenantLineHandler`（`getTenantIdColumn=workspace_id`，`getTenantId` 读 holder **fail-closed**，`ignoreTable` 走构造器注入的灰度白名单）+ `MateClawApplication` 用 `mateclaw.tenant.line-interceptor-enabled`(默认 false) + `-tables`(逗号白名单) 条件注册（在分页前）。提交 `8ab60bc3`。
+> - ✅ **5.2 reactive 上下文传播**：`WorkspaceThreadLocalAccessor`（Micrometer context-propagation 桥接）+ `ReactiveWorkspaceContextConfig` 用 `mateclaw.tenant.reactive-context-propagation-enabled`(默认 false) 注册 accessor + `Hooks.enableAutomaticContextPropagation()`。测试证明 workspaceId 跨 `publishOn` 存活。提交 `fe50a176`。
+> - **开启即灰度（运维/部署动作，非代码）**：① 先开 reactive 传播开关（闭合 §2.1、解锁 skill 目录）；② 再逐表把 `workspace_id` 表加进 `-tables` 白名单并开 line-interceptor 开关，每加一张跑全量回归；③ getTenantId 是 fail-closed，开某表前其所有读写路径上下文必须已绑（Part 1 已覆盖 off-request，reactive 由 5.2 开关覆盖）。INSERT 注入会盖 seed/copy 的目标 ws，启用此类表需评估。
+
 ### Task 5.1: 挂 TenantLineInnerInterceptor（影子 + 逐表灰度）
 
 [MateClawApplication](../../../mateclaw-server/src/main/java/vip/mate/MateClawApplication.java)（48-53）只有分页拦截器。新建 `WorkspaceTenantLineHandler`：`getTenantIdColumn()="workspace_id"`、`getTenantId()` 读 holder（**取不到 fail-closed 抛异常，绝不回落 1**）、`ignoreTable()` 用**白名单灰度**（仅 `ENABLED_TABLES` 内的表注入条件，其余全 ignore）。注册在分页拦截器**之前**。建议 INSERT 一律 ignore。Test: `WorkspaceTenantLineHandlerTest`（holder 有值→注入；无值→抛异常；豁免表→不注入；列名=workspace_id）。
