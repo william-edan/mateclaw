@@ -89,4 +89,44 @@ class ModelProviderServiceManagedDefaultTest {
         ProviderInfoDTO dto = service.listProviders().get(0);
         assertEquals(Boolean.FALSE, dto.getManagedKey());
     }
+
+    @Test
+    void updateProviderConfigIgnoresKeyAndBaseUrlForManaged() {
+        ModelProviderEntity managed = provider("deepseek-default");
+        managed.setApiKey("sk-platform-deep");
+        managed.setBaseUrl("https://api.deepseek.com");
+        when(providerMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(managed);
+        when(modelConfigService.listModelsByProvider(any())).thenReturn(List.of());
+
+        ProviderConfigRequest req = new ProviderConfigRequest();
+        req.setApiKey("sk-HACKED");
+        req.setBaseUrl("https://evil.example.com");
+        req.setProtocol("openai-compatible");
+
+        service.updateProviderConfig("deepseek-default", req);
+
+        ArgumentCaptor<ModelProviderEntity> captor = ArgumentCaptor.forClass(ModelProviderEntity.class);
+        verify(providerMapper).updateById(captor.capture());
+        assertEquals("sk-platform-deep", captor.getValue().getApiKey(), "受管 provider 的 key 不可被覆盖");
+        assertEquals("https://api.deepseek.com", captor.getValue().getBaseUrl(), "受管 provider 的 baseUrl 不可被覆盖");
+    }
+
+    @Test
+    void updateProviderConfigStillWritesKeyForPlainProvider() {
+        ModelProviderEntity plain = provider("deepseek");
+        plain.setApiKey("");
+        when(providerMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(plain);
+        when(modelConfigService.listModelsByProvider(any())).thenReturn(List.of());
+
+        ProviderConfigRequest req = new ProviderConfigRequest();
+        req.setApiKey("sk-user-own-key-1234");
+        req.setBaseUrl("https://api.deepseek.com");
+        req.setProtocol("openai-compatible");
+
+        service.updateProviderConfig("deepseek", req);
+
+        ArgumentCaptor<ModelProviderEntity> captor = ArgumentCaptor.forClass(ModelProviderEntity.class);
+        verify(providerMapper).updateById(captor.capture());
+        assertEquals("sk-user-own-key-1234", captor.getValue().getApiKey());
+    }
 }

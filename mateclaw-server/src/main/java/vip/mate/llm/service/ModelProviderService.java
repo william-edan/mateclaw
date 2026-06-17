@@ -139,10 +139,14 @@ public class ModelProviderService {
 
     public ProviderInfoDTO updateProviderConfig(String providerId, ProviderConfigRequest request) {
         ModelProviderEntity provider = getProvider(providerId);
-        if (StringUtils.hasText(request.getApiKey())) {
+        boolean managed = isManagedDefaultProvider(providerId);
+        // 受管「默认版」：平台 key / baseUrl 只读，静默忽略外部改动（UI 已禁用，此处为纵深防御）。
+        if (!managed && StringUtils.hasText(request.getApiKey())) {
             provider.setApiKey(request.getApiKey().trim());
         }
-        provider.setBaseUrl(request.getBaseUrl());
+        if (!managed) {
+            provider.setBaseUrl(request.getBaseUrl());
+        }
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
         if (request.getRequireApiKey() != null) {
