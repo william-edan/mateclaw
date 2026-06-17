@@ -56,8 +56,18 @@
 
     <!-- CREDENTIAL: the showcase. Inline API Key for the 90% case. -->
     <div class="cred-block">
+      <!-- 平台托管默认版：key 只读、不可更换 -->
+      <template v-if="provider.authType !== 'oauth' && provider.requireApiKey && provider.managedKey">
+        <div class="cred-set">
+          <svg class="cred-set__check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span class="cred-set__masked">{{ t('settings.model.inlineApiKeyMasked') }}</span>
+          <span class="cred-managed-badge">{{ t('settings.model.managedKeyBadge') }}</span>
+        </div>
+      </template>
       <!-- API-key flow (non-OAuth providers that need a key) -->
-      <template v-if="provider.authType !== 'oauth' && provider.requireApiKey">
+      <template v-else-if="provider.authType !== 'oauth' && provider.requireApiKey">
         <!-- no key set OR user clicked Change → input form -->
         <form
           v-if="!provider.apiKey || editing"
@@ -807,5 +817,12 @@ function showRechargeQr() {
 .card-btn--danger-soft:hover {
   background: var(--mc-danger-bg);
   color: var(--mc-danger);
+}
+.cred-managed-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--mc-fill-secondary, rgba(127, 127, 127, 0.12));
+  color: var(--mc-text-secondary, #888);
 }
 </style>

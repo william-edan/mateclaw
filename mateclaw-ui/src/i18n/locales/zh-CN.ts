@@ -640,6 +640,7 @@ export default {
       inlineApiKeyTitle: 'API Key',
       inlineApiKeyPlaceholder: '粘贴 API Key 后回车保存',
       inlineApiKeyMasked: '已设置 ••••••••',
+      managedKeyBadge: '由平台提供',
       inlineApiKeyChange: '更换',
       inlineApiKeySaving: '保存中…',
       inlineApiKeySaved: 'API Key 已保存',
