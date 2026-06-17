@@ -128,5 +128,6 @@ class ModelProviderServiceManagedDefaultTest {
         ArgumentCaptor<ModelProviderEntity> captor = ArgumentCaptor.forClass(ModelProviderEntity.class);
         verify(providerMapper).updateById(captor.capture());
         assertEquals("sk-user-own-key-1234", captor.getValue().getApiKey());
+        assertEquals("https://api.deepseek.com", captor.getValue().getBaseUrl());
     }
 }
