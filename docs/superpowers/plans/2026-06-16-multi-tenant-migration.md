@@ -573,6 +573,13 @@ public void verifyKbWorkspace(Long kbId) {
 
 ## 第 4 部分 · P2 隔离纵深
 
+> 🟡 **状态（2026-06-17）**：
+> - ✅ **4.2 DB 补列**：8 张表（wiki_chunk/page/relation/raw_material ← kb；fact/memory_recall/dream_report ← agent；tool_approval ← conversation）补 nullable `workspace_id` + 双方言回填。V143 迁移，嵌入式 H2 跑真实文件验证（列+三种回填）。提交 `ea15a7d2`。实体字段 + 防御纵深表（skill_file/workflow_revision/workflow_run_step/agent_pause，部分多跳）留待 Part 5（租户插件 SQL 层不需实体字段）。
+> - **4.1 物理目录隔离 — 评估后分流**：
+>   - **plugin 目录**：**不改**。PluginManager 启动时把 JAR 载入 JVM 类加载器 = 实例级能力；工作区插件已支持在 `basePath/plugins`。全局 `~/.huafanai/plugins` 有意为实例级。（解掉"plugin 工作区级 vs 实例级"决策。）
+>   - **skill 目录**：**并入 Part 5**。路径解析靠 `currentWorkspaceId()`，但技能执行走 reactive agent 路径、context 常未绑（与 §2.1 同一耦合）→ 现在按工作区分目录会让非 ws1 技能在 reactive 路径解析到错目录。待 Part 5 reactive 上下文落地后一起做。
+>   - **wiki 上传目录**：REST 路径 context 已绑、可单独做，但面窄 + 有存量文件迁移问题，低优先。
+
 ### Task 4.1: 物理目录按工作区隔离
 
 [SkillWorkspaceProperties](../../../mateclaw-server/src/main/java/vip/mate/skill/workspace/SkillWorkspaceProperties.java)（22，`~/.huafanai/skills`）、[PluginProperties](../../../mateclaw-server/src/main/java/vip/mate/plugin/PluginProperties.java)（21，`~/.huafanai/plugins`）、[WikiProperties](../../../mateclaw-server/src/main/java/vip/mate/wiki/WikiProperties.java)（66，`./data/wiki-uploads`）全局共享 → 改 `{root}/{workspaceId}/`。拆 3 个 Task（skill/plugin/wiki 各一）。测试断言不同 ws 解析出的目录**不同且互不包含**。
