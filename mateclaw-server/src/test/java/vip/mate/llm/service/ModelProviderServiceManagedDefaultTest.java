@@ -87,6 +87,6 @@ class ModelProviderServiceManagedDefaultTest {
                 .thenReturn(List.of(provider("dashscope")));
         when(modelConfigService.listModels()).thenReturn(List.of());
         ProviderInfoDTO dto = service.listProviders().get(0);
-        assertNotEquals(Boolean.TRUE, dto.getManagedKey());
+        assertEquals(Boolean.FALSE, dto.getManagedKey());
     }
 }

@@ -481,7 +481,7 @@ public class ModelProviderService {
      * 受管「默认版」provider 的平台 key（来自配置文件）；非受管或未配置返回 null。
      * 两个 dashscope 默认版共用 dashscope 字段，deepseek 默认版用 deepseek 字段。
      */
-    public String managedDefaultKeyFor(String providerId) {
+    String managedDefaultKeyFor(String providerId) {
         if (defaultProviderKeyProperties == null || providerId == null) {
             return null;
         }
