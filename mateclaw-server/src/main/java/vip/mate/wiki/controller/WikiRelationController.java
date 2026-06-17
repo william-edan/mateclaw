@@ -14,6 +14,7 @@ import vip.mate.wiki.job.model.WikiProcessingJobEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageCitationMapper;
 import vip.mate.wiki.service.*;
+import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.HashMap;
 import java.util.List;
@@ -37,22 +38,27 @@ public class WikiRelationController {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final WikiEmbeddingService embeddingService;
+    private final WikiKnowledgeBaseService kbService;
 
     // ==================== RFC-029: Relations ====================
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/kb/{kbId}/pages/{slug}/related")
     public List<RelatedPageResult> relatedPages(
             @PathVariable Long kbId,
             @PathVariable String slug,
             @RequestParam(defaultValue = "5") int topK) {
+        kbService.verifyKbWorkspace(kbId);
         return relationService.relatedPages(kbId, slug, Math.min(topK, 20));
     }
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/kb/{kbId}/pages/{slugA}/relation/{slugB}")
     public RelationExplanation explainRelation(
             @PathVariable Long kbId,
             @PathVariable String slugA,
             @PathVariable String slugB) {
+        kbService.verifyKbWorkspace(kbId);
         return relationService.explain(kbId, slugA, slugB);
     }
 
@@ -68,19 +74,23 @@ public class WikiRelationController {
 
     // ==================== RFC-029: Citations ====================
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/kb/{kbId}/pages/{pageId}/citations")
     public List<PageCitationWithRaw> pageCitations(
             @PathVariable Long kbId,
             @PathVariable Long pageId) {
+        kbService.verifyKbWorkspace(kbId);
         return citationMapper.listWithRawByPageId(pageId);
     }
 
     // ==================== RFC-030: Jobs ====================
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/kb/{kbId}/jobs")
     public List<WikiProcessingJobEntity> getJobs(
             @PathVariable Long kbId,
             @RequestParam(required = false) Long rawId) {
+        kbService.verifyKbWorkspace(kbId);
         if (rawId != null) {
             return jobMapper.findLatestByRawId(rawId)
                     .map(List::of).orElse(List.of());
@@ -90,8 +100,10 @@ public class WikiRelationController {
 
     // ==================== RFC-030/033: KB Stats ====================
 
+    @RequireWorkspaceRole("viewer")
     @GetMapping("/kb/{kbId}/stats")
     public Map<String, Object> kbStats(@PathVariable Long kbId) {
+        kbService.verifyKbWorkspace(kbId);
         int pageCount = pageService.countByKbId(kbId);
         // Count enriched pages (those containing [[wikilinks]])
         long enrichedCount = pageService.listByKbIdWithContent(kbId).stream()
@@ -128,8 +140,10 @@ public class WikiRelationController {
 
     // ==================== RFC-031: Enrichment & Repair ====================
 
+    @RequireWorkspaceRole("member")
     @PostMapping("/kb/{kbId}/pages/{slug}/enrich")
     public Map<String, Object> enrichPage(@PathVariable Long kbId, @PathVariable String slug) {
+        kbService.verifyKbWorkspace(kbId);
         WikiPageEntity page = pageService.getBySlug(kbId, slug);
         if (page == null) return Map.of("error", "Page not found: " + slug);
 
@@ -146,8 +160,10 @@ public class WikiRelationController {
         return Map.of("jobId", job.getId());
     }
 
+    @RequireWorkspaceRole("member")
     @PostMapping("/kb/{kbId}/pages/{slug}/repair")
     public Map<String, Object> repairPage(@PathVariable Long kbId, @PathVariable String slug) {
+        kbService.verifyKbWorkspace(kbId);
         WikiPageEntity page = pageService.getBySlug(kbId, slug);
         if (page == null) return Map.of("error", "Page not found: " + slug);
 
@@ -166,10 +182,12 @@ public class WikiRelationController {
 
     // ==================== RFC-032: Search preview ====================
 
+    @RequireWorkspaceRole("viewer")
     @PostMapping("/kb/{kbId}/search-preview")
     public List<PageSearchResult> searchPreview(
             @PathVariable Long kbId,
             @RequestBody Map<String, Object> body) {
+        kbService.verifyKbWorkspace(kbId);
         String query = (String) body.getOrDefault("query", "");
         String mode = (String) body.getOrDefault("mode", "hybrid");
         int topK = body.containsKey("topK") ? ((Number) body.get("topK")).intValue() : 5;

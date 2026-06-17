@@ -5,6 +5,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vip.mate.exception.MateClawException;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 import vip.mate.wiki.job.model.WikiProcessingJobEntity;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
@@ -194,6 +196,29 @@ public class WikiKnowledgeBaseService {
 
     public WikiKnowledgeBaseEntity getById(Long id) {
         return kbMapper.selectById(id);
+    }
+
+    /**
+     * Reject access to a knowledge base that does not belong to the caller's
+     * workspace (fail-closed). Wiki sub-entities (chunk/page/relation/raw) carry
+     * no {@code workspace_id} of their own, so the KB is the authorization source
+     * for every {@code /kb/{kbId}/**} endpoint.
+     *
+     * <p>A KB with {@code workspaceId == null} is treated as public/shared and
+     * allowed (mirrors the tenant-isolation exemption for workspace-less KBs).
+     */
+    public void verifyKbWorkspace(Long kbId) {
+        if (kbId == null) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "kbId 缺失");
+        }
+        WikiKnowledgeBaseEntity kb = getById(kbId);
+        if (kb == null) {
+            throw new MateClawException("err.wiki.kb_not_found", 404, "知识库不存在");
+        }
+        Long owner = kb.getWorkspaceId();
+        if (owner != null && owner != ModelWorkspaceResolver.currentWorkspaceId()) {
+            throw new MateClawException("err.common.wrong_workspace", 403, "知识库不属于当前工作区");
+        }
     }
 
     @Transactional
