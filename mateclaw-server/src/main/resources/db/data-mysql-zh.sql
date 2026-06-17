@@ -112,6 +112,21 @@ INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, 
 VALUES ('deepseek', 'DeepSeek', 'sk-', 'OpenAIChatModel', '', 'https://api.deepseek.com', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
+-- ==================== 默认版 Provider（平台预置 key，开箱即用）====================
+-- api_key 留空，由 DefaultProviderKeyBootstrap / SetupController 从配置文件注入；
+-- enabled 默认 FALSE，注入 key 时一并置 TRUE。support_model_discovery=FALSE 锁定模型集。
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('dashscope-default', 'DashScope 默认', 'sk-', 'DashScopeChatModel', '', '', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('dashscope-compat-default', 'DashScope 兼容模式 默认', 'sk-', 'OpenAIChatModel', '', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('deepseek-default', 'DeepSeek 默认', 'sk-', 'OpenAIChatModel', '', 'https://api.deepseek.com', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 VALUES ('anthropic', 'Anthropic', 'sk-ant-', 'AnthropicChatModel', '', 'https://api.anthropic.com', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
@@ -394,6 +409,26 @@ VALUES
 (1000000280, 'Claude Opus 4.7', 'anthropic-claude-code', 'claude-opus-4-7', '通过 Claude Code Pro/Max 订阅调用 Claude Opus 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000281, 'Claude Sonnet 4.6', 'anthropic-claude-code', 'claude-sonnet-4-6', '通过 Claude Code Pro/Max 订阅调用 Claude Sonnet 4.6', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), provider=VALUES(provider), model_name=VALUES(model_name), description=VALUES(description), temperature=VALUES(temperature), max_tokens=VALUES(max_tokens), top_p=VALUES(top_p), builtin=VALUES(builtin), enabled=VALUES(enabled), is_default=VALUES(is_default), update_time=VALUES(update_time), deleted=VALUES(deleted);
+
+-- ==================== 默认版模型（镜像原版 builtin 模型，id = 源 id + 70000000）====================
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'dashscope-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'dashscope' AND builtin = TRUE AND deleted = 0;
+
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'dashscope-compat-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'dashscope-compat' AND builtin = TRUE AND deleted = 0;
+
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'deepseek-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'deepseek' AND builtin = TRUE AND deleted = 0;
+
+-- 开箱默认聊天模型从原版 dashscope/qwen-plus 迁到 dashscope-default/qwen-plus（保证全局唯一）
+UPDATE mate_model_config SET is_default = FALSE WHERE provider = 'dashscope' AND model_name = 'qwen-plus';
+UPDATE mate_model_config SET is_default = TRUE  WHERE provider = 'dashscope-default' AND model_name = 'qwen-plus';
 
 -- 默认系统设置
 INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)

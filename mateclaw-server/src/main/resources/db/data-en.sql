@@ -101,6 +101,21 @@ MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, a
 KEY (provider_id)
 VALUES ('deepseek', 'DeepSeek', 'sk-', 'OpenAIChatModel', '', 'https://api.deepseek.com', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
 
+-- ==================== Default Providers (platform-injected key, ready out-of-the-box) ====================
+-- api_key left empty; injected by DefaultProviderKeyBootstrap / SetupController from config file.
+-- enabled defaults to FALSE; set to TRUE when key is injected. support_model_discovery=FALSE locks the model set.
+MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+KEY (provider_id)
+VALUES ('dashscope-default', 'DashScope (Default)', 'sk-', 'DashScopeChatModel', '', '', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW());
+
+MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+KEY (provider_id)
+VALUES ('dashscope-compat-default', 'DashScope Compatible (Default)', 'sk-', 'OpenAIChatModel', '', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW());
+
+MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+KEY (provider_id)
+VALUES ('deepseek-default', 'DeepSeek (Default)', 'sk-', 'OpenAIChatModel', '', 'https://api.deepseek.com', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW());
+
 MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 KEY (provider_id)
 VALUES ('anthropic', 'Anthropic', 'sk-ant-', 'AnthropicChatModel', '', 'https://api.anthropic.com', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
@@ -341,6 +356,26 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 -- RFC-062: Claude 4.7 via Claude Code OAuth subscription (Pro/Max plan).
 (1000000280, 'Claude Opus 4.7', 'anthropic-claude-code', 'claude-opus-4-7', 'Claude Opus 4.7 via Claude Code Pro/Max subscription', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000281, 'Claude Sonnet 4.6', 'anthropic-claude-code', 'claude-sonnet-4-6', 'Claude Sonnet 4.6 via Claude Code Pro/Max subscription', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
+
+-- ==================== Default provider models (mirrors of builtin models, id = source id + 70000000) ====================
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'dashscope-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'dashscope' AND builtin = TRUE AND deleted = 0;
+
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'dashscope-compat-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'dashscope-compat' AND builtin = TRUE AND deleted = 0;
+
+INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
+SELECT id + 70000000, name, 'deepseek-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
+  FROM mate_model_config
+ WHERE provider = 'deepseek' AND builtin = TRUE AND deleted = 0;
+
+-- Migrate the out-of-box default chat model from dashscope/qwen-plus to dashscope-default/qwen-plus (ensures global uniqueness)
+UPDATE mate_model_config SET is_default = FALSE WHERE provider = 'dashscope' AND model_name = 'qwen-plus';
+UPDATE mate_model_config SET is_default = TRUE  WHERE provider = 'dashscope-default' AND model_name = 'qwen-plus';
 
 -- Default system settings
 MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
