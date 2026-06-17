@@ -12,6 +12,7 @@ import vip.mate.cron.CronChatOriginFactory;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.dashboard.model.CronJobRunEntity;
 import vip.mate.wiki.service.WikiProcessingService;
+import vip.mate.workspace.core.WorkspaceContextHolder;
 
 /**
  * RFC-063r §2.7.1: scheduler-facing orchestrator that decomposes one cron
@@ -80,7 +81,14 @@ public class CronJobRunner {
             log.warn("[CronRunner] executeJob called with null job — ignoring");
             return;
         }
+        // Off-request path: bind the job's workspace onto the execution thread so
+        // downstream DB / tool / memory resolution attributes to the real workspace
+        // rather than silently falling back to the default. WorkspaceContextHolder
+        // restores the prior value in a finally, so a pooled scheduler thread never leaks.
+        WorkspaceContextHolder.runWith(job.getWorkspaceId(), () -> doExecuteJob(job, triggerType));
+    }
 
+    private void doExecuteJob(CronJobEntity job, String triggerType) {
         // task_type='wiki_process' — system task with no conversation /
         // channel delivery. Parse the wiki-process payload from request_body,
         // queue the KB's raw materials for asynchronous processing, and write

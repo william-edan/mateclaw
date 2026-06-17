@@ -11,16 +11,16 @@ import vip.mate.tool.mcp.runtime.McpClientManager.ConnectionResult;
 import vip.mate.tool.mcp.service.McpServerService;
 
 import java.util.List;
-import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
 
 /**
  * MCP Server 管理接口
  * <p>
  * 安全说明：MCP Server 配置涉及注册外部可执行进程（stdio command）和远程服务端点，
- * 属于系统管理级能力。当前所有 /api/v1/** 接口均需 authenticated（见 SecurityConfig），
- * 且系统仅有 admin 角色，因此已满足 admin-only 要求。
- * 若后续引入多用户/多角色，必须在此类上增加 @PreAuthorize("hasRole('ADMIN')") 并启用
- * {@code @EnableMethodSecurity}。
+ * 属于系统管理级能力。{@code mate_mcp_server} 是全局表（无 workspace_id），跨工作区共享，
+ * 因此本类所有端点（读 + 写）均要求 {@code @RequireGlobalAdmin}（global role=admin），
+ * 而非 {@code @RequireWorkspaceRole}——否则任一注册用户（自己工作区的 owner/admin）即可
+ * 读取或篡改全局外部集成配置/凭证。
  *
  * @author MateClaw Team
  */
@@ -35,21 +35,21 @@ public class McpServerController {
 
     @Operation(summary = "获取 MCP Server 列表")
     @GetMapping
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<List<McpServerEntity>> list() {
         return R.ok(mcpServerService.sanitizeList(mcpServerService.listAll()));
     }
 
     @Operation(summary = "获取 MCP Server 详情")
     @GetMapping("/{id}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<McpServerEntity> get(@PathVariable Long id) {
         return R.ok(mcpServerService.sanitize(mcpServerService.getById(id)));
     }
 
     @Operation(summary = "创建 MCP Server")
     @PostMapping
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<McpServerEntity> create(@RequestBody McpServerEntity entity) {
         McpServerEntity created = mcpServerService.create(entity);
         return R.ok(mcpServerService.sanitize(created));
@@ -57,7 +57,7 @@ public class McpServerController {
 
     @Operation(summary = "更新 MCP Server")
     @PutMapping("/{id}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<McpServerEntity> update(@PathVariable Long id, @RequestBody McpServerEntity entity) {
         McpServerEntity updated = mcpServerService.update(id, entity);
         return R.ok(mcpServerService.sanitize(updated));
@@ -65,7 +65,7 @@ public class McpServerController {
 
     @Operation(summary = "删除 MCP Server")
     @DeleteMapping("/{id}")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> delete(@PathVariable Long id) {
         mcpServerService.delete(id);
         return R.ok();
@@ -73,7 +73,7 @@ public class McpServerController {
 
     @Operation(summary = "启用/禁用 MCP Server")
     @PutMapping("/{id}/toggle")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<McpServerEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
         McpServerEntity toggled = mcpServerService.toggle(id, enabled);
         return R.ok(mcpServerService.sanitize(toggled));
@@ -81,7 +81,7 @@ public class McpServerController {
 
     @Operation(summary = "设置 MCP Server 披露分级（core / extension），整组工具跟随")
     @PutMapping("/{id}/disclosure-tier")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<McpServerEntity> setDisclosureTier(@PathVariable Long id,
                                                 @RequestBody java.util.Map<String, String> body) {
         String tier = body == null ? null : body.get("tier");
@@ -95,7 +95,7 @@ public class McpServerController {
 
     @Operation(summary = "测试 MCP Server 连接")
     @PostMapping("/{id}/test")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<ConnectionResult> test(@PathVariable Long id) {
         ConnectionResult result = mcpServerService.testConnectionById(id);
         return R.ok(result);
@@ -123,14 +123,14 @@ public class McpServerController {
      */
     @Operation(summary = "列出 MCP Server 已发现的工具")
     @GetMapping("/{id}/tools")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<List<McpToolDescriptor>> listTools(@PathVariable Long id) {
         return R.ok(mcpServerService.listToolsByServer(id));
     }
 
     @Operation(summary = "刷新所有 MCP Server 连接")
     @PostMapping("/refresh")
-    @RequireWorkspaceRole("admin")
+    @RequireGlobalAdmin
     public R<Void> refresh() {
         mcpServerService.refreshAll();
         return R.ok();

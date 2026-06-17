@@ -8,7 +8,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
+import vip.mate.skill.model.SkillEntity;
+import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.repository.SkillSecretMapper;
+import vip.mate.workspace.core.WorkspaceContextHolder;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
@@ -42,6 +45,7 @@ public class SkillSecretService {
     private static final Pattern KEY_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,127}$");
 
     private final SkillSecretMapper skillSecretMapper;
+    private final SkillMapper skillMapper;
 
     /**
      * AES key. Reused with the datasource password key so a single
@@ -60,6 +64,7 @@ public class SkillSecretService {
      */
     public Map<String, String> getDecrypted(Long skillId) {
         if (skillId == null) return Collections.emptyMap();
+        verifyWorkspaceForDecryption(skillId);
         List<SkillSecretEntity> rows = skillSecretMapper.selectList(
                 new LambdaQueryWrapper<SkillSecretEntity>()
                         .eq(SkillSecretEntity::getSkillId, skillId)
@@ -78,6 +83,37 @@ public class SkillSecretService {
             }
         }
         return out;
+    }
+
+    /**
+     * Reject decrypting another workspace's skill secret.
+     *
+     * <p>The Agent tool path ({@code SkillScriptTool} / {@code ScriptSkillWrapperToolFactory})
+     * resolves skills by name globally and decrypts here, so without this guard a
+     * workspace-A agent could read workspace-B's encrypted credentials.
+     *
+     * <p><b>Enforce-when-bound</b>: the check fires only when a workspace is
+     * explicitly bound on {@link WorkspaceContextHolder} (cron / @Async / workflow —
+     * see off-request binding). When unbound (e.g. the reactive agent path, until
+     * Reactor-context propagation lands) we do NOT enforce, so legitimate same-workspace
+     * skills are never falsely blocked by a default-workspace fallback. builtin /
+     * workspace-less skills are shared and always allowed.
+     */
+    private void verifyWorkspaceForDecryption(Long skillId) {
+        Long current = WorkspaceContextHolder.get();
+        if (current == null) {
+            return; // workspace context not bound here — do not risk false-blocking; enforced once bound
+        }
+        SkillEntity skill = skillMapper.selectById(skillId);
+        if (skill == null
+                || Boolean.TRUE.equals(skill.getBuiltin())
+                || skill.getWorkspaceId() == null) {
+            return; // unknown / builtin / shared skill — nothing workspace-private to protect
+        }
+        if (!skill.getWorkspaceId().equals(current)) {
+            throw new MateClawException("err.common.wrong_workspace", 403,
+                    "技能不属于当前工作区，拒绝解密其密钥");
+        }
     }
 
     /** Keys + masked previews for the UI; never returns plaintext values. */

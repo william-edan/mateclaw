@@ -94,6 +94,15 @@ public class ConversationService {
     }
 
     /**
+     * Whether {@code conversationId} exists and belongs to {@code workspaceId}.
+     * Used by cross-workspace authorization guards (e.g. approval listing) to
+     * reject reads of another workspace's conversation by a guessed id.
+     */
+    public boolean isConversationInWorkspace(String conversationId, long workspaceId) {
+        return findConversation(conversationId, workspaceId) != null;
+    }
+
+    /**
      * List conversations for a user, returned as VOs that include
      * {@code agentName} / {@code agentIcon} / {@code status}.
      *

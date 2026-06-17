@@ -5,8 +5,11 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
 import vip.mate.auth.service.AccountEntitlementService;
 import vip.mate.exception.MateClawException;
 import vip.mate.i18n.I18nService;
@@ -46,6 +49,15 @@ public class WorkspaceService {
     private final I18nService i18n;
     private final AccountEntitlementService entitlementService;
     private final ModelProviderService modelProviderService;
+    private final AgentMapper agentMapper;
+
+    /**
+     * Root under which each workspace gets its own isolated file-tool sandbox
+     * directory ({root}/{workspaceId}). Follows the existing {@code ~/.huafanai/*}
+     * convention (skills/plugins). Overridable via {@code mateclaw.workspace.base-root}.
+     */
+    @Value("${mateclaw.workspace.base-root:${user.home}/.huafanai/workspaces}")
+    private String workspaceBaseRoot;
 
     /** 默认工作区 slug */
     public static final String DEFAULT_SLUG = "default";
@@ -188,9 +200,84 @@ public class WorkspaceService {
         // workspaces created post-upgrade.
         seedTasksConversation(entity.getId());
         seedModelConfiguration(entity.getId());
+        // A workspace with no agent leaves Chat / tools / automation / memory
+        // unusable; an unset basePath leaves the file-tool sandbox wide open.
+        seedDefaultAgent(entity.getId());
+        seedBasePath(entity);
 
         log.info("Created workspace: {} (slug={}, owner={})", entity.getName(), entity.getSlug(), creatorUserId);
         return entity;
+    }
+
+    /**
+     * Seed one default agent so a brand-new workspace can chat / use tools /
+     * run automations from day one. Idempotent: skips when the workspace
+     * already has any agent. Non-fatal — workspace creation still succeeds if
+     * the seed fails (the user can create an agent manually).
+     */
+    private void seedDefaultAgent(Long workspaceId) {
+        if (workspaceId == null) return;
+        try {
+            Long existing = agentMapper.selectCount(new LambdaQueryWrapper<AgentEntity>()
+                    .eq(AgentEntity::getWorkspaceId, workspaceId));
+            if (existing != null && existing > 0) {
+                return;
+            }
+            AgentEntity agent = new AgentEntity();
+            agent.setWorkspaceId(workspaceId);
+            agent.setName(i18n != null ? i18n.msg("workspace.default_agent.name") : "默认助手");
+            agent.setAgentType("react");
+            agent.setEnabled(true);
+            agent.setIcon("🤖");
+            agentMapper.insert(agent);
+            log.info("[WorkspaceService] Seeded default agent {} for workspace {}", agent.getId(), workspaceId);
+        } catch (Exception e) {
+            log.warn("[WorkspaceService] Failed to seed default agent for workspace {}: {}",
+                    workspaceId, e.getMessage());
+        }
+    }
+
+    /**
+     * Create the workspace's isolated file-tool sandbox directory and persist
+     * its path, unless the caller already supplied one. Non-fatal — a failure
+     * here must not block workspace creation. Existing workspaces with a null
+     * basePath are handled by a separate (deploy-gated) backfill.
+     */
+    private void seedBasePath(WorkspaceEntity entity) {
+        if (entity.getId() == null) return;
+        if (entity.getBasePath() != null && !entity.getBasePath().isBlank()) return;
+        try {
+            java.nio.file.Path dir = java.nio.file.Paths.get(workspaceBaseRoot, String.valueOf(entity.getId()));
+            java.nio.file.Files.createDirectories(dir);
+            entity.setBasePath(dir.toString());
+            workspaceMapper.updateById(entity);
+            log.info("[WorkspaceService] Created base path {} for workspace {}", dir, entity.getId());
+        } catch (Exception e) {
+            log.warn("[WorkspaceService] Failed to create base path for workspace {}: {}",
+                    entity.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Backfill the basePath of existing workspaces created before basePath
+     * seeding existed (their column is null → file-tool sandbox is unbounded).
+     * Idempotent: {@link #seedBasePath} skips workspaces that already have one.
+     * Run once at startup; a prerequisite for enabling WorkspacePathGuard
+     * fail-closed mode (every workspace must have a basePath first).
+     *
+     * @return number of workspaces that got a freshly-created basePath
+     */
+    public int backfillMissingBasePaths() {
+        int fixed = 0;
+        for (WorkspaceEntity ws : listAll()) {
+            if (ws.getBasePath() == null || ws.getBasePath().isBlank()) {
+                seedBasePath(ws);
+                if (ws.getBasePath() != null && !ws.getBasePath().isBlank()) {
+                    fixed++;
+                }
+            }
+        }
+        return fixed;
     }
 
     private void seedModelConfiguration(Long workspaceId) {

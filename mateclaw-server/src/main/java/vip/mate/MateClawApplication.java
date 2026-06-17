@@ -2,11 +2,18 @@ package vip.mate;
 
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerInterceptor;
 import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import vip.mate.config.WorkspaceTenantLineHandler;
+
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * MateClaw - Personal AI Assistant
@@ -46,8 +53,23 @@ public class MateClawApplication {
      * frontends saw records but total=0 and couldn't paginate (RFC-042 P0).
      */
     @Bean
-    public MybatisPlusInterceptor mybatisPlusInterceptor() {
+    public MybatisPlusInterceptor mybatisPlusInterceptor(
+            @Value("${mateclaw.tenant.line-interceptor-enabled:false}") boolean tenantLineEnabled,
+            @Value("${mateclaw.tenant.line-interceptor-tables:}") String tenantLineTables) {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        // Workspace tenant isolation — OFF by default. Enabling it rewrites SQL for
+        // the whitelisted tables (mateclaw.tenant.line-interceptor-tables, comma list)
+        // and requires every read/write path to have the workspace bound (Part 1
+        // off-request + Part 5 reactive) plus a full per-table regression. Registered
+        // BEFORE pagination so the tenant predicate is applied before the count rewrite.
+        if (tenantLineEnabled) {
+            Set<String> tables = Arrays.stream(tenantLineTables.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.toSet());
+            interceptor.addInnerInterceptor(
+                    new TenantLineInnerInterceptor(new WorkspaceTenantLineHandler(tables)));
+        }
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor());
         return interceptor;
     }

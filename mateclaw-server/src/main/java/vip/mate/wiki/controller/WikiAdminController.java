@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import vip.mate.wiki.job.WikiChunkTokenBackfillJob;
+import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.wiki.service.WikiOverviewService;
 import vip.mate.wiki.service.WikiScaffoldService;
 
@@ -34,6 +35,7 @@ import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 public class WikiAdminController {
 
     private final WikiScaffoldService scaffoldService;
+    private final WikiKnowledgeBaseService kbService;
 
     /** Optional so the controller can boot in environments where the rebuilder isn't wired (e.g. minimal tests). */
     @Autowired(required = false)
@@ -47,6 +49,7 @@ public class WikiAdminController {
     @PostMapping("/kb/{kbId}/rebuild-overview")
     @RequireWorkspaceRole("admin")
     public ResponseEntity<Map<String, Object>> rebuildOverview(@PathVariable Long kbId) {
+        kbService.verifyKbWorkspace(kbId);
         Map<String, Object> body = new HashMap<>();
         scaffoldService.ensureScaffold(kbId);
         if (overviewService != null) {

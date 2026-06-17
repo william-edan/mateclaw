@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 import vip.mate.exception.MateClawException;
+import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.repository.SkillSecretMapper;
 
 import java.util.List;
@@ -34,7 +35,7 @@ class SkillSecretServiceTest {
     @BeforeEach
     void setUp() {
         mapper = mock(SkillSecretMapper.class);
-        service = new SkillSecretService(mapper);
+        service = new SkillSecretService(mapper, mock(SkillMapper.class));
         ReflectionTestUtils.setField(service, "encryptKey", "TestKey-1234567");
     }
 
