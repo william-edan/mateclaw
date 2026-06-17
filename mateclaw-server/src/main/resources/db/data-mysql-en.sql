@@ -410,17 +410,17 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), provider=VALUES(provider), model_name
 INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
 SELECT id + 70000000, name, 'dashscope-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
   FROM mate_model_config
- WHERE provider = 'dashscope' AND builtin = TRUE AND deleted = 0;
+ WHERE provider = 'dashscope' AND builtin = TRUE AND deleted = 0 AND (model_type = 'chat' OR model_type IS NULL);
 
 INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
 SELECT id + 70000000, name, 'dashscope-compat-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
   FROM mate_model_config
- WHERE provider = 'dashscope-compat' AND builtin = TRUE AND deleted = 0;
+ WHERE provider = 'dashscope-compat' AND builtin = TRUE AND deleted = 0 AND (model_type = 'chat' OR model_type IS NULL);
 
 INSERT INTO mate_model_config (id, name, provider, model_name, description, temperature, max_tokens, top_p, builtin, enabled, is_default, create_time, update_time, deleted)
 SELECT id + 70000000, name, 'deepseek-default', model_name, description, temperature, max_tokens, top_p, builtin, enabled, FALSE, create_time, update_time, deleted
   FROM mate_model_config
- WHERE provider = 'deepseek' AND builtin = TRUE AND deleted = 0;
+ WHERE provider = 'deepseek' AND builtin = TRUE AND deleted = 0 AND (model_type = 'chat' OR model_type IS NULL);
 
 -- Migrate the out-of-box default chat model from dashscope/qwen-plus to dashscope-default/qwen-plus (ensures global uniqueness)
 UPDATE mate_model_config SET is_default = FALSE WHERE provider = 'dashscope' AND model_name = 'qwen-plus';
