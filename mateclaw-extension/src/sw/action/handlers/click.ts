@@ -1,9 +1,13 @@
 import { SessionDetachedError, type DebuggerManager } from '../../debugger-manager'
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { ClickParams } from '../types'
+import { DOM_ONLY_NO_CDP_FALLBACK } from './debug-flags'
 
 export interface ClickHandlerDeps {
   debugger: DebuggerManager
+  /** Chrome API; injectable for tests. Defaults to global chrome. Used by the
+   *  background-capable DOM-click fast-path (chrome.scripting.executeScript). */
+  chrome?: typeof globalThis.chrome
   clock?: () => number
   random?: () => number
   /** Extra micro-delay before mouseReleased (default: 30-100ms log-normal) */
@@ -50,11 +54,39 @@ export const clickHandler = (deps: ClickHandlerDeps): ActionHandler<ClickParams>
   return async (tabId, params, _deadlineMs) => {
     const startedAt = clock()
 
+    const button = params.button ?? 'left'
+    const clickCount = normalizeClickCount(params.click_count)
+
+    // 后台静默优先:页内 DOM 合成点击(elementFromPoint(x,y) → pointer/mouse 事件
+    // + native click)。不经 CDP Input、不依赖窗口活动tab/焦点,最小化或切到其他
+    // tab 也能落地真实点击(抖音获客排序筛选/排序选项/点视频的关键)。命中元素即视
+    // 为成功;未命中或目标是 input[type=file] 等需要"可信点击"的控件时回退 CDP。
+    const dom = await tryDomClickAtPoint(deps.chrome, tabId, params.x, params.y, button)
+    if (dom.ok) {
+      try {
+        await settleAfterClick(tabId)
+      } catch {
+        // ignore — the click succeeded; settling is only a timing aid
+      }
+      return {
+        ok: true,
+        elapsed_ms: Math.max(0, clock() - startedAt),
+        payload: { mode: 'dom_click', ...dom.payload },
+      }
+    }
+
+    // 【临时调试 · DOM_ONLY】页内 DOM 点击未命中即直接报失败,不回退 CDP,
+    // 让"排序 / 点视频"这步的 DOM 失败暴露出来(而非被 CDP 悄悄兜底)。见 debug-flags.ts。
+    if (DOM_ONLY_NO_CDP_FALLBACK) {
+      throw new ActionFailureError(
+        'HANDLER_ERROR',
+        `dom_only_no_cdp: DOM 点击未命中可点击元素 (x=${params.x}, y=${params.y}); domReason=${dom.reason}`,
+        false,
+      )
+    }
+
     try {
       await deps.debugger.attach(tabId)
-
-      const button = params.button ?? 'left'
-      const clickCount = normalizeClickCount(params.click_count)
 
       for (let clickIndex = 1; clickIndex <= clickCount; clickIndex++) {
         await dispatchClickEvent(deps.debugger, tabId, 'mousePressed', params.x, params.y, button, clickIndex)
@@ -79,7 +111,7 @@ export const clickHandler = (deps: ClickHandlerDeps): ActionHandler<ClickParams>
       return {
         ok: true,
         elapsed_ms: Math.max(0, clock() - startedAt),
-        payload: {},
+        payload: { mode: 'cdp_click', domReason: dom.reason },
       }
     } catch (err) {
       if (err instanceof SessionDetachedError) {
@@ -87,6 +119,84 @@ export const clickHandler = (deps: ClickHandlerDeps): ActionHandler<ClickParams>
       }
       throw err
     }
+  }
+}
+
+/**
+ * Background-capable DOM click. Injects a page func (chrome.scripting.executeScript)
+ * that resolves the element at (x,y) and fires a full pointer→mouse→native-click
+ * sequence on it. Runs in the page regardless of tab focus/visibility, unlike CDP
+ * Input.dispatchMouseEvent (which silently no-ops in a background tab). Returns ok
+ * only when a clickable element was hit; declines (so the caller falls back to CDP)
+ * when nothing is at the point or the target needs a trusted click (file inputs).
+ */
+async function tryDomClickAtPoint(
+  chromeApi: typeof globalThis.chrome | undefined,
+  tabId: number,
+  x: number,
+  y: number,
+  button: MouseButton,
+): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; reason: string; payload?: Record<string, unknown> }> {
+  const api = chromeApi ?? globalThis.chrome
+  if (!api?.scripting?.executeScript) return { ok: false, reason: 'scripting_unavailable' }
+  try {
+    const results = await api.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: domClickAtPointInPage,
+      args: [x, y, button],
+    })
+    const payload = results?.[0]?.result as ({ clicked?: boolean; reason?: string } & Record<string, unknown>) | undefined
+    if (payload?.clicked) return { ok: true, payload }
+    return { ok: false, reason: payload?.reason || 'dom_click_no_target', payload }
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'dom_click_exception' }
+  }
+}
+
+/** Injected into the page by {@link tryDomClickAtPoint}. Pure DOM; no CDP. */
+function domClickAtPointInPage(x: number, y: number, button: string): Record<string, unknown> {
+  const el = document.elementFromPoint(x, y)
+  if (!(el instanceof Element)) return { clicked: false, reason: 'no_element_at_point' }
+
+  // A synthetic (isTrusted=false) click cannot open the native file dialog, grant
+  // user activation, etc. For controls that genuinely need a trusted click, decline
+  // so the caller falls back to the CDP path.
+  if (el.closest('input[type="file"], label[for]')) {
+    const forFile = el.closest('label[for]') as HTMLLabelElement | null
+    const ctrl = forFile?.htmlFor ? document.getElementById(forFile.htmlFor) : null
+    if (el.closest('input[type="file"]') || (ctrl instanceof HTMLInputElement && ctrl.type === 'file')) {
+      return { clicked: false, reason: 'needs_trusted_click_file_input' }
+    }
+  }
+
+  const target = el as HTMLElement
+  const btn = button === 'right' ? 2 : button === 'middle' ? 1 : 0
+  const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: btn } as const
+  const ptr = { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }
+
+  try {
+    target.dispatchEvent(new PointerEvent('pointerover', ptr))
+    target.dispatchEvent(new PointerEvent('pointerenter', { ...ptr, bubbles: false }))
+    target.dispatchEvent(new PointerEvent('pointerdown', ptr))
+    target.dispatchEvent(new MouseEvent('mousedown', base))
+    target.dispatchEvent(new PointerEvent('pointerup', ptr))
+    target.dispatchEvent(new MouseEvent('mouseup', base))
+    target.dispatchEvent(new MouseEvent('click', base))
+    // Native .click() too: covers handlers bound via the element's click() path
+    // / elements that ignore synthetic MouseEvents. Harmless double-fire is rare
+    // and Douyin's React handlers de-dupe on the same tick.
+    if (typeof (target as HTMLElement).click === 'function') {
+      try { (target as HTMLElement).click() } catch { /* element detached mid-click */ }
+    }
+  } catch (e) {
+    return { clicked: false, reason: 'dispatch_failed:' + (e instanceof Error ? e.message : String(e)) }
+  }
+
+  return {
+    clicked: true,
+    tag: target.tagName.toLowerCase(),
+    e2e: target.getAttribute?.('data-e2e') || undefined,
+    text: (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 48),
   }
 }
 

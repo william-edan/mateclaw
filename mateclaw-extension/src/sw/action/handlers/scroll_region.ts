@@ -2,6 +2,7 @@ import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { ScrollParams, ScrollRegionParams } from '../types'
 import type { RegionRegistry } from '../../../runtime/region-registry'
 import { parseScrollRegionParams, toCompatibleScrollParams } from '../../../runtime/scroll-region'
+import { DOM_ONLY_NO_CDP_FALLBACK } from './debug-flags'
 
 export interface ScrollRegionHandlerDeps {
   regions: RegionRegistry
@@ -30,6 +31,54 @@ export const scrollRegionHandler = (deps: ScrollRegionHandlerDeps): ActionHandle
     }
 
     if (parsed.regionKey === 'douyin.comments') {
+      // 后台静默优先 — 快速专用路径(F12 实测得出):
+      // 抖音评论列表 [data-e2e="comment-list"] 自身就是滚动容器,直接 scrollTop=scrollHeight
+      // 即可触发虚拟列表续拉,且【只滚评论容器、不碰外层视频 feed(#sliderVideo /
+      // feed-active-video)】以免误切视频。这条又快又准、不取 innerText(避免重量级扫描超时),
+      // executeScript 注入、不依赖窗口活动tab/焦点。找不到评论列表时才回退重量级 DOM / CDP 滚轮。
+      const fast = await tryFastDouyinCommentScroll(tabId, deps.chrome, deadlineMs)
+      if (fast.ok) {
+        return {
+          ok: true,
+          elapsed_ms: 0,
+          payload: {
+            regionKey: parsed.regionKey,
+            stopWhen: parsed.stopWhen,
+            mode: 'dom_douyin_fast',
+            ...fast.payload,
+          },
+        }
+      }
+      const domComments = await tryDomScrollRegion(
+        tabId,
+        parsed.regionKey,
+        parsed.direction,
+        parsed.amount,
+        region,
+        deps.chrome,
+        deadlineMs,
+      )
+      if (domComments.ok) {
+        return {
+          ok: true,
+          elapsed_ms: 0,
+          payload: {
+            regionKey: parsed.regionKey,
+            stopWhen: parsed.stopWhen,
+            mode: 'dom_scroll_container',
+            ...domComments.payload,
+          },
+        }
+      }
+      // 【临时调试 · DOM_ONLY】抖音评论 DOM 滚动(fast + region)都失败即报错,
+      // 不回退 CDP 坐标滚轮,暴露评论采集的 DOM 问题。见 debug-flags.ts。
+      if (DOM_ONLY_NO_CDP_FALLBACK) {
+        throw new ActionFailureError(
+          'HANDLER_ERROR',
+          `dom_only_no_cdp: 抖音评论 DOM 滚动失败 (fast:${fast.reason}; region:${domComments.reason})`,
+          false,
+        )
+      }
       return wheelScrollDouyinComments(
         deps,
         tabId,
@@ -38,7 +87,7 @@ export const scrollRegionHandler = (deps: ScrollRegionHandlerDeps): ActionHandle
         parsed.segments,
         parsed.stopWhen,
         region,
-        { reason: 'real_wheel_preferred_for_douyin_comments' },
+        { reason: `dom_fast:${fast.reason};dom_region:${domComments.reason}` },
         deadlineMs,
       )
     }
@@ -63,6 +112,15 @@ export const scrollRegionHandler = (deps: ScrollRegionHandlerDeps): ActionHandle
           ...domResult.payload,
         },
       }
+    }
+
+    // 【临时调试 · DOM_ONLY】区域 DOM 滚动失败即报错,不回退 CDP 滚轮。见 debug-flags.ts。
+    if (DOM_ONLY_NO_CDP_FALLBACK) {
+      throw new ActionFailureError(
+        'HANDLER_ERROR',
+        `dom_only_no_cdp: 区域 DOM 滚动失败 region=${parsed.regionKey}; reason=${domResult.reason}`,
+        false,
+      )
     }
 
     const compatible = toCompatibleScrollParams(parsed, region)
@@ -683,6 +741,71 @@ function clamp(value: number, min: number, max: number): number {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)))
+}
+
+/**
+ * 抖音评论专用快速滚动(F12 实测方案)。只对评论列表容器
+ * [data-e2e="comment-list"](其自身 scrollHeight>clientHeight,即真正的滚动容器)
+ * 做 scrollTop=scrollHeight,触发虚拟列表续拉;绝不滚动外层视频 feed(#sliderVideo /
+ * feed-active-video),以免误切视频。极轻量(不取 innerText、不扫全页),executeScript
+ * 注入、后台/最小化可用。找到评论列表即返回 ok:true(续拉是异步的,由网络抓取判定进度)。
+ */
+async function tryFastDouyinCommentScroll(
+  tabId: number,
+  chromeApi: typeof globalThis.chrome | undefined,
+  deadlineMs: number | undefined,
+): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; reason: string }> {
+  const api = chromeApi ?? globalThis.chrome
+  if (!api?.scripting?.executeScript) return { ok: false, reason: 'scripting_unavailable' }
+  const timeoutMs = Math.max(300, Math.min(900, deadlineMs ?? 800))
+  try {
+    const results = await withTimeout(api.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: fastScrollDouyinCommentsInPage,
+      args: [],
+    }), timeoutMs)
+    const payload = results?.[0]?.result as ({ ok?: boolean; reason?: string } & Record<string, unknown>) | undefined
+    if (payload?.ok) return { ok: true, payload }
+    return { ok: false, reason: payload?.reason || 'fast_scroll_failed' }
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'fast_scroll_exception' }
+  }
+}
+
+/** 注入页内执行:把抖音评论列表滚到底触发续拉。纯 DOM、不碰视频 feed。 */
+function fastScrollDouyinCommentsInPage(): Record<string, unknown> {
+  const list = (document.querySelector('#merge-all-comment-container [data-e2e="comment-list"]')
+    || document.querySelector('[data-e2e="comment-list"]')) as HTMLElement | null
+  if (!list) return { ok: false, reason: 'comment_list_not_found' }
+  const isVideoFeed = (el: Element): boolean =>
+    el.id === 'sliderVideo' || el.getAttribute('data-e2e') === 'feed-active-video'
+  // 选定滚动容器:优先评论列表自身;若它本身不可滚,向上找最近可滚祖先,但跳过视频 feed。
+  let scroller: HTMLElement = list
+  if (!(list.scrollHeight > list.clientHeight + 4)) {
+    let cur: HTMLElement | null = list.parentElement
+    let depth = 0
+    while (cur && depth++ < 12) {
+      if (!isVideoFeed(cur) && cur.scrollHeight > cur.clientHeight + 4) { scroller = cur; break }
+      cur = cur.parentElement
+    }
+  }
+  if (isVideoFeed(scroller)) return { ok: false, reason: 'only_video_feed_scrollable' }
+  const beforeItems = list.querySelectorAll('[data-e2e="comment-item"]').length
+  const before = scroller.scrollTop
+  // 实测有效:直接滚到底触发续拉(scrollBy 会滚但不一定续拉,dispatchWheel 抖音忽略)
+  scroller.scrollTop = scroller.scrollHeight
+  try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })) } catch { /* ignore */ }
+  const after = scroller.scrollTop
+  return {
+    ok: true,
+    moved: Math.abs(after - before) > 1,
+    scrollTopBefore: before,
+    scrollTopAfter: after,
+    scrollHeight: scroller.scrollHeight,
+    clientHeight: scroller.clientHeight,
+    beforeItems,
+    containerE2E: scroller === list ? 'comment-list' : (scroller.getAttribute('data-e2e') || scroller.tagName.toLowerCase()),
+  }
 }
 
 async function tryDomScrollRegion(

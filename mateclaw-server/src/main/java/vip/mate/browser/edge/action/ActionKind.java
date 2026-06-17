@@ -18,6 +18,9 @@ public enum ActionKind {
     TYPE_DM_DRAFT("type_dm_draft"),
     CLOSE_TAB("close_tab"),
     DOUYIN_COMMENT_NETWORK("douyin_comment_network"),
+    DOUYIN_SEARCH("douyin_search"),
+    DOUYIN_OPEN_VIDEO("douyin_open_video"),
+    DOUYIN_UI("douyin_ui"),
     MOVE_MOUSE("move_mouse"),
     WAIT("wait");
 

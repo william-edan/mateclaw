@@ -20,7 +20,13 @@ import vip.mate.browser.edge.action.DetectRegionSuccess;
 import vip.mate.browser.edge.action.CloseTabPayload;
 import vip.mate.browser.edge.action.CloseTabSuccess;
 import vip.mate.browser.edge.action.DouyinCommentNetworkPayload;
+import vip.mate.browser.edge.action.DouyinSearchPayload;
+import vip.mate.browser.edge.action.DouyinOpenVideoPayload;
+import vip.mate.browser.edge.action.DouyinUiPayload;
 import vip.mate.browser.edge.action.DouyinCommentNetworkSuccess;
+import vip.mate.browser.edge.action.DouyinSearchSuccess;
+import vip.mate.browser.edge.action.DouyinOpenVideoSuccess;
+import vip.mate.browser.edge.action.DouyinUiSuccess;
 import vip.mate.browser.edge.action.ExtractRegionPayload;
 import vip.mate.browser.edge.action.ExtractRegionSuccess;
 import vip.mate.browser.edge.action.MoveMousePayload;
@@ -943,6 +949,69 @@ public class ExtensionBrowserTool {
         return executePlan(session, List.of(req));
     }
 
+    public String service_douyin_search_main(String keyword) {
+        return service_douyin_search(new TabRef.Main(), keyword);
+    }
+
+    public String service_douyin_search_tab(long tabId, String keyword) {
+        return service_douyin_search(new TabRef.Explicit(tabId), keyword);
+    }
+
+    private String service_douyin_search(TabRef tabRef, String keyword) {
+        BrowserSession session = resolveSession();
+        if (session == null) return noSession();
+
+        ActionRequest req = new ActionRequest(
+                newMsgId(),
+                tabRef,
+                ActionKind.DOUYIN_SEARCH,
+                new DouyinSearchPayload(keyword),
+                DEFAULT_DEADLINE_MS);
+        return executePlan(session, List.of(req));
+    }
+
+    public String service_douyin_open_video_main(int index) {
+        return service_douyin_open_video(new TabRef.Main(), index);
+    }
+
+    public String service_douyin_open_video_tab(long tabId, int index) {
+        return service_douyin_open_video(new TabRef.Explicit(tabId), index);
+    }
+
+    private String service_douyin_open_video(TabRef tabRef, int index) {
+        BrowserSession session = resolveSession();
+        if (session == null) return noSession();
+
+        ActionRequest req = new ActionRequest(
+                newMsgId(),
+                tabRef,
+                ActionKind.DOUYIN_OPEN_VIDEO,
+                new DouyinOpenVideoPayload(index),
+                DEFAULT_DEADLINE_MS);
+        return executePlan(session, List.of(req));
+    }
+
+    public String service_douyin_ui_main(String op, String label) {
+        return service_douyin_ui(new TabRef.Main(), op, label);
+    }
+
+    public String service_douyin_ui_tab(long tabId, String op, String label) {
+        return service_douyin_ui(new TabRef.Explicit(tabId), op, label);
+    }
+
+    private String service_douyin_ui(TabRef tabRef, String op, String label) {
+        BrowserSession session = resolveSession();
+        if (session == null) return noSession();
+
+        ActionRequest req = new ActionRequest(
+                newMsgId(),
+                tabRef,
+                ActionKind.DOUYIN_UI,
+                new DouyinUiPayload(op, label),
+                DEFAULT_DEADLINE_MS);
+        return executePlan(session, List.of(req));
+    }
+
     public String service_type_dm_draft_active(String text) {
         return service_type_dm_draft_active(text, false);
     }
@@ -1115,6 +1184,9 @@ public class ExtensionBrowserTool {
             case TypeDmDraftSuccess ignored -> "type_dm_draft";
             case CloseTabSuccess ignored -> "close_tab";
             case DouyinCommentNetworkSuccess ignored -> "douyin_comment_network";
+            case DouyinSearchSuccess ignored -> "douyin_search";
+            case DouyinOpenVideoSuccess ignored -> "douyin_open_video";
+            case DouyinUiSuccess ignored -> "douyin_ui";
             case MoveMouseSuccess ignored -> "move_mouse";
             case WaitSuccess ignored -> "wait";
         };

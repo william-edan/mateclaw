@@ -154,8 +154,8 @@ public class DefaultPageSnapshotService implements PageSnapshotService {
     public void onActionSuccess(String sessionId, long resolvedTabId, ActionKind kind) {
         TabKey key = new TabKey(sessionId, resolvedTabId);
         cache.computeIfPresent(key, (k, c) -> switch (kind) {
-            case NAVIGATE -> c.withState(SnapshotState.STALE);
-            case CLICK, TYPE, PRESS_KEY, SCROLL, SCROLL_REGION, CLICK_PROFILE_ACTION, TYPE_DM_DRAFT -> c.withState(SnapshotState.SUSPECT);
+            case NAVIGATE, DOUYIN_SEARCH, DOUYIN_OPEN_VIDEO -> c.withState(SnapshotState.STALE);
+            case CLICK, TYPE, PRESS_KEY, SCROLL, SCROLL_REGION, CLICK_PROFILE_ACTION, TYPE_DM_DRAFT, DOUYIN_UI -> c.withState(SnapshotState.SUSPECT);
             case OPEN_AUTHOR_FROM_COMMENT -> c.withState(SnapshotState.STALE);
             case CLOSE_TAB -> null;
             case MOVE_MOUSE, WAIT, REGISTER_REGION, DETECT_REGION, EXTRACT_REGION, DOUYIN_COMMENT_NETWORK -> c; // no transition — DOM not mutated

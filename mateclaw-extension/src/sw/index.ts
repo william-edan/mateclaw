@@ -50,6 +50,9 @@ import { closeTabHandler } from './action/handlers/close_tab'
 import { moveMouseHandler, viewportCenterFromDebugger } from './action/handlers/move_mouse'
 import { waitHandler } from './action/handlers/wait'
 import { douyinCommentNetworkHandler } from './action/handlers/douyin_comment_network'
+import { douyinSearchHandler } from './action/handlers/douyin_search'
+import { douyinOpenVideoHandler } from './action/handlers/douyin_open_video'
+import { douyinUiHandler } from './action/handlers/douyin_ui'
 import type { Point } from '../lib/windmouse'
 import { RegionRegistry } from '../runtime/region-registry'
 import { parseRegionClearMessage, parseRegionRegistrationMessage } from '../runtime/messages'
@@ -266,11 +269,11 @@ const resolver = new TabRefResolver({
 
 const cursorState = new Map<number, Point>()
 const regionRegistry = new RegionRegistry()
-const baseScrollHandler = scrollHandler({ debugger: debuggerManager })
+const baseScrollHandler = scrollHandler({ debugger: debuggerManager, chrome })
 
 const handlers: ActionHandlers = {
   navigate:   navigateHandler(chrome),
-  click:      clickHandler({ debugger: debuggerManager }),
+  click:      clickHandler({ debugger: debuggerManager, chrome }),
   type:       typeHandler({ debugger: debuggerManager, chrome, clearFirst: true }),
   press_key:  pressKeyHandler({ debugger: debuggerManager }),
   scroll:     baseScrollHandler,
@@ -290,6 +293,9 @@ const handlers: ActionHandlers = {
   }),
   wait:       waitHandler({ chrome }),
   douyin_comment_network: douyinCommentNetworkHandler({ debugger: debuggerManager, chrome }),
+  douyin_search: douyinSearchHandler({ chrome }),
+  douyin_open_video: douyinOpenVideoHandler({ chrome }),
+  douyin_ui: douyinUiHandler({ chrome }),
 }
 
 const executor = new ActionExecutor(handlers)

@@ -31,6 +31,9 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
         @JsonSubTypes.Type(value = TypeDmDraftSuccess.class, name = "type_dm_draft"),
         @JsonSubTypes.Type(value = CloseTabSuccess.class, name = "close_tab"),
         @JsonSubTypes.Type(value = DouyinCommentNetworkSuccess.class, name = "douyin_comment_network"),
+        @JsonSubTypes.Type(value = DouyinSearchSuccess.class, name = "douyin_search"),
+        @JsonSubTypes.Type(value = DouyinOpenVideoSuccess.class, name = "douyin_open_video"),
+        @JsonSubTypes.Type(value = DouyinUiSuccess.class, name = "douyin_ui"),
         @JsonSubTypes.Type(value = MoveMouseSuccess.class, name = "move_mouse"),
         @JsonSubTypes.Type(value = WaitSuccess.class,      name = "wait")
 })
@@ -39,5 +42,5 @@ public sealed interface ActionSuccessPayload
                 PressKeySuccess, ScrollSuccess, ScrollRegionSuccess,
                 RegisterRegionSuccess, DetectRegionSuccess, ExtractRegionSuccess,
                 OpenAuthorFromCommentSuccess, ClickProfileActionSuccess, TypeDmDraftSuccess,
-                CloseTabSuccess, DouyinCommentNetworkSuccess, MoveMouseSuccess, WaitSuccess {
+                CloseTabSuccess, DouyinCommentNetworkSuccess, DouyinSearchSuccess, DouyinOpenVideoSuccess, DouyinUiSuccess, MoveMouseSuccess, WaitSuccess {
 }

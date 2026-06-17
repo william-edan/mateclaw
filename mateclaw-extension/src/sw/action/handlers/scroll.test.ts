@@ -5,6 +5,10 @@ import type { DebuggerManager } from '../../debugger-manager'
 import type { CDP } from '../../cdp-types'
 import { scrollHandler } from './scroll'
 
+// 临时调试开关 DOM_ONLY_NO_CDP_FALLBACK 生产默认 true(只走 DOM、不回退 CDP)。
+// 本测试套件覆盖的是"DOM 失败 → CDP 兜底"旧行为,故在测试中关掉该开关。见 debug-flags.ts。
+vi.mock('./debug-flags', () => ({ DOM_ONLY_NO_CDP_FALLBACK: false }))
+
 type WheelParams = CDP['Input.dispatchMouseEvent']['params']
 
 function makeDebugger() {

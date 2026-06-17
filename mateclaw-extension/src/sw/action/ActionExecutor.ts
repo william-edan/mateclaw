@@ -18,6 +18,9 @@ import type {
   MoveMouseParams,
   WaitParams,
   DouyinCommentNetworkParams,
+  DouyinSearchParams,
+  DouyinOpenVideoParams,
+  DouyinUiParams,
 } from './types'
 
 /**
@@ -50,6 +53,9 @@ export interface ActionHandlers {
   move_mouse: ActionHandler<MoveMouseParams>
   wait:       ActionHandler<WaitParams>
   douyin_comment_network: ActionHandler<DouyinCommentNetworkParams>
+  douyin_search: ActionHandler<DouyinSearchParams>
+  douyin_open_video: ActionHandler<DouyinOpenVideoParams>
+  douyin_ui: ActionHandler<DouyinUiParams>
 }
 
 /**

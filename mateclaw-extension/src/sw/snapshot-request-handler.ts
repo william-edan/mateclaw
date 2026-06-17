@@ -245,7 +245,20 @@ export class SnapshotRequestHandler {
     // straight to the JS walker which handles per-frame extraction.
     if (manager && req.frame_id === undefined) {
       try {
-        return await this.captureSnapshotViaCdp(manager, tabId, req)
+        const cdp = await this.captureSnapshotViaCdp(manager, tabId, req)
+        if (cdpTreeUsable(cdp.tree)) {
+          return cdp
+        }
+        // CDP returned a degenerate / coordless tree. This is the typical
+        // background-tab case: when the page is not the focused/foreground tab
+        // (user switched tabs or minimised the window), Chrome may not compute
+        // layout for it, so DOM.getBoxModel yields no bounds and the tree comes
+        // back without a single ` @{x,y wxh}` marker — useless for any click
+        // grounding. Fall through to the injected-JS DOM walker, which forces a
+        // synchronous getBoundingClientRect layout in the page and therefore
+        // returns real coordinates regardless of tab focus/visibility. This is
+        // what makes the Douyin lead pipeline observable while running in the
+        // background.
       } catch {
         // Any CDP failure (not attached, command rejected, empty tree) → fall
         // through to the injected-JS walker below, unchanged.
@@ -564,4 +577,26 @@ function isSnapshotResult(value: unknown): value is SnapshotResult {
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message
   return String(err)
+}
+
+/**
+ * Whether a CDP-extracted a11y tree is usable, or so degenerate that we should
+ * fall back to the injected-JS DOM walker.
+ *
+ * The frozen line grammar attaches layout bounds as a trailing ` @{x,y wxh}`
+ * segment. In a focused/foreground tab virtually every laid-out node carries
+ * one. In a background tab (user switched away / minimised the window) Chrome
+ * often skips layout for the page, so `DOM.getBoxModel` fails for every node and
+ * the CDP tree comes back with content lines but ZERO bbox markers — coordinates
+ * that downstream click grounding strictly needs. Treat that (and an empty tree)
+ * as unusable so the caller re-derives the tree via the DOM walker, which forces
+ * a synchronous layout and yields real coords even off-screen.
+ */
+function cdpTreeUsable(tree: string): boolean {
+  if (!tree) return false
+  const lines = tree.split('\n').filter(line => line.trim().length > 0)
+  if (lines.length === 0) return false
+  // A tree with content but not a single layout bound is the background/no-layout
+  // signature — unusable for grounding. (Foreground pages always carry some.)
+  return lines.some(line => line.includes(' @{'))
 }

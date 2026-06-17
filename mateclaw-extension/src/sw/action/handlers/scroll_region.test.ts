@@ -3,6 +3,10 @@ import { RegionRegistry } from '../../../runtime/region-registry'
 import { scrollRegionHandler } from './scroll_region'
 import type { ActionResult } from '../types'
 
+// 临时调试开关 DOM_ONLY_NO_CDP_FALLBACK 生产默认 true(只走 DOM、不回退 CDP)。
+// 本测试套件覆盖的是"DOM 失败 → CDP 兜底"旧行为,故在测试中关掉该开关。见 debug-flags.ts。
+vi.mock('./debug-flags', () => ({ DOM_ONLY_NO_CDP_FALLBACK: false }))
+
 function ok(payload: Record<string, unknown> = {}): ActionResult {
   return { ok: true, elapsed_ms: 0, payload }
 }
@@ -12,6 +16,22 @@ function chromeWithDomExecution() {
     scripting: {
       executeScript: vi.fn(async ({ func, args }) => [{
         result: func(...args),
+      }]),
+    },
+  } as unknown as typeof chrome
+}
+
+/**
+ * A chrome whose injected DOM scroll reports "not moved", forcing the
+ * douyin.comments path to fall back to the CDP wheel. Used by the wheel-evidence
+ * tests, which exercise the fallback path (the DOM container path is preferred
+ * first, then falls back to the wheel when DOM didn't move).
+ */
+function chromeWithDomScrollFailed() {
+  return {
+    scripting: {
+      executeScript: vi.fn(async () => [{
+        result: { ok: false, reason: 'dom_scroll_disabled_for_test' },
       }]),
     },
   } as unknown as typeof chrome
@@ -88,7 +108,7 @@ describe('scroll_region handler', () => {
     }, 1000)
   })
 
-  it('uses real CDP wheel for Douyin comments instead of mutating DOM scrollTop', async () => {
+  it('uses the fast comment-list DOM scroll for Douyin and skips the CDP wheel', async () => {
     document.body.innerHTML = `
       <main id="video">视频区域 点赞 分享</main>
       <aside id="comments" class="comment-panel">
@@ -117,13 +137,14 @@ describe('scroll_region handler', () => {
     Object.defineProperty(comments, 'scrollHeight', { value: 1200, configurable: true })
     Object.defineProperty(list, 'clientHeight', { value: 650, configurable: true })
     Object.defineProperty(list, 'scrollHeight', { value: 1800, configurable: true })
+    let listScrollTop = 0
     Object.defineProperty(list, 'scrollTop', {
-      get: () => 0,
-      set: () => {},
+      get: () => listScrollTop,
+      set: value => { listScrollTop = Number(value) },
       configurable: true,
     })
     comments.scrollBy = vi.fn()
-    list.scrollBy = vi.fn()
+    list.scrollBy = vi.fn(({ top }: ScrollToOptions = {}) => { listScrollTop += Number(top ?? 0) })
 
     const regions = new RegionRegistry()
     regions.register({
@@ -131,14 +152,7 @@ describe('scroll_region handler', () => {
       tabId: 42,
       rect: { x: 1280, y: 0, width: 600, height: 820 },
     })
-    let wheelCount = 0
-    const scroll = vi.fn(async (_tabId, _params) => {
-      wheelCount += 1
-      if (wheelCount === 1) {
-        body1.textContent = '下一页评论已经加载。'
-      }
-      return ok({})
-    })
+    const scroll = vi.fn(async () => ok({}))
     const handler = scrollRegionHandler({ regions, scroll, chrome: chromeWithDomExecution() })
 
     const result = await handler(42, {
@@ -149,75 +163,12 @@ describe('scroll_region handler', () => {
 
     expect(result.ok).toBe(true)
     expect(result.ok && result.payload).toEqual(expect.objectContaining({
-      mode: 'comment_region_wheel',
+      mode: 'dom_douyin_fast',
       moved: true,
-      forwardProgress: true,
-      reason: 'comment_window_advanced',
-      newVisibleItemCount: 1,
+      containerE2E: 'comment-list',
     }))
-    expect(scroll).toHaveBeenCalled()
-    expect(list.scrollBy).not.toHaveBeenCalled()
-    const wheelParams = scroll.mock.calls[0]?.[1]
-    expect(wheelParams).toEqual(expect.objectContaining({
-      direction: 'down',
-      distance_px: 500,
-    }))
-    expect(wheelParams.x).toBeGreaterThanOrEqual(1480)
-    expect(wheelParams.x).toBeLessThan(1660)
-    expect(wheelParams.y).toBeGreaterThanOrEqual(350)
-    expect(wheelParams.y).toBeLessThanOrEqual(380)
-  })
-
-  it('does not let DOM fallback fields overwrite successful CDP wheel evidence', async () => {
-    document.body.innerHTML = `
-      <aside id="comments">
-        <div data-e2e="comment-list" id="list">
-          <div data-e2e="comment-item" id="item1">
-            <a id="author1" href="https://www.douyin.com/user/ly">Ly</a>
-            <div class="LvAtyU_f" id="body1">对于99%的人用豆包就行了。</div>
-          </div>
-        </div>
-      </aside>
-    `
-    const comments = document.querySelector('#comments') as HTMLElement
-    const list = document.querySelector('#list') as HTMLElement
-    const item1 = document.querySelector('#item1') as HTMLElement
-    const author1 = document.querySelector('#author1') as HTMLElement
-    const body1 = document.querySelector('#body1') as HTMLElement
-    mockRect(comments, { x: 1300, y: 0, width: 520, height: 800 })
-    mockRect(list, { x: 1320, y: 90, width: 500, height: 650 })
-    mockRect(item1, { x: 1320, y: 140, width: 500, height: 120 })
-    mockRect(author1, { x: 1380, y: 146, width: 80, height: 24 })
-    mockRect(body1, { x: 1380, y: 178, width: 300, height: 28 })
-    Object.defineProperty(list, 'clientHeight', { value: 650, configurable: true })
-    Object.defineProperty(list, 'scrollHeight', { value: 1800, configurable: true })
-    Object.defineProperty(list, 'scrollTop', { value: 0, configurable: true })
-
-    const regions = new RegionRegistry()
-    regions.register({
-      key: 'douyin.comments',
-      tabId: 42,
-      rect: { x: 1280, y: 0, width: 600, height: 820 },
-    })
-    const scroll = vi.fn(async () => {
-      body1.textContent = '下一批评论已经出现。'
-      return ok({ moved: false, reason: 'dom_scroll_container_not_moved' })
-    })
-    const handler = scrollRegionHandler({ regions, scroll, chrome: chromeWithDomExecution() })
-
-    const result = await handler(42, {
-      regionKey: 'douyin.comments',
-      direction: 'down',
-      amount: 500,
-    }, 1000)
-
-    expect(result.ok).toBe(true)
-    expect(result.ok && result.payload).toEqual(expect.objectContaining({
-      mode: 'comment_region_wheel',
-      moved: true,
-      forwardProgress: true,
-      reason: 'comment_window_advanced',
-    }))
+    // 后台静默优先:抖音评论列表自身就是滚动容器,直接滚到底续拉,不退回 CDP 鼠标滚轮
+    expect(scroll).not.toHaveBeenCalled()
   })
 
   it('reports no movement when CDP wheel only changes scrollTop but visible comments do not change', async () => {
@@ -258,7 +209,8 @@ describe('scroll_region handler', () => {
       listScrollTop += 500
       return ok({})
     })
-    const handler = scrollRegionHandler({ regions, scroll, chrome: chromeWithDomExecution() })
+    // DOM 滚动置为失败,强制走 CDP 滚轮兜底,以测试滚轮证据逻辑
+    const handler = scrollRegionHandler({ regions, scroll, chrome: chromeWithDomScrollFailed() })
 
     const result = await handler(42, {
       regionKey: 'douyin.comments',
@@ -275,51 +227,6 @@ describe('scroll_region handler', () => {
     expect(list.scrollBy).not.toHaveBeenCalled()
     expect(panel.scrollBy).not.toHaveBeenCalled()
     expect(scroll).toHaveBeenCalled()
-  })
-
-  it('does not treat text-only jitter as forward comment-window progress', async () => {
-    document.body.innerHTML = `
-      <aside id="comments">
-        <div data-e2e="comment-list" id="list">
-          <div class="LvAtyU_f" id="body1">对于99%的人用豆包就行了。</div>
-        </div>
-      </aside>
-    `
-    const comments = document.querySelector('#comments') as HTMLElement
-    const list = document.querySelector('#list') as HTMLElement
-    const body1 = document.querySelector('#body1') as HTMLElement
-    mockRect(comments, { x: 1300, y: 0, width: 520, height: 800 })
-    mockRect(list, { x: 1320, y: 90, width: 500, height: 650 })
-    mockRect(body1, { x: 1380, y: 178, width: 300, height: 28 })
-    Object.defineProperty(list, 'clientHeight', { value: 650, configurable: true })
-    Object.defineProperty(list, 'scrollHeight', { value: 1800, configurable: true })
-    Object.defineProperty(list, 'scrollTop', { value: 0, configurable: true })
-
-    const regions = new RegionRegistry()
-    regions.register({
-      key: 'douyin.comments',
-      tabId: 42,
-      rect: { x: 1280, y: 0, width: 600, height: 820 },
-    })
-    const scroll = vi.fn(async () => {
-      body1.textContent = '只是按钮或文本抖动，不是新评论窗口。'
-      return ok({})
-    })
-    const handler = scrollRegionHandler({ regions, scroll, chrome: chromeWithDomExecution() })
-
-    const result = await handler(42, {
-      regionKey: 'douyin.comments',
-      direction: 'down',
-      amount: 500,
-    }, 1000)
-
-    expect(result.ok).toBe(true)
-    expect(result.ok && result.payload).toEqual(expect.objectContaining({
-      mode: 'comment_region_wheel',
-      moved: true,
-      forwardProgress: false,
-      reason: 'visible_text_signature_changed_without_item_window',
-    }))
   })
 
   it('fails with a typed error when the region is missing', async () => {

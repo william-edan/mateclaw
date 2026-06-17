@@ -32,6 +32,9 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
         @JsonSubTypes.Type(value = TypeDmDraftPayload.class, name = "type_dm_draft"),
         @JsonSubTypes.Type(value = CloseTabPayload.class, name = "close_tab"),
         @JsonSubTypes.Type(value = DouyinCommentNetworkPayload.class, name = "douyin_comment_network"),
+        @JsonSubTypes.Type(value = DouyinSearchPayload.class, name = "douyin_search"),
+        @JsonSubTypes.Type(value = DouyinOpenVideoPayload.class, name = "douyin_open_video"),
+        @JsonSubTypes.Type(value = DouyinUiPayload.class, name = "douyin_ui"),
         @JsonSubTypes.Type(value = MoveMousePayload.class, name = "move_mouse"),
         @JsonSubTypes.Type(value = WaitPayload.class,      name = "wait")
 })
@@ -40,5 +43,5 @@ public sealed interface ActionPayload
                 PressKeyPayload, ScrollPayload, ScrollRegionPayload,
                 RegisterRegionPayload, DetectRegionPayload, ExtractRegionPayload,
                 OpenAuthorFromCommentPayload, ClickProfileActionPayload, TypeDmDraftPayload,
-                CloseTabPayload, DouyinCommentNetworkPayload, MoveMousePayload, WaitPayload {
+                CloseTabPayload, DouyinCommentNetworkPayload, DouyinSearchPayload, DouyinOpenVideoPayload, DouyinUiPayload, MoveMousePayload, WaitPayload {
 }

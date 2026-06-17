@@ -94,6 +94,9 @@ public record ActionRequest(
             case TYPE_DM_DRAFT -> p instanceof TypeDmDraftPayload;
             case CLOSE_TAB -> p instanceof CloseTabPayload;
             case DOUYIN_COMMENT_NETWORK -> p instanceof DouyinCommentNetworkPayload;
+            case DOUYIN_SEARCH -> p instanceof DouyinSearchPayload;
+            case DOUYIN_OPEN_VIDEO -> p instanceof DouyinOpenVideoPayload;
+            case DOUYIN_UI -> p instanceof DouyinUiPayload;
             case MOVE_MOUSE -> p instanceof MoveMousePayload;
             case WAIT       -> p instanceof WaitPayload;
         };

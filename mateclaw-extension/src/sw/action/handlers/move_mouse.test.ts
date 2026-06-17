@@ -6,6 +6,10 @@ import { SessionDetachedError } from '../../debugger-manager'
 import type { Point } from '../../../lib/windmouse'
 import { moveMouseHandler, viewportCenterFromDebugger } from './move_mouse'
 
+// 临时调试开关 DOM_ONLY_NO_CDP_FALLBACK 生产默认 true(move_mouse no-op,不走 CDP)。
+// 本测试套件覆盖的是真实 CDP 鼠标移动行为,故在测试中关掉该开关。见 debug-flags.ts。
+vi.mock('./debug-flags', () => ({ DOM_ONLY_NO_CDP_FALLBACK: false }))
+
 // ---------------------------------------------------------------------------
 // Test fixtures
 // ---------------------------------------------------------------------------

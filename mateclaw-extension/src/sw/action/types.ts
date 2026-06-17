@@ -115,11 +115,24 @@ export interface DouyinCommentNetworkParams {
   ttlMs?: number
 }
 
+export interface DouyinSearchParams {
+  keyword: string
+}
+
+export interface DouyinOpenVideoParams {
+  index: number
+}
+
+export interface DouyinUiParams {
+  op: 'sort' | 'open_comments' | 'pause'
+  label?: string
+}
+
 // -----------------------------------------------------------------
 // ActionKind discriminated union
 // -----------------------------------------------------------------
 
-export type ActionKind = 'navigate' | 'click' | 'type' | 'press_key' | 'scroll' | 'scroll_region' | 'register_region' | 'detect_region' | 'extract_region' | 'open_author_from_comment' | 'click_profile_action' | 'type_dm_draft' | 'close_tab' | 'move_mouse' | 'wait' | 'douyin_comment_network'
+export type ActionKind = 'navigate' | 'click' | 'type' | 'press_key' | 'scroll' | 'scroll_region' | 'register_region' | 'detect_region' | 'extract_region' | 'open_author_from_comment' | 'click_profile_action' | 'type_dm_draft' | 'close_tab' | 'move_mouse' | 'wait' | 'douyin_comment_network' | 'douyin_search' | 'douyin_open_video' | 'douyin_ui'
 
 export type ActionParams =
   | { kind: 'navigate';   params: NavigateParams }
@@ -138,6 +151,9 @@ export type ActionParams =
   | { kind: 'move_mouse'; params: MoveMouseParams }
   | { kind: 'wait';       params: WaitParams }
   | { kind: 'douyin_comment_network'; params: DouyinCommentNetworkParams }
+  | { kind: 'douyin_search'; params: DouyinSearchParams }
+  | { kind: 'douyin_open_video'; params: DouyinOpenVideoParams }
+  | { kind: 'douyin_ui'; params: DouyinUiParams }
 
 // -----------------------------------------------------------------
 // ActionRequest envelope (matches Java `ActionRequest` record)

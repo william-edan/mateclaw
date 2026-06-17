@@ -3,6 +3,7 @@ import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { DebuggerManager } from '../../debugger-manager'
 import { SessionDetachedError } from '../../debugger-manager'
 import { generate, type Point } from '../../../lib/windmouse'
+import { DOM_ONLY_NO_CDP_FALLBACK } from './debug-flags'
 
 /**
  * Default async sleeper. Resolves after `ms` real milliseconds.
@@ -131,6 +132,19 @@ export const moveMouseHandler = (deps: MoveMouseHandlerDeps): ActionHandler<Move
   const initialCursorPosition = deps.initialCursorPosition ?? defaultInitialCursorPosition
 
   return async (tabId, params, _deadlineMs) => {
+    // 【临时调试 · DOM_ONLY】纯 CDP 鼠标移动(hover / park / move_mouse)在后台对 DOM 操作
+    // 没有意义:elementFromPoint 用的是传入坐标,合成 hover 由 douyin_ui 自己派发 pointerenter,
+    // 都不依赖真实光标位置。故 DOM-only 模式下直接 no-op 成功返回(保持 requireOk 通过),
+    // 避免在可见窗口里看到鼠标乱移动(park 到评论区 / hover 到筛选)。见 debug-flags.ts。
+    if (DOM_ONLY_NO_CDP_FALLBACK) {
+      cursorState.set(tabId, { x: params.x, y: params.y })
+      return {
+        ok: true,
+        elapsed_ms: 0,
+        payload: { mode: 'dom_only_noop', x: params.x, y: params.y },
+      }
+    }
+
     await deps.debugger.attach(tabId)
 
     const from = cursorState.get(tabId) ?? await safeInitialCursorPosition(initialCursorPosition, tabId)

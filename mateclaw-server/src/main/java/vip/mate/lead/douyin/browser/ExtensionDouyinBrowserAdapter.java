@@ -59,6 +59,18 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private static final int COMMENT_NETWORK_CAPTURE_MAX_BODY_BYTES = 512 * 1024;
     private static final int COMMENT_NETWORK_CAPTURE_TTL_MS = 180_000;
     private static final boolean COMMENT_NETWORK_ONLY_COLLECTION = true;
+    /**
+     * 【临时调试开关】DOM-only 模式。为 true 时,排序 / 点视频 / 打开评论 这些步骤,
+     * 只要页内 DOM 动作(douyin_ui sort/open_comments、douyin_open_video)返回 ok 就【信任成功】,
+     * 跳过基于 observe 的二次校验和 CDP 兜底(openFilterPanel / 候选坐标点击 / 'x' 快捷键),
+     * 并跳过 parkMouse/focus 等纯 CDP 鼠标移动(service_hover → MOVE_MOUSE)。
+     *
+     * 背景:后台 / 最小化窗口下 observe 取到的是空树,二次校验必然失败而误触发 CDP 兜底
+     * (表现为"DOM 已点筛选、鼠标又移上去重复点""鼠标移到评论区")。本开关让整条链路只走 DOM,
+     * 便于验证纯 DOM 是否可行。需与扩展端 debug-flags.ts 的 DOM_ONLY_NO_CDP_FALLBACK 配套使用,
+     * 测试完一并改回 false。
+     */
+    private static final boolean DOM_ONLY_DEBUG = true;
     private static final int COMMENT_NETWORK_FALLBACK_GRACE_SCROLLS = 6;
     private static final int COMMENT_NETWORK_ONLY_NO_PAGE_SCROLL_LIMIT = 35;
     private static final int COMMENT_NETWORK_ONLY_STALE_WINDOW_LIMIT = 60;
@@ -119,6 +131,16 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         if (canReuseSearchResultsForSorting(current, input.keyword())) {
             return current;
         }
+        // 真实 DOM 搜索流程(用户要求,非 URL 直达):进抖音首页(默认跳 /jingxuan)→ 在搜索框
+        // 输入关键词(React 受控:原生 setter + _valueTracker)→ 点击搜索按钮。全程页内 DOM
+        // (douyin_search 动作),不依赖窗口活动tab/焦点,后台/最小化可用,且行为接近真人。
+        BrowserObservation viaDom = searchByRealDomFlow(input.keyword(), attempt);
+        if (searchVerified(viaDom, input.keyword())) {
+            log.info("[douyin.lead] search opened via real DOM flow (type + click search, background-capable): keyword={}",
+                    input.keyword());
+            return viaDom;
+        }
+        // 兜底(仅前台活动tab可用):首页搜索框 CDP 打字 + 回车
         JsonNode navigate = parse(browser.extension_browser_navigate(
                 "https://www.douyin.com/jingxuan",
                 "domcontentloaded",
@@ -187,6 +209,52 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return observed;
     }
 
+    /**
+     * 真实 DOM 搜索流程(后台可用,非 URL 直达):
+     *   1. 确保在抖音首页/精选(搜索栏存在)——不在则 navigate 到 /jingxuan;
+     *   2. 调 douyin_search 动作:页内把关键词写入 React 搜索框 + 合成点击搜索按钮;
+     *      搜索框可能还在渲染,故重试若干次;
+     *   3. 用 searchVerified 校验已进入搜索结果。
+     * 全程页内 DOM + chrome 导航,不依赖窗口活动tab/焦点,后台/最小化可用。
+     */
+    private BrowserObservation searchByRealDomFlow(String keyword, int attempt) {
+        String kw = keyword == null ? "" : keyword.trim();
+        if (kw.isEmpty()) {
+            return BrowserObservation.failed("EMPTY_KEYWORD", "搜索关键词为空");
+        }
+        BrowserObservation cur = observeMain("all");
+        if (!hasDouyinSearchBarContext(cur.url())) {
+            tryOk(browser.extension_browser_navigate(
+                    "https://www.douyin.com/jingxuan",
+                    "domcontentloaded",
+                    null));
+            waitMs(attempt == 0 ? 2000L : 2800L);
+        }
+        JsonNode res = null;
+        for (int i = 0; i < 5; i++) {
+            res = parse(browser.service_douyin_search_main(kw));
+            if (ok(res)) {
+                break;
+            }
+            // 搜索框尚未渲染/未就绪,等待后重试
+            waitMs(700L);
+        }
+        if (res == null || !ok(res)) {
+            log.warn("[douyin.lead] real DOM search action not ok after retries: keyword={}, last={}",
+                    kw, errorSummary(res));
+            return observeMain("all");
+        }
+        log.info("[douyin.lead] real DOM search submitted: keyword={}, payload={}",
+                kw, res.path("results").path(0).path("payload"));
+        waitMs(1200L);
+        return waitForSearchVerified(kw, 8, 900L);
+    }
+
+    private boolean hasDouyinSearchBarContext(@Nullable String url) {
+        String u = url == null ? "" : url.toLowerCase(Locale.ROOT);
+        return u.contains("douyin.com") && (u.contains("/jingxuan") || u.contains("/search/"));
+    }
+
     @Override
     public BrowserObservation applySort(DouyinLeadAcquisitionInput input) {
         DouyinSortSpec sort = DouyinSortSpec.from(input == null ? "" : input.sort());
@@ -204,6 +272,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     rememberSortedVideoSnapshot(keyword, observed);
                     return observed;
                 }
+                // 后台可用优先:douyin_ui(合成 hover 展开「筛选」+ 点排序选项),不依赖 CDP hover
+                BrowserObservation byUi = sortByDouyinUi(keyword, sort);
+                if (byUi != null) {
+                    rememberSortedVideoSnapshot(keyword, byUi);
+                    return byUi;
+                }
+                // 兜底(仅前台):CDP hover/click 打开筛选面板再选
                 BrowserObservation panel = openFilterPanel(observed, keyword, sort);
                 return selectSortOption(panel, keyword, sort);
             } catch (DouyinBrowserException e) {
@@ -224,6 +299,38 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 : lastDetached;
     }
 
+    /**
+     * 后台可用的排序:douyin_ui 动作在页内合成 hover 展开「筛选」面板,再点排序选项。
+     * 成功且校验生效则返回观察;否则返回 null,交回退(CDP hover/click 筛选面板)。
+     */
+    @Nullable
+    private BrowserObservation sortByDouyinUi(String keyword, DouyinSortSpec sort) {
+        JsonNode res;
+        try {
+            res = parse(browser.service_douyin_ui_main("sort", sort.primaryLabel()));
+        } catch (RuntimeException e) {
+            log.info("[douyin.lead] douyin_ui sort threw, fallback to CDP filter: {}", e.getMessage());
+            return null;
+        }
+        if (!ok(res)) {
+            log.info("[douyin.lead] douyin_ui sort not ok, fallback to CDP filter: {}", errorSummary(res));
+            return null;
+        }
+        if (DOM_ONLY_DEBUG) {
+            // douyin_ui sort 的 ok 已表示"找到筛选并点中了排序选项",DOM-only 直接信任,
+            // 不做后台不可靠的 observe 二次校验(空树校验失败会回退 CDP 筛选面板,导致重复点)。
+            log.info("[douyin.lead] sorted via douyin_ui hover (DOM_ONLY, trust ok): {}", sort.primaryLabel());
+            return observeMain("all");
+        }
+        BrowserObservation observed = waitForSortVerifiedAfterSelection(keyword, sort, 10, 700L);
+        if (sortVerified(observed, keyword, sort)) {
+            log.info("[douyin.lead] sorted via douyin_ui hover (background-capable): {}", sort.primaryLabel());
+            return observed;
+        }
+        log.info("[douyin.lead] douyin_ui sort clicked but not verified, fallback to CDP filter");
+        return null;
+    }
+
     @Override
     public BrowserObservation openVideo(int zeroBasedIndex) {
         startCommentNetworkCapture();
@@ -242,6 +349,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         "VIDEO_TARGET",
                         "reused_existing_video_page");
             }
+        }
+        // 确定性优先:直接点结果区第 N 张【视频】封面卡(跳过图文、按 top-left,页内点元素本身),
+        // 绝不会"落到第二张"。失败再回退候选 + 坐标点击。
+        BrowserObservation byCard = openVideoByCoverCard(zeroBasedIndex);
+        if (byCard != null) {
+            return byCard;
         }
         VideoCandidates candidates = sortedVideoSnapshotCandidates(current);
         if (candidates.isEmpty()) {
@@ -288,6 +401,57 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 opened.viewportHeight(),
                 "VIDEO_TARGET",
                 target.debugSummary() + ", domDebug=" + candidates.debug());
+    }
+
+    /**
+     * 确定性打开第 N 个视频:调 douyin_search 同款机制的 douyin_open_video 动作,
+     * 页内定位结果区第 N 张【视频】封面卡(跳过图文)并直接点该元素。成功且确认进入
+     * 视频页则返回观察;否则返回 null,交回退路径(候选 + 坐标点击)。
+     */
+    @Nullable
+    private BrowserObservation openVideoByCoverCard(int zeroBasedIndex) {
+        JsonNode opened;
+        try {
+            opened = parse(browser.service_douyin_open_video_main(Math.max(0, zeroBasedIndex)));
+        } catch (RuntimeException e) {
+            log.info("[douyin.lead] open video by cover card threw, fallback to candidates: {}", e.getMessage());
+            return null;
+        }
+        if (!ok(opened)) {
+            log.info("[douyin.lead] open video by cover card not ok, fallback to candidates: {}", errorSummary(opened));
+            return null;
+        }
+        JsonNode payload = opened.path("results").path(0).path("payload");
+        waitMs(1_800L);
+        BrowserObservation obs = observeMain("all");
+        if (looksLikeVideoOpenHard(obs) || looksLikeLoginWall(obs)) {
+            tryOk(browser.service_douyin_ui_main("pause", "")); // 暂停视频,避免自动播放
+            log.info("[douyin.lead] opened video by cover card (deterministic): index={}, total={}, title={}",
+                    payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
+            return new BrowserObservation(
+                    obs.ok(), obs.url(), obs.title(), obs.tree(),
+                    obs.viewportWidth(), obs.viewportHeight(),
+                    "VIDEO_TARGET",
+                    "opened_by_cover_card:index=" + payload.path("index").asInt(zeroBasedIndex)
+                            + ",total=" + payload.path("total").asInt(-1)
+                            + ",title=" + payload.path("title").asText(""));
+        }
+        if (DOM_ONLY_DEBUG && payload.path("clicked").asBoolean(false)) {
+            // 后台 observe 空树确认不了视频页,但 douyin_open_video 已 clicked=true,DOM-only 直接信任,
+            // 不回退候选坐标点击(那条路在 DOM-only 下已被切、必然失败)。
+            tryOk(browser.service_douyin_ui_main("pause", ""));
+            log.info("[douyin.lead] opened video by cover card (DOM_ONLY, trust clicked): index={}, total={}, title={}",
+                    payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
+            return new BrowserObservation(
+                    obs.ok(), obs.url(), obs.title(), obs.tree(),
+                    obs.viewportWidth(), obs.viewportHeight(),
+                    "VIDEO_TARGET",
+                    "opened_by_cover_card_dom_only:index=" + payload.path("index").asInt(zeroBasedIndex)
+                            + ",total=" + payload.path("total").asInt(-1)
+                            + ",title=" + payload.path("title").asText(""));
+        }
+        log.info("[douyin.lead] cover-card click ok but video not confirmed, fallback to candidates");
+        return null;
     }
 
     private BrowserObservation switchToNextVideoByKeyboard(BrowserObservation current, int zeroBasedIndex) {
@@ -362,9 +526,39 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return commentsOpenedObservation(observed, "already_open");
         }
 
-        observed = pressDouyinCommentShortcutX(observed);
+        // 后台可用优先:douyin_ui 点评论按钮 [data-e2e="feed-comment-icon"]
+        // (页内 DOM 点击,不依赖 'x' 快捷键的 CDP/焦点)。它的 ok=hasList(),即评论列表确已出现。
+        boolean uiOpened = false;
+        try {
+            JsonNode res = parse(browser.service_douyin_ui_main("open_comments", ""));
+            String detail = res.path("results").path(0).path("payload").path("detail").asText("");
+            if (ok(res)) {
+                uiOpened = detail.contains("opened") || detail.contains("already_open");
+                log.info("[douyin.lead] douyin_ui open_comments: {}", detail);
+            } else {
+                log.info("[douyin.lead] douyin_ui open_comments not ok: {}", errorSummary(res));
+            }
+        } catch (RuntimeException e) {
+            log.info("[douyin.lead] douyin_ui open_comments threw: {}", e.getMessage());
+        }
+        waitMs(1_200L);
+        observed = observeMain("all");
         if (commentsPanelReady(observed)) {
-            return commentsOpenedObservation(observed, "shortcut_x");
+            return commentsOpenedObservation(observed, "douyin_ui_icon");
+        }
+        if (DOM_ONLY_DEBUG && uiOpened) {
+            // 后台 observe 空树,commentsPanelReady 判不出;但 douyin_ui 的 ok 已确认评论列表出现,
+            // DOM-only 直接信任,跳过 'x' 快捷键兜底。
+            log.info("[douyin.lead] comments opened via douyin_ui (DOM_ONLY, trust ok)");
+            return commentsOpenedObservation(observed, "douyin_ui_icon_dom_only");
+        }
+
+        // 兜底(仅前台):'x' 快捷键(DOM-only 模式下跳过)
+        if (!DOM_ONLY_DEBUG) {
+            observed = pressDouyinCommentShortcutX(observed);
+            if (commentsPanelReady(observed)) {
+                return commentsOpenedObservation(observed, "shortcut_x");
+            }
         }
 
         throw new DouyinBrowserException("COMMENTS_TRIGGER_NOT_FOUND",
@@ -606,6 +800,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         if (COMMENT_NETWORK_ONLY_COLLECTION && !commentNetworkCaptureActive) {
             startCommentNetworkCapture();
         }
+        // 确保评论区域已在扩展侧 RegionRegistry 注册,供后台 DOM 区域滚动
+        // (scroll_region 的抖音评论容器滚动)定位使用——否则 service_scroll_region_main
+        // 会因 "no region registered" 失败,采集只能拿到首屏第一页。
+        tryOk(browser.service_register_region_main(
+                region.regionKey(), region.x(), region.y(), region.width(), region.height(),
+                region.source() == null || region.source().isBlank() ? "comments-collect" : region.source()));
         BrowserObservation current = observeMain("all");
         String collectionVideoIdentity = videoIdentity(current.url());
         ensureCommentsPanelReady(region, current, "before_collect_loop");
@@ -2126,7 +2326,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     private ScrollRegionEvidence scrollCommentRegion(RegionInfo region, int scrollIndex, boolean networkOnly) {
         if (networkOnly) {
-            return scrollCommentRegionNetworkTrigger(region);
+            return scrollCommentRegionNetworkTrigger(region, scrollIndex);
         }
         ClickPoint point = commentRegionScrollPoint(region, scrollIndex);
         if (scrollIndex == 0 || scrollIndex % 25 == 0) {
@@ -2156,21 +2356,46 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return evidence;
     }
 
-    private ScrollRegionEvidence scrollCommentRegionNetworkTrigger(RegionInfo region) {
-        ClickPoint point = commentRegionScrollPoint(region, 0);
+    private ScrollRegionEvidence scrollCommentRegionNetworkTrigger(RegionInfo region, int scrollIndex) {
+        // 后台静默优先:用 DOM 区域滚动(scroll_region 的抖音评论专用容器滚动:
+        // scrollBy/scrollTop += / dispatch WheelEvent,executeScript 注入、不依赖窗口
+        // 活动tab/焦点),把评论虚拟列表往下滚以触发续拉 XHR。原先用 service_scroll_main
+        // (CDP 鼠标滚轮)在后台 no-op、前台坐标也常落空,导致只抓到第一页(~20 条)。
+        // DOM 区域滚动失败时再回退坐标滚轮(前台 CDP / 后台 scroll.ts DOM)。
         try {
-            requireOk(browser.service_scroll_main(
+            JsonNode res = requireOkNode(browser.service_scroll_region_main(
+                            region.regionKey(),
                             "down",
                             COMMENT_NETWORK_SCROLL_STEP_PX,
-                            point.x(),
-                            point.y(),
                             COMMENT_NETWORK_WHEEL_SCROLL_DEADLINE_MS),
                     "scroll_comments_network_trigger");
-            return ScrollRegionEvidence.networkTrigger("network_only_direct_wheel");
+            if (scrollIndex < 3 || scrollIndex % 20 == 0) {
+                JsonNode payload = res.path("results").path(0).path("payload");
+                log.info("[douyin.comments.network] region scroll #{}: mode={}, moved={}, scrollTop={}->{}, e2e={}",
+                        scrollIndex,
+                        payload.path("mode").asText(""),
+                        payload.path("moved").asBoolean(false),
+                        payload.path("scrollTopBefore").asText(payload.path("scrollTop").asText("")),
+                        payload.path("scrollTopAfter").asText(""),
+                        payload.path("containerE2E").asText(""));
+            }
+            return ScrollRegionEvidence.networkTrigger("network_only_dom_region_scroll");
         } catch (DouyinBrowserException e) {
-            log.warn("[douyin.comments.network] direct wheel trigger failed, keep network collector alive: code={}, message={}",
-                    e.code(), e.getMessage());
-            return ScrollRegionEvidence.wheelFallback("network_direct_wheel_" + e.code().toLowerCase(Locale.ROOT));
+            ClickPoint point = commentRegionScrollPoint(region, scrollIndex);
+            try {
+                requireOk(browser.service_scroll_main(
+                                "down",
+                                COMMENT_NETWORK_SCROLL_STEP_PX,
+                                point.x(),
+                                point.y(),
+                                COMMENT_NETWORK_WHEEL_SCROLL_DEADLINE_MS),
+                        "scroll_comments_network_trigger_fallback");
+                return ScrollRegionEvidence.networkTrigger("network_only_point_wheel_fallback");
+            } catch (DouyinBrowserException e2) {
+                log.warn("[douyin.comments.network] scroll trigger failed (region={}, point={}); keep collector alive",
+                        e.code(), e2.code());
+                return ScrollRegionEvidence.wheelFallback("network_direct_wheel_" + e2.code().toLowerCase(Locale.ROOT));
+            }
         }
     }
 
@@ -2202,11 +2427,17 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private void parkMouseInCommentRegion(ClickPoint point, String step) {
+        if (DOM_ONLY_DEBUG) {
+            return; // DOM-only:跳过纯 CDP 鼠标移动(避免鼠标在可见窗口里移到评论区)
+        }
         requireOk(browser.service_hover_main(point.x(), point.y()),
                 step);
     }
 
     private void focusCommentRegion(ClickPoint point, String step) {
+        if (DOM_ONLY_DEBUG) {
+            return; // DOM-only:跳过纯 CDP 鼠标移动
+        }
         requireOk(browser.service_hover_main(point.x(), point.y()),
                 step);
     }
