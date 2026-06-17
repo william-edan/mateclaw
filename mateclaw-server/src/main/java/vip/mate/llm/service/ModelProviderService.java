@@ -418,6 +418,12 @@ public class ModelProviderService {
         }
         providerTokenQuotaService.ensureDefaultQuotas(workspaceId);
         modelConfigService.copyModelsToWorkspace(ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId);
+        // Hand the freshly-seeded (enabled + default-keyed) providers to ProviderInitProbe.
+        // Without this they stay Liveness.UNPROBED ("检测中") until an app restart, because the
+        // init probe only runs on ApplicationReadyEvent or this event. ProviderInitProbe listens
+        // via @TransactionalEventListener(AFTER_COMMIT), so the probe fires after the surrounding
+        // registration transaction commits and its selectList(null) sees these new rows.
+        eventPublisher.publishEvent(new ModelConfigChangedEvent("workspace-seeded"));
     }
 
     private ModelProviderEntity getProvider(String providerId) {

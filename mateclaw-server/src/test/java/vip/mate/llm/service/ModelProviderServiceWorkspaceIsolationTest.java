@@ -15,6 +15,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import vip.mate.llm.anthropic.oauth.ClaudeCodeOAuthService;
 import vip.mate.llm.config.DefaultProviderKeyProperties;
+import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.failover.AvailableProviderPool;
 import vip.mate.llm.failover.ProviderHealthProperties;
 import vip.mate.llm.failover.ProviderHealthTracker;
@@ -139,6 +140,34 @@ class ModelProviderServiceWorkspaceIsolationTest {
         ModelProviderEntity openai = copyByProvider(copies, "openai");
         assertEquals("", openai.getApiKey());
         verify(quotaService).ensureDefaultQuotas(20L);
+    }
+
+    @Test
+    void seedWorkspaceModelsPublishesModelConfigChangedEventToTriggerProbe() {
+        // First selectList = "does target workspace already have providers?" (empty → proceed);
+        // second = template providers from the default workspace.
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of())
+                .thenReturn(List.of(provider("dashscope", 1L, "")));
+
+        service.seedWorkspaceModels(20L);
+
+        // Without this event the freshly-seeded (enabled + keyed) providers are never
+        // handed to ProviderInitProbe, so they stay Liveness.UNPROBED and the cloud-model
+        // card shows "检测中" forever until an app restart.
+        verify(eventPublisher).publishEvent(any(ModelConfigChangedEvent.class));
+    }
+
+    @Test
+    void seedWorkspaceModelsSkipsEventWhenWorkspaceAlreadySeeded() {
+        // Idempotent guard: target workspace already has providers → no copy, no event.
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(provider("dashscope", 20L, "sk-existing")));
+
+        service.seedWorkspaceModels(20L);
+
+        verify(providerMapper, never()).insert(any(ModelProviderEntity.class));
+        verify(eventPublisher, never()).publishEvent(any(ModelConfigChangedEvent.class));
     }
 
     @Test
