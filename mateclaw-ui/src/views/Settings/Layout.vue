@@ -7,7 +7,7 @@
             <div class="mc-page-kicker">{{ t('settings.kicker') }}</div>
             <h2 class="nav-title">{{ t('settings.title') }}</h2>
           </div>
-          <template v-for="section in sections" :key="section.id">
+          <template v-for="section in visibleSections" :key="section.id">
             <div v-if="section.isDivider && !navCollapsed" class="nav-divider">{{ section.label }}</div>
             <el-tooltip
               v-else-if="!section.isDivider"
@@ -51,9 +51,11 @@ import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMediaQuery, BREAKPOINTS } from '@/composables/useBreakpoint'
 import { useI18n } from 'vue-i18n'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 const route = useRoute()
 const { t } = useI18n()
+const store = useWorkspaceStore()
 
 // Routes that benefit from extra editor width — the sub-nav auto-collapses
 // to a 56px rail unless the user has explicitly toggled it open.
@@ -92,6 +94,10 @@ const sections = computed(() => [
     id: 'system',
     path: '/settings/system',
     label: t('settings.sections.system'),
+    // System settings are system-wide and writable only by the global admin
+    // (PUT /settings is @RequireGlobalAdmin). Hide the entry from non-global
+    // admins so it doesn't bounce them to /chat via the route guard.
+    requiresGlobalAdmin: true,
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .66.26 1.3.73 1.77.47.47 1.11.73 1.77.73H21a2 2 0 1 1 0 4h-.09c-.66 0-1.3.26-1.77.73-.47.47-.73 1.11-.73 1.77z"/></svg>',
   },
   {
@@ -215,6 +221,12 @@ const sections = computed(() => [
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
   },
 ])
+
+// Hide global-admin-only entries (e.g. system settings) from non-global admins
+// so the nav never offers a destination the route guard will reject.
+const visibleSections = computed(() =>
+  sections.value.filter((s: any) => !s.requiresGlobalAdmin || store.isGlobalAdmin),
+)
 
 function isActive(path: string) {
   return route.path === path
