@@ -672,7 +672,7 @@ export default {
       notDetected: {
         title: 'Huafan AI extension not detected',
         hint: 'Install the Huafan AI browser extension and reload this page, then click Re-check. Make sure you opened this admin page from a whitelisted origin.',
-        desktopHint: 'This page is running inside the MateClaw desktop client, which cannot directly detect the extension installed in Chrome. Open the pairing page in Chrome to connect it; after pairing, you can still start lead tasks from the desktop client.',
+        desktopHint: 'The desktop client auto-connects to your Chrome extension over a local channel — no manual pairing needed. If this keeps showing not connected: make sure the extension is installed in Chrome, restart Chrome once, then click Re-check.',
         openInBrowser: 'Open pairing page in Chrome',
       },
       toast: {

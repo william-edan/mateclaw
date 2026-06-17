@@ -24,7 +24,7 @@ class BrowserSessionDebugControllerTest {
 
     @Test
     void list_emptyRegistry_returnsEmptyList() {
-        List<BrowserSessionView> result = controller.list();
+        List<BrowserSessionView> result = controller.list().getData();
         assertThat(result).isEmpty();
     }
 
@@ -35,7 +35,7 @@ class BrowserSessionDebugControllerTest {
         when(ws.isOpen()).thenReturn(true);
         var s = registry.register("alice", ws, "0.1.0");
         try {
-            List<BrowserSessionView> result = controller.list();
+            List<BrowserSessionView> result = controller.list().getData();
             assertThat(result).hasSize(1);
             BrowserSessionView view = result.get(0);
             assertThat(view.sessionId()).isEqualTo(s.getId());

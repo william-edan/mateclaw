@@ -27,14 +27,8 @@
         <p class="empty-hint">
           {{ isDesktopClient ? t('settings.browser.notDetected.desktopHint') : t('settings.browser.notDetected.hint') }}
         </p>
-        <button
-          v-if="isDesktopClient"
-          class="btn-primary"
-          type="button"
-          @click="openExternalPairingPage"
-        >
-          {{ t('settings.browser.notDetected.openInBrowser') }}
-        </button>
+        <!-- Desktop uses Native Messaging auto-connect — no web-pairing button. -->
+
       </div>
 
       <!-- Detected, not connected: name + Connect -->
@@ -157,13 +151,26 @@ const pillLabel = computed(() => {
   }
 })
 
-/** Ping the extension and fold the result into the local state. Never throws. */
+/** Refresh connection state. In the desktop client the extension connects via
+ *  Native Messaging (never through this page), so pinging it from inside Electron
+ *  always fails — read the real state from the server's live edge sessions
+ *  instead. In a normal browser, ping the extension as before. Never throws. */
 async function refresh() {
   probing.value = true
   try {
+    if (isDesktopClient.value) {
+      const resp = await browserPairingApi.listSessions()
+      const connected = Array.isArray(resp?.data) && resp.data.length > 0
+      status.value = connected ? 'connected' : 'not-detected'
+      deviceName.value = null
+      return
+    }
     const resp = await sendToExtension<PingResponse>({ type: 'ping' })
     status.value = statusFromPing(resp)
     deviceName.value = resp?.deviceName ?? null
+  } catch {
+    status.value = 'not-detected'
+    deviceName.value = null
   } finally {
     probing.value = false
   }

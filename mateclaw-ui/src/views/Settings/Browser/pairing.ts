@@ -273,6 +273,12 @@ export const PAIRING_TOKEN_KEY = 'mc-browser-pairing-token-id'
 export interface EnsureConnectedDeps {
   ping?: () => Promise<PingResponse | null>
   reconnect?: () => Promise<{ ok?: boolean; connected?: boolean } | null>
+  /** Returns true when the server reports a live edge session for this user —
+   *  the reliable source of truth for the Native-Messaging path, where the page
+   *  (especially INSIDE the desktop client) cannot ping the Chrome-hosted
+   *  extension at all. Defaults to a no-op (false) so ping-only callers keep
+   *  their old behaviour. */
+  sessionConnected?: () => Promise<boolean>
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -288,23 +294,31 @@ export async function ensureExtensionConnected(
   const ping = deps.ping ?? (() => sendToExtension<PingResponse>({ type: 'ping' }))
   const reconnect =
     deps.reconnect ?? (() => sendToExtension<{ ok?: boolean; connected?: boolean }>({ type: 'reconnect' }))
+  const sessionConnected = deps.sessionConnected ?? (() => Promise.resolve(false))
   const sleep = deps.sleep ?? realSleep
   const maxPolls = opts.maxPolls ?? 8
   const pollIntervalMs = opts.pollIntervalMs ?? 700
 
-  // 1. ping —— 这一步会唤醒可能已休眠的扩展 SW。
-  let p = await ping()
-  if (p === null) return { connected: false, reason: 'not-detected' }
-  if (p.connected) return { connected: true }
+  // 0. Server edge session is the reliable truth for Native Messaging: the
+  //    extension connects to the server directly, and the desktop client can't
+  //    ping the Chrome-hosted extension at all. If a session is already live,
+  //    we're done — no ping needed.
+  if (await sessionConnected()) return { connected: true }
+
+  // 1. ping —— 唤醒可能已休眠的扩展 SW（best-effort；desktop 客户端内会返回 null）。
+  const p = await ping()
+  if (p?.connected) return { connected: true }
 
   // 2. 未连 → 触发扩展重连（有配对走 direct，否则 native“装好即连”）。
   await reconnect()
 
-  // 3. 轮询等待 connected:true。
+  // 3. 轮询：server session 或 ping.connected 任一为真即视为已连。
   for (let i = 0; i < maxPolls; i++) {
     await sleep(pollIntervalMs)
-    p = await ping()
-    if (p?.connected) return { connected: true }
+    if (await sessionConnected()) return { connected: true }
+    const pp = await ping()
+    if (pp?.connected) return { connected: true }
   }
-  return { connected: false, reason: 'timeout' }
+  // 既无 server session、又 ping 不到扩展 → not-detected；ping 到了但没连上 → timeout。
+  return { connected: false, reason: p === null ? 'not-detected' : 'timeout' }
 }

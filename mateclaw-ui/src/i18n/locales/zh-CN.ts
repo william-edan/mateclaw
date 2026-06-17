@@ -552,7 +552,7 @@ export default {
       notDetected: {
         title: '未检测到 化帆AI 扩展',
         hint: '请安装 化帆AI 浏览器扩展并刷新本页，然后点击"重新检测"。请确认你是从白名单内的地址打开本管理页的。',
-        desktopHint: '当前页面运行在 MateClaw 客户端内，无法直接检测你 Chrome 里安装的扩展。请用 Chrome 打开连接页完成配对，配对后客户端也可以继续发起获客任务。',
+        desktopHint: '客户端会通过本地通道自动连接你 Chrome 里安装的扩展，无需手动配对。如果这里一直显示未连接：请确认已在 Chrome 安装本扩展，并重启一次 Chrome 后点"重新检测"。',
         openInBrowser: '在 Chrome 中打开连接页',
       },
       toast: {

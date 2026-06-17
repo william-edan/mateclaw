@@ -91,12 +91,29 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
 
   if (op === 'open_comments') {
     const hasList = () => Array.from(document.querySelectorAll('#merge-all-comment-container [data-e2e="comment-list"], [data-e2e="comment-list"]')).some(vis)
+    const waitForList = async (tries: number): Promise<boolean> => {
+      for (let t = 0; t < tries && !hasList(); t++) await sleep(400)
+      return hasList()
+    }
     if (hasList()) return { ok: true, op, detail: 'already_open' }
-    const btn = document.querySelector<HTMLElement>('[data-e2e="feed-comment-icon"],[data-e2e="comment-icon"],[data-e2e="video-comment"],[aria-label*="评论"]')
+    const findBtn = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('[data-e2e="feed-comment-icon"],[data-e2e="comment-icon"],[data-e2e="video-comment"],[aria-label*="评论"]')
+    let btn = findBtn()
     if (!btn) return { ok: false, op, detail: 'comment_icon_not_found' }
+    // 点评论图标后【轮询】等列表出现(后台加载常 > 1.5s,固定等会误判 clicked_but_no_list)
     click(btn)
-    await sleep(1500)
-    return { ok: hasList(), op, detail: hasList() ? 'opened' : 'clicked_but_no_list' }
+    if (await waitForList(12)) return { ok: true, op, detail: 'opened' }
+    // 再点一次(后台首点可能没触发懒加载)
+    btn = findBtn() || btn
+    click(btn)
+    if (await waitForList(8)) return { ok: true, op, detail: 'opened_retry' }
+    // 兜底:合成 'x' 快捷键(抖音全局快捷键开评论;纯 DOM keydown,后台可用,不走 CDP)
+    const kev = { key: 'x', code: 'KeyX', keyCode: 88, which: 88, bubbles: true } as KeyboardEventInit
+    for (const tgt of [document, document.body, window].filter(Boolean) as EventTarget[]) {
+      try { tgt.dispatchEvent(new KeyboardEvent('keydown', kev)); tgt.dispatchEvent(new KeyboardEvent('keyup', kev)) } catch { /* ignore */ }
+    }
+    if (await waitForList(8)) return { ok: true, op, detail: 'opened_shortcut_x_dom' }
+    return { ok: false, op, detail: 'clicked_but_no_list' }
   }
 
   if (op === 'sort') {

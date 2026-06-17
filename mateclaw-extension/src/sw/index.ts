@@ -444,6 +444,38 @@ try {
 }
 
 // -----------------------------------------------------------------
+// MV3 keep-alive + auto-reconnect (native path).
+//
+// A service worker is torn down after ~30s idle, which closes the native port
+// (the bridge process exits) and FREEZES any setTimeout-based reconnect — so a
+// dropped native connection never recovers on its own. That is exactly the
+// "连一次就断、之后不再重连" symptom: no bridge process, no edge activity, and no
+// SW logs because the worker is asleep. A periodic alarm is the ONE mechanism
+// that reliably WAKES a suspended MV3 worker: each wake re-runs this top-level
+// startup (which reconnects), and the handler below re-opens the native port if
+// the wake didn't already. Registered synchronously at load so the alarm + its
+// handler exist before the worker can suspend.
+// -----------------------------------------------------------------
+const KEEPALIVE_ALARM = 'mateclaw-edge-keepalive'
+try {
+  // 0.5 min is the floor on modern Chrome; older builds clamp to 1 min — either
+  // way the worker gets woken often enough to keep the native bridge alive.
+  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 })
+} catch (e) {
+  console.error('[mateclaw][sw] alarm create failed', e)
+}
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== KEEPALIVE_ALARM) return
+  if (!isConnected()) {
+    try {
+      connectNative()
+    } catch (e) {
+      console.error('[mateclaw][sw] alarm reconnect failed', e)
+    }
+  }
+})
+
+// -----------------------------------------------------------------
 // Re-show indicators after page navigation.
 //
 // A navigation tears down the page's content script — and with it the

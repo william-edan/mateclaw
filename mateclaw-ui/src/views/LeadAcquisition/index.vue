@@ -482,6 +482,7 @@ import LeadRunLivePanel from '@/components/lead/LeadRunLivePanel.vue'
 import LeadRunFinalSummary from '@/components/lead/LeadRunFinalSummary.vue'
 import BrowserPairingPanel from '@/views/Settings/Browser/index.vue'
 import { ensureExtensionConnected } from '@/views/Settings/Browser/pairing'
+import { browserPairingApi } from '@/api'
 
 type SortMode = 'comprehensive' | 'most_liked' | 'latest'
 type LeadPoolStatus = 'all' | 'pending' | 'engaged' | 'sent' | 'failed'
@@ -1000,8 +1001,18 @@ async function submitDouyinRun() {
   launchError.value = ''
   currentRun.value = null
   try {
-    // 自动确保浏览器扩展已连接：ping 唤醒可能休眠的扩展 SW + 触发重连，避免发起即 NO_SESSION。
-    const conn = await ensureExtensionConnected()
+    // 自动确保浏览器扩展已连接：先看服务端是否已有该浏览器的实时会话(Native Messaging 的
+    // 真相源——桌面客户端内根本 ping 不到 Chrome 里的扩展)，否则 ping 唤醒 SW + 触发重连后轮询。
+    const conn = await ensureExtensionConnected({
+      sessionConnected: async () => {
+        try {
+          const r = await browserPairingApi.listSessions()
+          return Array.isArray(r?.data) && r.data.length > 0
+        } catch {
+          return false
+        }
+      },
+    })
     if (!conn.connected) {
       throw new Error(conn.reason === 'not-detected'
         ? '未检测到浏览器扩展，请确认已安装并启用 MateClaw 扩展后重试'

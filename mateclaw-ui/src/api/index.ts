@@ -1694,6 +1694,16 @@ export interface BrowserPairingToken {
   expiresAt: string
 }
 
+/** A live browser-agent edge session. A non-empty list means an extension is
+ *  connected to this server. The desktop client (which can't reach the
+ *  extension from inside Electron) reads connection state from here. */
+export interface BrowserSessionView {
+  id: string
+  subject: string
+  agentVersion: string
+  lastHeartbeatAt: string
+}
+
 /**
  * Client for the /api/v1/browser/pairing/* surface (contract §3). Both calls
  * ride the normal admin JWT via the shared `http` interceptor. mint-token is
@@ -1710,4 +1720,10 @@ export const browserPairingApi = {
    *  proceeds with unpair regardless of the outcome. */
   revokeToken: (tokenId: string) =>
     http.post<{ ok: boolean }>('/browser/pairing/revoke-token', { tokenId }),
+
+  /** List live edge sessions. Non-empty = an extension is connected. The desktop
+   *  client polls this instead of pinging the (unreachable-from-Electron)
+   *  extension to render its real connection state. */
+  listSessions: () =>
+    http.get<BrowserSessionView[]>('/browser/sessions'),
 }

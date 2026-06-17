@@ -198,7 +198,19 @@ function startBackend(port: number): void {
 }
 
 async function ensureBackend(port: number): Promise<void> {
-  if (await ping(localServerUrl(port))) return
+  if (await ping(localServerUrl(port))) {
+    // Reusing a server ALREADY listening on this port. If it was not started by
+    // this desktop app (e.g. a dev `mvn spring-boot:run`), it lacks
+    // MATECLAW_DESKTOP=true, so DesktopBridgeProvisioner never runs, ~/.mateclaw/
+    // bridge.yaml is never written, and the browser extension cannot connect via
+    // Native Messaging. Stop that server and restart the app to fix it.
+    console.warn(
+      `[mateclaw] Reusing an existing server on ${port}. If it was not started by ` +
+        'this app (e.g. a dev server), browser-extension auto-connect will not work — ' +
+        'stop it and restart so the desktop server can provision bridge.yaml.',
+    )
+    return
+  }
   startBackend(port)
   await waitForServer(port)
 }
