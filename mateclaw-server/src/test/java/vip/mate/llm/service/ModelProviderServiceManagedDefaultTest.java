@@ -156,6 +156,7 @@ class ModelProviderServiceManagedDefaultTest {
         service.applyManagedDefaultProviderKeys();
 
         verify(providerMapper, never()).updateById(any(ModelProviderEntity.class));
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -168,5 +169,26 @@ class ModelProviderServiceManagedDefaultTest {
         service.applyManagedDefaultProviderKeys();
 
         verify(providerMapper, never()).updateById(any(ModelProviderEntity.class));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void applyManagedDefaultKeysFillsOnlyTheEmptyRowInMixedBatch() {
+        ModelProviderEntity empty = provider("dashscope-default");
+        empty.setApiKey("");
+        ModelProviderEntity configured = provider("deepseek-default");
+        configured.setApiKey("sk-already-good-1234567890");
+        when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(empty, configured));
+
+        service.applyManagedDefaultProviderKeys();
+
+        // only the empty dashscope-default row is updated
+        ArgumentCaptor<ModelProviderEntity> captor = ArgumentCaptor.forClass(ModelProviderEntity.class);
+        verify(providerMapper, times(1)).updateById(captor.capture());
+        assertEquals("dashscope-default", captor.getValue().getProviderId());
+        assertEquals("sk-platform-dash", captor.getValue().getApiKey());
+        // exactly one event for the whole batch
+        verify(eventPublisher, times(1)).publishEvent(any(ModelConfigChangedEvent.class));
     }
 }
