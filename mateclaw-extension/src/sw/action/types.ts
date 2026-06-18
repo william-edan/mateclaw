@@ -173,6 +173,12 @@ export interface ActionSuccess {
   ok: true
   elapsed_ms: number
   payload: Record<string, unknown>
+  /**
+   * Chrome tab id this action actually acted on. The ActionExecutor stamps it
+   * from the resolved tab_ref so the server can invalidate its snapshot cache
+   * by (tabId + kind). Omitted only when no tab was resolvable.
+   */
+  resolvedTabId?: number
 }
 
 export interface ActionFailure {
@@ -180,6 +186,9 @@ export interface ActionFailure {
   code: ActionErrorCode
   message: string
   retryable: boolean
+  /** See {@link ActionSuccess.resolvedTabId}. Present even on failures so the
+   * server can still invalidate the cache for the tab the action targeted. */
+  resolvedTabId?: number
 }
 
 export type ActionResult = ActionSuccess | ActionFailure

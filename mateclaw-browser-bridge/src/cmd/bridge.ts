@@ -34,6 +34,8 @@ import { createRequire } from 'node:module'
 import { loadConfig } from '../internal/config/config.js'
 import { Client } from '../internal/edge/client.js'
 import { Runner } from '../internal/runner/runner.js'
+import { writeJsonFrame } from '../internal/nm/server.js'
+import { Kind, make } from '../internal/edgeproto/edgeproto.js'
 
 export const VERSION = '0.1.0'
 
@@ -87,9 +89,39 @@ export async function runBridge(): Promise<number> {
   const cfg = await loadConfig()
 
   if (!cfg.authToken) {
+    // Always log a human-readable hint to stderr.
     process.stderr.write(
       'bridge run: MATECLAW_BRIDGE_AUTH_TOKEN or bridge.yaml auth_token is required\n',
     )
+
+    // When Chrome (or any Chromium browser) spawned us as a Native Messaging
+    // host, a bare early return looks to the extension like the host crashed:
+    // the port closes immediately, the SW's backoff loop re-spawns us, and the
+    // cycle repeats — a spawn storm. Emit ONE structured error frame on stdout
+    // first so the extension can surface "未授权/未配对" instead of silently
+    // retrying. The frame is a well-formed EdgeMessage (v:1, kind:'error') so the
+    // extension's parseEdgeMessage accepts it; bare {kind:'error'} would be
+    // dropped at parse-time.
+    if (isNativeMessagingArgv(process.argv) || process.stdin.isTTY !== true) {
+      try {
+        await writeJsonFrame(
+          process.stdout,
+          make({
+            kind: Kind.Error,
+            payload: {
+              code: 'NO_TOKEN',
+              message:
+                'Native host is not paired: no auth token configured (set MATECLAW_BRIDGE_AUTH_TOKEN or bridge.yaml auth_token).',
+              retryable: false,
+            },
+          }),
+        )
+      } catch {
+        // stdout may already be closed if the browser tore the port down first;
+        // the stderr line above is still the fallback signal.
+      }
+    }
+
     return 1
   }
 

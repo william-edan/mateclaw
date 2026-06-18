@@ -9,6 +9,7 @@ import org.springframework.web.socket.SubProtocolCapable;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import vip.mate.browser.edge.action.ActionKind;
 import vip.mate.browser.edge.action.ActionResult;
 import vip.mate.browser.edge.auth.EdgeAuthInterceptor;
 import vip.mate.browser.edge.auth.EdgePrincipal;
@@ -191,6 +192,80 @@ public class EdgeWebSocketHandler extends TextWebSocketHandler implements SubPro
                     false);
         }
         actionExecutionService.deliverResult(msg.getInReplyTo(), result);
+
+        // On a successful, DOM-affecting action, age the snapshot cache for the
+        // tab that action actually touched so the next observe/grounding refetches
+        // (or honours the one-retry SUSPECT budget) instead of replaying a stale
+        // tree. See PageSnapshotService#onActionSuccess for the per-kind lifecycle.
+        if (result instanceof ActionResult.Success) {
+            invalidateSnapshotOnSuccess(msg);
+        }
+    }
+
+    /**
+     * Bridge a successful {@code action.result} into the snapshot freshness
+     * machine. The extension stamps two fields we need on the result:
+     * <ul>
+     *   <li>a top-level {@code resolvedTabId} — the absolute Chrome tab id the
+     *       action actually ran against (the SW resolved {@code main|active|<int>}
+     *       into it). The snapshot cache is keyed on this integer, so without it
+     *       we cannot target the right cache entry.</li>
+     *   <li>the success {@code payload.kind} discriminator (e.g. {@code click},
+     *       {@code navigate}) — which drives the SUSPECT/STALE transition.</li>
+     * </ul>
+     * If either is missing (e.g. an older extension that has not yet adopted the
+     * {@code resolvedTabId} contract) we log at DEBUG and skip — there is no
+     * server-side record of the resolved tab id to fall back to, and invalidating
+     * the wrong tab is worse than letting the 30 s TTL age the entry out.
+     */
+    private void invalidateSnapshotOnSuccess(EdgeMessage msg) {
+        Map<String, Object> payload = msg.getPayload();
+        if (payload == null) {
+            return;
+        }
+        Long resolvedTabId = readResolvedTabId(payload.get("resolvedTabId"));
+        if (resolvedTabId == null) {
+            log.debug("[edge] action.result success without numeric resolvedTabId "
+                    + "in_reply_to={}; skipping snapshot invalidation", msg.getInReplyTo());
+            return;
+        }
+        ActionKind kind = readSuccessKind(payload.get("payload"));
+        if (kind == null) {
+            log.debug("[edge] action.result success without recognisable payload.kind "
+                    + "in_reply_to={}; skipping snapshot invalidation", msg.getInReplyTo());
+            return;
+        }
+        pageSnapshotService.onActionSuccess(msg.getSessionId(), resolvedTabId, kind);
+    }
+
+    private Long readResolvedTabId(Object raw) {
+        if (raw instanceof Number n) {
+            return n.longValue();
+        }
+        if (raw instanceof String s) {
+            try {
+                return Long.parseLong(s);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private ActionKind readSuccessKind(Object payloadObj) {
+        if (!(payloadObj instanceof Map<?, ?> payload)) {
+            return null;
+        }
+        Object kindObj = payload.get("kind");
+        if (!(kindObj instanceof String wire)) {
+            return null;
+        }
+        try {
+            return ActionKind.fromWire(wire);
+        } catch (IllegalArgumentException ignored) {
+            // Forward-compat: an unknown success kind must not crash the socket.
+            return null;
+        }
     }
 
     private void logExtractRegionWirePayload(EdgeMessage msg) {

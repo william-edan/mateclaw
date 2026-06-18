@@ -14,8 +14,10 @@ export interface ActionRouterDeps {
   /** Callback to send a reply envelope back via NativeBridge. */
   sendUp: (msg: EdgeMessage) => void
   /**
-   * Map: msg_id → AbortController for in-flight cancels. Phase 2-1 just
-   * acknowledges cancels; Wave 3 wires real cancellation into handlers.
+   * Map: action.execute msg_id → AbortController for the in-flight run.
+   * handleExecute registers one per run; handleCancel aborts by the msg_id
+   * carried on action.cancel's in_reply_to. The signal is threaded into the
+   * executor + handlers for true mid-action cancellation.
    */
   inflight?: Map<string, AbortController>
   /** Optional visual owner for the Chrome tab group status title. */
@@ -107,10 +109,18 @@ export class ActionRouter {
 
     // Step 2: dispatch through ActionExecutor (it catches handler throws
     // and shapes them into ActionResult).
+    //
+    // Register an AbortController under req.msg_id BEFORE running so an inbound
+    // action.cancel (which carries the action.execute msg_id in in_reply_to)
+    // can abort this run mid-flight. The signal is threaded through the executor
+    // into the handler; the controller is always removed in finally so a late
+    // cancel after completion is a harmless no-op.
+    const controller = new AbortController()
+    this.deps.inflight?.set(req.msg_id, controller)
     let result: ActionResult
     try {
       await this.markWorking()
-      result = await this.deps.executor.run(tabId, req)
+      result = await this.deps.executor.run(tabId, req, controller.signal)
     } catch (err) {
       // Defensive — ActionExecutor.run already catches handler throws,
       // but we don't trust the callback. Surface as HANDLER_ERROR.
@@ -119,8 +129,14 @@ export class ActionRouter {
         code: 'HANDLER_ERROR',
         message: errorMessage(err),
         retryable: true,
+        resolvedTabId: tabId,
       }
     } finally {
+      // Only drop OUR controller — a cancel that already aborted + deleted it
+      // may have left a (rare) newer entry under the same id; never clobber it.
+      if (this.deps.inflight?.get(req.msg_id) === controller) {
+        this.deps.inflight.delete(req.msg_id)
+      }
       await this.markDone()
     }
 
@@ -150,9 +166,17 @@ export class ActionRouter {
     const inflight = this.deps.inflight
     if (!inflight) return
 
+    // Cross-end contract: the cancelled action.execute msg_id is carried on the
+    // EdgeMessage TOP-LEVEL in_reply_to; the server ALSO mirrors it into
+    // payload.in_reply_to as a double-safety. Prefer the top-level field, fall
+    // back to the payload mirror.
     const payload = msg.payload ?? {}
     const targetId =
-      typeof payload.in_reply_to === 'string' ? payload.in_reply_to : null
+      typeof msg.in_reply_to === 'string' && msg.in_reply_to.length > 0
+        ? msg.in_reply_to
+        : typeof payload.in_reply_to === 'string'
+          ? payload.in_reply_to
+          : null
     if (!targetId) return
 
     const ctrl = inflight.get(targetId)

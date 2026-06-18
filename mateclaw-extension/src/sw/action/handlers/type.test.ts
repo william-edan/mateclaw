@@ -3,6 +3,10 @@ import { SessionDetachedError, type DebuggerManager } from '../../debugger-manag
 import { ActionFailureError } from '../ActionExecutor'
 import { typeHandler } from './type'
 
+// 临时调试开关 DOM_ONLY_NO_CDP_FALLBACK 生产默认 true(type 内部走 click 的 DOM 路径、
+// DOM 失败不回退 CDP)。本套件覆盖的是"DOM 写入失败 → 回退 CDP click"旧行为,故关掉它。见 debug-flags.ts。
+vi.mock('./debug-flags', () => ({ DOM_ONLY_NO_CDP_FALLBACK: false }))
+
 function fakeDebugger() {
   const sent: Array<{ tabId: number; method: string; params: any }> = []
   const debuggerStub = {

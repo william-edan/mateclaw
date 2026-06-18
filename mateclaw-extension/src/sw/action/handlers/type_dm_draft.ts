@@ -1,16 +1,45 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { TypeDmDraftParams } from '../types'
 import { SessionDetachedError, type DebuggerManager } from '../../debugger-manager'
+import { ensureRendered } from './activate-tab'
 
 export interface TypeDmDraftHandlerDeps {
   debugger: DebuggerManager
   chrome?: typeof globalThis.chrome
 }
 
+/** Throw CANCELLED at an await boundary if the run was aborted (action.cancel). */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new ActionFailureError('CANCELLED', 'type_dm_draft aborted before injection', false)
+  }
+}
+
+// 发送确认轮询参数(P0#2):点击发送后不再固定 sleep(260) 单次判断,而是在 handler 收到的
+// deadline_ms 剩余预算内轮询确认。慢网络下"发送 XHR 往返 + React 清空草稿"可能 >260ms,单次
+// 判断会把"真发出"误判为"未发出"导致上层重发——轮询从 200ms 起、指数退避到 ~1s 抹平这段抖动。
+const DM_CONFIRM_FIRST_DELAY_MS = 200
+const DM_CONFIRM_MAX_DELAY_MS = 1000
+// deadline_ms<=0(无扩展侧上限)时给确认轮询一个有限兜底预算,避免无限等待。
+const DM_CONFIRM_MAX_BUDGET_MS = 8000
+// 算"剩余预算"时预扣的安全余量:确认轮询须在 executor 的硬性 runWithDeadline 竞速前返回,
+// 否则压线返回会被外层 DEADLINE_EXCEEDED 抢先,丢掉已确认的 sent。
+const DM_CONFIRM_SAFETY_MARGIN_MS = 600
+
 export const typeDmDraftHandler = (
   deps: TypeDmDraftHandlerDeps = {},
 ): ActionHandler<TypeDmDraftParams> => {
-  return async (tabId, params, _deadlineMs) => {
+  return async (tabId, params, deadlineMs, signal) => {
+    // 整个 handler 共用调用方下发的 deadline_ms 预算(三层共用,见跨组契约):ensureRendered +
+    // 写草稿 + 点击发送 + 发送确认轮询都必须在这一个预算内跑完,不得另起更短的独立 setTimeout。
+    // startedAt 用于把"已耗时"从总预算里扣掉,算出每个阶段(尤其发送确认轮询)剩余可用时间。
+    const startedAt = Date.now()
+    const remainingBudgetMs = (): number => {
+      // 总预算 - 已耗时,再留一点安全余量给 executor 的硬性 runWithDeadline 竞速(避免确认轮询
+      // 恰好压线返回时被外层 DEADLINE_EXCEEDED 抢先)。deadline_ms<=0 视作无扩展侧上限。
+      if (!(deadlineMs > 0)) return DM_CONFIRM_MAX_BUDGET_MS
+      return deadlineMs - (Date.now() - startedAt) - DM_CONFIRM_SAFETY_MARGIN_MS
+    }
     const text = String(params?.text || '').trim()
     if (!text) {
       throw new ActionFailureError('HANDLER_ERROR', 'type_dm_draft text is required', false)
@@ -21,8 +50,21 @@ export const typeDmDraftHandler = (
     if (!chromeApi?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
+    // 取消优先:写草稿/发送都是不可逆副作用,任何注入前先看 signal,已取消则抛 CANCELLED 不注入。
+    throwIfAborted(signal)
+    // 慢机自适应兜底:私信浮层(#imSaasContainerId)在后台慢机可能迟迟不 mount → 下面一路
+    // dm_panel_not_open / dm_editable_not_found。先探一下,没渲染就激活 tab 解除节流、等浮层
+    // 出来再输入/发送(最多 12s)。快机/前台浮层已在,直接跳过、保持静默。
+    await ensureRendered(
+      chromeApi,
+      tabId,
+      '#imSaasContainerId, [data-e2e="im-dialog"], .messageEditorinputArea',
+      12_000,
+    )
+    // ensureRendered 可能等待并激活 tab(数秒 await),跨过取消窗口——真正写入/发送前再查一次。
+    throwIfAborted(signal)
     if (sendOnly) {
-      const sent = await clickDmSendInPage(chromeApi, tabId, text)
+      const sent = await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs)
       if (!sent.ok) {
         throw new ActionFailureError(
           'GROUNDING_AMBIGUOUS',
@@ -55,7 +97,7 @@ export const typeDmDraftHandler = (
       })
       const sp = sr?.[0]?.result as { ok?: boolean; draftTyped?: boolean; reason?: string; target?: string } | undefined
       if (sp?.ok === true) {
-        const sent = send ? await clickDmSendInPage(chromeApi, tabId, text) : { ok: true, sent: false, target: undefined }
+        const sent = send ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs) : { ok: true, sent: false, target: undefined }
         if (!sent.ok) {
           throw new ActionFailureError('GROUNDING_AMBIGUOUS',
             `dm draft typed (slate) but send failed: ${sent.reason || 'send_button_not_found'}`, false)
@@ -78,10 +120,18 @@ export const typeDmDraftHandler = (
       args: [text, send],
     })
     const payload = results?.[0]?.result as
-      | { ok?: boolean; reason?: string; draftTyped?: boolean; sent?: boolean; target?: string; sendTarget?: string }
+      | { ok?: boolean; reason?: string; draftTyped?: boolean; sent?: boolean; clicked?: boolean; target?: string; sendTarget?: string }
       | undefined
     if (payload?.draftTyped === true) {
-      if (!send || payload.sent === true) {
+      // send=true 时:ISOLATED in-page 已点过发送按钮(clickDmSendButton),但 in-page 只做了一次
+      // 草稿是否清空的快判;慢网络下 sent 可能仍为 false。这里不再立刻判失败,而是在剩余预算内
+      // 用 confirmDmSentInBudget 轮询确认(草稿清空 / 消息气泡出现任一强信号)。确认通过才 sent=true。
+      // 仅当 in-page 报告 clicked=true(发送按钮已点中)才轮询;按钮没找到(dm_send_button_not_found)
+      // 时不空轮询耗预算,直接走下面失败分支保留原因。
+      const confirmed = send && payload.sent !== true && payload.clicked === true
+        ? await confirmDmSentInBudget(chromeApi, tabId, text, remainingBudgetMs)
+        : payload.sent === true
+      if (!send || confirmed) {
         return {
           ok: true,
           elapsed_ms: 0,
@@ -89,7 +139,7 @@ export const typeDmDraftHandler = (
             draftTyped: true,
             text,
             target: payload.target || 'dm_editable',
-            sent: payload.sent === true,
+            sent: send ? confirmed : false,
             sendTarget: payload.sendTarget,
           },
         }
@@ -103,7 +153,7 @@ export const typeDmDraftHandler = (
     if (payload?.ok !== true || payload.draftTyped !== true) {
       const cdp = await typeDmDraftByCdp(deps.debugger, tabId, text)
       if (cdp.ok === true) {
-        const sent = send ? await clickDmSendInPage(chromeApi, tabId, text) : { ok: true, sent: false, target: undefined }
+        const sent = send ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs) : { ok: true, sent: false, target: undefined }
         if (!sent.ok) {
           throw new ActionFailureError(
             'GROUNDING_AMBIGUOUS',
@@ -280,7 +330,7 @@ async function typeDmDraftBySlateEditor(
 async function typeDouyinDmDraftInPage(
   text: string,
   send: boolean,
-): Promise<{ ok: boolean; reason?: string; draftTyped?: boolean; sent?: boolean; target?: string; sendTarget?: string }> {
+): Promise<{ ok: boolean; reason?: string; draftTyped?: boolean; sent?: boolean; clicked?: boolean; target?: string; sendTarget?: string }> {
   if (!/douyin\.com$/u.test(location.hostname) && !location.hostname.endsWith('.douyin.com')) {
     return { ok: false, reason: 'not_douyin_page' }
   }
@@ -355,15 +405,134 @@ async function typeDouyinDmDraftInPage(
       sendTarget: sendResult.target,
     }
   }
-  await sleep(260)
+  // 点击后只做一次即时(不 sleep)草稿快判:已清空即 sent=true 走快路;否则 sent=false 交给 SW 层
+  // confirmDmSentInBudget 在剩余预算内轮询确认——不再 in-page 固定 sleep(260) 单次判定(慢网络误判)。
+  // clicked=true 标记"发送按钮已点中",SW 层据此决定是否进入确认轮询(没点中就别空轮询耗预算)。
   const sent = !draftStillVisibleInEditable(text)
   return {
-    ok: sent,
+    ok: true,
     draftTyped: true,
     sent,
+    clicked: true,
     reason: sent ? undefined : 'dm_send_not_confirmed_after_click',
     target: targetDescription(target),
     sendTarget: sendResult.target,
+  }
+}
+
+/**
+ * 慢机/后台兜底:发送按钮(.e2e-send-msg-btn 等)在草稿输入后才渲染/变可点,首次点常扑空。
+ * 重试几次给它渲染余量(每次 1.2s,约 6s),每次在 page 内重新查找发送按钮再点;点中后进入
+ * confirmDmSentInBudget 在剩余预算内轮询确认。返回的 sent 只在确认通过时为 true——作为组B 幂等
+ * 的可靠依据(已确认发出的私信绝不二次发送)。所有等待都吃同一份 deadline 预算,不另起短 timeout。
+ */
+async function clickDmSendWithRetry(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  text: string,
+  remainingBudgetMs: () => number,
+): Promise<{ ok: boolean; sent?: boolean; target?: string; reason?: string }> {
+  let last: { ok: boolean; clicked?: boolean; target?: string; reason?: string } = {
+    ok: false,
+    reason: 'send_not_attempted',
+  }
+  // 关键:点中一次就不再重点。点过之后即便确认未过,也只在预算内继续"确认"而非"重点"——
+  // 重复点击会在"消息其实已发出但确认信号没抓到"时造成二次发送,直接破坏组B 的幂等。
+  for (let i = 0; i < 5; i++) {
+    last = await clickDmSendInPage(chromeApi, tabId, text)
+    if (last.ok && last.clicked) break
+    // 没点中(按钮未渲染/扑空):给渲染余量后重试查找;预算不够就停。
+    if (remainingBudgetMs() <= DM_CONFIRM_FIRST_DELAY_MS) break
+    await sleep(Math.min(1200, Math.max(0, remainingBudgetMs() - DM_CONFIRM_FIRST_DELAY_MS)))
+  }
+  if (!(last.ok && last.clicked)) {
+    return { ok: false, sent: false, target: last.target, reason: last.reason }
+  }
+  // 已点中发送按钮 → 在剩余预算内轮询确认是否真发出(草稿清空 / 消息气泡出现任一强信号)。
+  // 确认通过 sent=true(组B 幂等的可靠依据);未通过则 ok=false 让上层按未确认处理,但绝不重点。
+  const confirmed = await confirmDmSentInBudget(chromeApi, tabId, text, remainingBudgetMs)
+  return confirmed
+    ? { ok: true, sent: true, target: last.target }
+    : { ok: false, sent: false, target: last.target, reason: 'dm_send_not_confirmed_after_click' }
+}
+
+/**
+ * 发送确认轮询(P0#2 核心):点击发送后,在 remainingBudgetMs() 剩余预算内轮询确认消息真发出。
+ * 轮询间隔 200ms 起、指数退避至 ~1s。确认信号(任一强信号成立即视为已发出):
+ *   - 草稿输入框已清空(发送成功后 React 会清空 composer)——强信号;
+ *   - 我方文本已出现在会话气泡/消息条(message bubble/row)里——强信号。
+ * 暂未接入"发送成功网络回包"信号:现有 DM 链路为后台 DOM-only(刻意避开 CDP debugger),拿不到
+ * XHR 回包;故用上面 DOM 双信号兜底,任一成立即 confirmed。
+ */
+async function confirmDmSentInBudget(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  text: string,
+  remainingBudgetMs: () => number,
+): Promise<boolean> {
+  let delay = DM_CONFIRM_FIRST_DELAY_MS
+  // 至少轮询一次:即便预算已紧,也给一次发送确认机会(用 min 把单次等待压进剩余预算)。
+  for (;;) {
+    const budget = remainingBudgetMs()
+    if (budget <= 0) return false
+    await sleep(Math.min(delay, budget))
+    if (await dmSentSignalInPage(chromeApi, tabId, text)) return true
+    if (remainingBudgetMs() <= 0) return false
+    delay = Math.min(DM_CONFIRM_MAX_DELAY_MS, delay * 2)
+  }
+}
+
+/**
+ * 单次确认检测(注入 page):返回是否检测到发送成功的强信号。
+ * draftCleared:草稿输入框里不再包含我方文本(发送后被清空)。
+ * bubbleSeen:我方文本出现在非输入框区域(会话气泡/消息条)——排除输入框自身,避免把草稿误当气泡。
+ */
+async function dmSentSignalInPage(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  text: string,
+): Promise<boolean> {
+  try {
+    const [result] = await chromeApi.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: (draft: string) => {
+        const clean = (value: string) => String(value || '').replace(/\s+/g, '')
+        const wanted = clean(draft)
+        if (!wanted) return false
+        const editableSelector = 'textarea, input, [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [role="textbox"], [data-slate-editor="true"], .ProseMirror'
+        const editables = Array.from(document.querySelectorAll<HTMLElement>(editableSelector))
+        const editableText = editables
+          .map(el => {
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value || ''
+            return el.innerText || el.textContent || ''
+          })
+          .join('\n')
+        // 强信号①:草稿已清空(输入框里不再含我方文本)。
+        const draftCleared = !clean(editableText).includes(wanted)
+        if (draftCleared) return true
+        // 强信号②:我方文本出现在会话气泡/消息条(输入框之外)。遍历包含该文本的最深元素,
+        // 只要不在任何 editable 内,即认定已落到消息列表。
+        const inEditable = (node: Element | null): boolean => {
+          for (let cur = node; cur; cur = cur.parentElement) {
+            if (cur instanceof HTMLElement && editables.includes(cur)) return true
+            if (cur.matches?.(editableSelector)) return true
+          }
+          return false
+        }
+        const candidates = Array.from(document.querySelectorAll<HTMLElement>('span, p, div'))
+        for (const el of candidates) {
+          if (el.children.length > 0) continue // 取最深的文本承载节点,避免父容器误命中
+          if (!clean(el.innerText || el.textContent || '').includes(wanted)) continue
+          if (!inEditable(el)) return true
+        }
+        return false
+      },
+      args: [text],
+    })
+    return result?.result === true
+  } catch {
+    // tab 可能正在导航 —— 视作未确认,交给上层在预算内继续轮询。
+    return false
   }
 }
 
@@ -371,7 +540,7 @@ async function clickDmSendInPage(
   chromeApi: typeof globalThis.chrome,
   tabId: number,
   text: string,
-): Promise<{ ok: boolean; sent?: boolean; target?: string; reason?: string }> {
+): Promise<{ ok: boolean; clicked?: boolean; target?: string; reason?: string }> {
   const [result] = await chromeApi.scripting.executeScript({
     target: { tabId, allFrames: false },
     func: async (draft: string) => {
@@ -610,21 +779,16 @@ async function clickDmSendInPage(
       if (!button) return { ok: false, reason: 'dm_send_button_not_found' }
       button.scrollIntoView({ block: 'center', inline: 'center' })
       click(button)
-      await new Promise<void>(resolve => setTimeout(resolve, 260))
-      const sent = !clean(allEditableText()).includes(wanted)
-      return {
-        ok: sent,
-        sent,
-        target: button.tagName.toLowerCase(),
-        reason: sent ? undefined : 'dm_send_not_confirmed_after_click',
-      }
+      // 只点不在 page 内固定 sleep(260) 判定——慢网络下"发送 XHR 往返 + React 清空"可能 >260ms,
+      // 单次判定会误判"真发出"为"未发出"。确认交给 SW 层 confirmDmSentInBudget 在剩余预算内轮询。
+      return { ok: true, clicked: true, target: button.tagName.toLowerCase() }
     },
     args: [text],
   })
-  const payload = result?.result as { ok?: boolean; sent?: boolean; target?: string; reason?: string } | undefined
+  const payload = result?.result as { ok?: boolean; clicked?: boolean; target?: string; reason?: string } | undefined
   return {
     ok: payload?.ok === true,
-    sent: payload?.sent === true,
+    clicked: payload?.clicked === true,
     target: payload?.target,
     reason: payload?.reason,
   }

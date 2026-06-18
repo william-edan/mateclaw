@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { PassThrough } from 'node:stream'
-import { readFrame, writeFrame, writeJsonFrame, MAX_FRAME_BYTES } from './server.js'
+import { readFrame, writeFrame, writeJsonFrame, MAX_FRAME_BYTES, isOversizeFrame, type OversizeFrame } from './server.js'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -62,12 +62,23 @@ describe('NM codec — B6', () => {
     expect(bytes.slice(4).toString()).toBe('hi')
   })
 
-  it('rejects over-size frame on read', async () => {
+  it('returns an oversize sentinel (not throw) and stays frame-aligned', async () => {
     const overSize = MAX_FRAME_BYTES + 1
-    const header = Buffer.alloc(4)
-    header.writeUInt32LE(overSize, 0)
-    const stream = makeReadable(header)
-    await expect(readFrame(stream)).rejects.toThrow(/1MB/)
+    // 完整超限帧(header + 等量 body),后跟一个正常帧,验证 drainN 排空后仍对齐。
+    const big = encodeFrame(Buffer.alloc(overSize, 0x61))
+    const normal = encodeFrame(Buffer.from('after'))
+    const stream = makeReadable(Buffer.concat([big, normal]))
+
+    const first = await readFrame(stream)
+    expect(isOversizeFrame(first)).toBe(true)
+    expect((first as OversizeFrame).declaredBytes).toBe(overSize)
+    expect((first as OversizeFrame).maxBytes).toBe(MAX_FRAME_BYTES)
+
+    // 超限帧之后的正常帧仍能被正确读出(drainN 对齐成功)。
+    const second = await readFrame(stream)
+    expect(isOversizeFrame(second)).toBe(false)
+    expect(second).not.toBeNull()
+    expect((second as Buffer).toString()).toBe('after')
   })
 
   it('returns null on empty stream (EOF)', async () => {

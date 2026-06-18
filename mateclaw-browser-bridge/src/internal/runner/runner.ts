@@ -7,7 +7,10 @@
  *   - Pump inbound messages from Client → serialise JSON → write NM frames to stdout.
  *   - Run the Client heartbeat loop concurrently.
  *   - On any I/O or heartbeat error, sleep with exponential backoff + ±20% jitter,
- *     then reconnect up to maxAttempts times.
+ *     then reconnect — forever by default (slow-network resilience P0#5). A flaky
+ *     or slow link must NOT make the whole Native Host exit; only an abort signal
+ *     (intentional stop) ends the loop cleanly. An optional maxAttempts cap exists
+ *     purely for tests; 0/undefined means "retry indefinitely".
  *
  * Security invariant (Codex P0-1):
  *   The Native Host is the SOLE owner of session_id. Whatever the Extension sends
@@ -30,7 +33,7 @@
  */
 import type { Readable, Writable } from 'node:stream'
 import { Client } from '../edge/client.js'
-import { readFrame, writeFrame } from '../nm/server.js'
+import { readFrame, writeFrame, isOversizeFrame } from '../nm/server.js'
 import { parse, type Message } from '../edgeproto/edgeproto.js'
 
 // ── Internal async queue ─────────────────────────────────────────────────────
@@ -79,9 +82,13 @@ export interface RunnerOptions {
   stdout: Writable
   /** Initial backoff in ms (default 1000). Doubles per attempt. */
   backoffBase?: number
-  /** Maximum backoff cap in ms (default 60000). */
+  /** Maximum backoff cap in ms (default 30000). */
   backoffMax?: number
-  /** Maximum consecutive reconnect attempts before throwing (default 5). */
+  /**
+   * Maximum consecutive reconnect attempts before throwing. Defaults to
+   * unlimited (0 / undefined) — slow-network jitter must not make the Native
+   * Host give up and exit. Set a finite cap only for tests.
+   */
   maxAttempts?: number
 }
 
@@ -100,12 +107,17 @@ export class Runner {
     this.#stdin = opts.stdin
     this.#stdout = opts.stdout
     this.#backoffBase = opts.backoffBase ?? 1000
-    this.#backoffMax = opts.backoffMax ?? 60_000
-    this.#maxAttempts = opts.maxAttempts ?? 5
+    this.#backoffMax = opts.backoffMax ?? 30_000
+    // 0 = retry forever (default). A finite cap is only used by tests.
+    this.#maxAttempts = opts.maxAttempts ?? 0
   }
 
   /**
-   * Outer reconnect loop. Runs until aborted or maxAttempts consecutive failures.
+   * Outer reconnect loop. Runs until aborted (clean stop). By default it never
+   * gives up on transient failures — it keeps reconnecting with capped
+   * exponential backoff so slow/flaky networks self-heal instead of killing the
+   * Native Host. A finite maxAttempts cap (tests only) still throws after N
+   * consecutive failures.
    *
    * A single stdinReader loop reads NM frames into a MsgQueue and runs for
    * the lifetime of the outer loop. The reconnect inner loop drains the queue
@@ -133,7 +145,9 @@ export class Runner {
         if (signal?.aborted) break
 
         attempt++
-        if (attempt >= this.#maxAttempts) {
+        // maxAttempts <= 0 → retry forever (default). A finite cap (tests only)
+        // throws after N consecutive failures.
+        if (this.#maxAttempts > 0 && attempt >= this.#maxAttempts) {
           stdinQueue.close()
           await stdinDonePromise.catch(() => {})
           throw new Error(
@@ -170,6 +184,17 @@ export class Runner {
 
       const frame = await Promise.race([readFrame(this.#stdin), abortedP])
       if (frame === null) { queue.close(); return } // EOF or abort
+
+      // 超大帧(declaredBytes > MAX_FRAME_BYTES,通常是超大截图):body 已被 readFrame
+      // drain 丢弃以保持后续帧对齐、连接不断。原帧的 msg_id/in_reply_to 随 body 丢失,
+      // 无法精确回 RESULT_TOO_LARGE(后端靠该 action 的 deadline 超时收尾);这里记一条
+      // stderr 诊断(stdout 是 NM 协议流、不能污染),不入队、不杀连接。
+      if (isOversizeFrame(frame)) {
+        process.stderr.write(
+          `[bridge] dropped oversize NM frame: declared=${frame.declaredBytes} max=${frame.maxBytes}\n`,
+        )
+        continue
+      }
 
       const msg = parse(frame.toString())
       if (msg) queue.enqueue(msg)

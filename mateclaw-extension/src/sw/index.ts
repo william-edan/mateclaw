@@ -206,6 +206,50 @@ async function connectDirect(serverUrl: string, pat: string): Promise<void> {
   }
 }
 
+/**
+ * Pairing-aware (re)connect used by startup + the keepalive alarm. Picks the
+ * channel from the stored pairing state — the same rule as the external
+ * `reconnect` handler: serverUrl+pat ⇒ direct WSS, otherwise the native
+ * "装好即连" host. This replaces the old unconditional connectNative(), which
+ * would tear a paired direct/offscreen socket and re-handshake natively on
+ * every wake.
+ *
+ * <p>OFFSCREEN ROUND-TRIP: when the socket lives in the offscreen document it
+ * survives SW suspension, so a wake-driven reconnect must NOT blindly tear it
+ * down. We re-issue an IDEMPOTENT OFFSCREEN_CONNECT (a fresh proxy handle, no
+ * disconnect of the old one): the offscreen host treats a same-creds CONNECT
+ * on a live socket as a no-op and re-announces OFFSCREEN_STATE — that relay is
+ * the round-trip that refreshes this SW's `connected` flag without churning a
+ * still-alive socket. Only when the offscreen host is truly down does its
+ * CONNECT rebuild the socket. The in-SW transports (native / fallback
+ * DirectBridgeClient) don't survive suspension, so they reconnect normally.
+ */
+async function reconnectByPairing(): Promise<void> {
+  const cfg = await configStore.getConfig()
+  if (cfg.serverUrl && cfg.pat) {
+    if (usingOffscreen) {
+      // Idempotent refresh: rebuild only the lightweight proxy HANDLE and let
+      // its CONNECT round-trip confirm/restore the offscreen socket. We do NOT
+      // call disconnect on the previous handle — that would post
+      // OFFSCREEN_DISCONNECT and kill a socket that is very likely still alive.
+      bridgeUnsub?.()
+      bridgeUnsub = null
+      const proxy = new OffscreenBridgeProxy({
+        deviceId: cfg.deviceId,
+        deviceName: cfg.deviceName,
+        agentVersion: agentVersion(),
+        chrome,
+      })
+      activeBridge = proxy
+      proxy.connect(cfg.serverUrl, cfg.pat)
+      return
+    }
+    await connectDirect(cfg.serverUrl, cfg.pat)
+    return
+  }
+  connectNative()
+}
+
 /** Tear down the active transport (used by unpair). */
 function disconnectActive(): void {
   bridgeUnsub?.()
@@ -301,10 +345,11 @@ const handlers: ActionHandlers = {
 const executor = new ActionExecutor(handlers)
 
 /**
- * Map of in-flight ActionExecutor runs keyed by request msg_id. Phase 2-1
- * scaffolds it — the router calls `.abort()` on cancel — but no handler
- * passes the AbortSignal through to its work yet. Wave 3 will wire the
- * signal into navigate/click/etc. for true mid-action cancellation.
+ * Map of in-flight ActionExecutor runs keyed by the action.execute msg_id.
+ * handleExecute registers an AbortController on entry and removes it in finally;
+ * handleCancel aborts by the msg_id carried on action.cancel's in_reply_to. The
+ * signal is threaded through ActionExecutor.run into each handler so side-effect
+ * handlers can short-circuit at await boundaries (true mid-action cancellation).
  */
 const inflight = new Map<string, AbortController>()
 
@@ -426,22 +471,20 @@ function dispatchInbound(m: EdgeMessage): void {
 }
 
 // -----------------------------------------------------------------
-// Startup: connect to the local Native Messaging host immediately.
+// Startup: connect over the channel the pairing state selects.
 //
-// In the desktop ("装好即连") path the bridge host is already installed and
-// Chrome launches it on demand, so the extension needs no pairing/config to
-// come online — it just calls connectNative() at SW load. NativeBridge owns
-// reconnect + MV3 keepalive, so a suspended-then-woken SW re-launches the host
-// automatically. The direct-WSS transport (connectDirect / DirectBridgeClient /
-// OffscreenBridgeProxy) is retained for the paired/Claude-Code path and is
-// still reachable via pair/unpair, but is NOT called on startup.
+// A paired install (serverUrl+pat stored) comes online over the direct WSS /
+// offscreen transport; an un-paired desktop install uses the local Native
+// Messaging host ("装好即连"), which Chrome launches on demand with no config.
+// reconnectByPairing() encodes that choice (and the offscreen round-trip), so a
+// suspended-then-woken SW reconnects on the SAME channel it was paired on rather
+// than always falling back to native. Both transports own reconnect + MV3
+// keepalive; pair/unpair still swap channels at runtime.
 // -----------------------------------------------------------------
 
-try {
-  connectNative()
-} catch (e) {
-  console.error('[mateclaw][sw] startup native connect failed', e)
-}
+reconnectByPairing().catch(e => {
+  console.error('[mateclaw][sw] startup connect failed', e)
+})
 
 // -----------------------------------------------------------------
 // MV3 keep-alive + auto-reconnect (native path).
@@ -467,11 +510,14 @@ try {
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== KEEPALIVE_ALARM) return
   if (!isConnected()) {
-    try {
-      connectNative()
-    } catch (e) {
+    // Reconnect on the paired channel (not always native). When the socket is
+    // offscreen-hosted, reconnectByPairing re-issues an idempotent CONNECT whose
+    // OFFSCREEN_STATE round-trip refreshes `connected` WITHOUT tearing a socket
+    // that may still be alive — isConnected() can read false on a cold wake
+    // before the proxy handle is rebuilt.
+    reconnectByPairing().catch(e => {
       console.error('[mateclaw][sw] alarm reconnect failed', e)
-    }
+    })
   }
 })
 
@@ -573,17 +619,10 @@ chrome.runtime.onMessageExternal.addListener(
         return true
       }
       case 'reconnect': {
-        // 发起获客时由前端触发：先唤醒(可能已休眠的)SW，再重连。有配对凭据走 direct WSS，
-        // 否则回退 native“装好即连”。前端随后轮询 ping 等 connected:true。
-        configStore
-          .getConfig()
-          .then(cfg => {
-            if (cfg.serverUrl && cfg.pat) {
-              return connectDirect(cfg.serverUrl, cfg.pat)
-            }
-            connectNative()
-            return undefined
-          })
+        // 发起获客时由前端触发：先唤醒(可能已休眠的)SW，再重连。reconnectByPairing 按配对状态
+        // 选通道(有 serverUrl+pat 走 direct WSS/offscreen,否则回退 native“装好即连”),offscreen
+        // 路走幂等 CONNECT 往返、不拆仍活着的 socket。前端随后轮询 ping 等 connected:true。
+        reconnectByPairing()
           .then(() => sendResponse({ ok: true, connected: isConnected() }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true

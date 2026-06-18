@@ -1,4 +1,5 @@
-# Installs the MateClaw Chrome Native Messaging host for the current user.
+# Installs the MateClaw Native Messaging host for the current user across
+# Chrome, Edge and Brave (all Chromium-family browsers share the manifest contract).
 # Run from PowerShell; if scripts are blocked, use: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 param(
     [Parameter(Mandatory=$true)]
@@ -18,11 +19,19 @@ if ([string]::IsNullOrWhiteSpace($ExtensionId)) {
     throw "ExtensionId is required. Usage: .\install-windows.ps1 -BridgePath C:\path\to\bridge.exe -ExtensionId EXTENSION_ID"
 }
 
-$ManifestName = 'com.mateclaw.browser_bridge.json'
+$HostName = 'com.mateclaw.browser_bridge'
+$ManifestName = "$HostName.json"
 $TemplatePath = Join-Path $PSScriptRoot "manifest\$ManifestName"
 $InstallDir = Join-Path $env:LOCALAPPDATA 'MateClaw'
 $ManifestPath = Join-Path $InstallDir $ManifestName
-$RegistryPath = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.mateclaw.browser_bridge'
+
+# Chromium-family browsers that share the same NativeMessagingHosts contract. They all
+# point to the SAME manifest path; a per-branch failure must not abort the others.
+$RegistryBranches = @(
+    @{ Label = 'Chrome'; Path = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName" }
+    @{ Label = 'Edge';   Path = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName" }
+    @{ Label = 'Brave';  Path = "HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\$HostName" }
+)
 
 if (-not (Test-Path -LiteralPath $TemplatePath)) {
     throw "Manifest template not found: $TemplatePath"
@@ -37,11 +46,23 @@ $Content = $Content -replace '__BRIDGE_BINARY_PATH__', $EscapedBridgePath
 $Content = $Content -replace '__EXTENSION_ID__', $ExtensionId
 Set-Content -LiteralPath $ManifestPath -Value $Content -Encoding UTF8
 
-New-Item -Path $RegistryPath -Force | Out-Null
-Set-Item -Path $RegistryPath -Value $ManifestPath
+$registered = @()
+foreach ($branch in $RegistryBranches) {
+    # Each branch is isolated: a failure (e.g. a browser whose registry root is locked)
+    # is reported but never stops the remaining browsers from being registered.
+    try {
+        New-Item -Path $branch.Path -Force | Out-Null
+        Set-Item -Path $branch.Path -Value $ManifestPath
+        $registered += $branch.Label
+        Write-Host "Registered $($branch.Label): $($branch.Path)"
+    } catch {
+        Write-Warning "Failed to register $($branch.Label) ($($branch.Path)): $($_.Exception.Message)"
+    }
+}
 
-Write-Host "MateClaw Chrome Native Messaging host installed for current user."
-Write-Host "Manifest:     $ManifestPath"
+Write-Host "MateClaw Native Messaging host installed for current user."
+Write-Host "Browsers:      $([string]::Join(', ', $registered))"
+Write-Host "Manifest:      $ManifestPath"
 Write-Host "Bridge binary: $BridgePath"
 Write-Host "Extension ID:  $ExtensionId"
-Write-Host "Restart Chrome for the Native Messaging host registration to take effect."
+Write-Host "Restart the browser(s) for the Native Messaging host registration to take effect."

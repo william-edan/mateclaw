@@ -51,11 +51,16 @@ export const clickHandler = (deps: ClickHandlerDeps): ActionHandler<ClickParams>
   const pressHoldMs = deps.pressHoldMs ?? (() => logNormalMs(55, 0.35, 30, 100, random))
   const settleAfterClick = deps.settleAfterClick ?? defaultSettleAfterClick
 
-  return async (tabId, params, _deadlineMs) => {
+  return async (tabId, params, _deadlineMs, signal) => {
     const startedAt = clock()
 
     const button = params.button ?? 'left'
     const clickCount = normalizeClickCount(params.click_count)
+
+    // 取消优先:点击是副作用,DOM 合成点击/CDP 注入前先看 signal,已取消则抛 CANCELLED 不点击。
+    if (signal?.aborted) {
+      throw new ActionFailureError('CANCELLED', 'click aborted before injection', false)
+    }
 
     // 后台静默优先:页内 DOM 合成点击(elementFromPoint(x,y) → pointer/mouse 事件
     // + native click)。不经 CDP Input、不依赖窗口活动tab/焦点,最小化或切到其他

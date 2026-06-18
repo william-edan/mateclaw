@@ -9,6 +9,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.browser.edge.action.ActionKind;
 import vip.mate.browser.edge.action.ActionRequest;
 import vip.mate.browser.edge.action.ClickProfileActionPayload;
@@ -110,6 +111,15 @@ public class ExtensionBrowserTool {
     /** Default action deadline. Tunable per-call via the {@code deadline_ms} arg. */
     private static final long DEFAULT_DEADLINE_MS = 15_000L;
 
+    /**
+     * Deadline for slow side-effecting DM / follow actions (type_dm_draft / send_dm /
+     * click_profile_action). 外层 deadline 必须 > handler 内部最坏预算（DM ≈20s：
+     * ensureRendered 12s + 发送重试 ~8s），否则结构性超时——慢电脑上私信会在确认轮询完成前
+     * 被截断而发不出去。35s 留足余量。该值三层共用（后端 completeOnDeadline、扩展
+     * runWithDeadline、handler 内部确认轮询），handler 内部所有等待都须在此预算内完成。
+     */
+    private static final long DM_DEADLINE_MS = 35_000L;
+
     private final BrowserSessionRegistry registry;
     private final ActionPlanner planner;
     private final PlanExecutionService planExec;
@@ -118,8 +128,10 @@ public class ExtensionBrowserTool {
     private final ObjectMapper mapper;
 
     /**
-     * Subject under which the user's extension session is registered.
-     * Phase 4 will derive this from {@link ToolContext}'s auth principal.
+     * Fallback subject under which a single-tenant deployment's extension
+     * session may be registered. Per-user routing now derives the real subject
+     * from {@link ToolContext} (see {@link #resolveSession(ToolContext)}); this
+     * is only consulted when the context yields no subject.
      */
     private final String defaultSubject;
 
@@ -161,7 +173,7 @@ public class ExtensionBrowserTool {
             @ToolParam(description = "Wait strategy: 'load' (default) | 'domcontentloaded' | 'network_idle' | 'none'",
                        required = false) String waitFor,
             @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
@@ -230,7 +242,7 @@ public class ExtensionBrowserTool {
                                                String role,
                                                @Nullable String nearLabel,
                                                @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         String resolvedRole = defaulted(role, "button");
@@ -284,7 +296,7 @@ public class ExtensionBrowserTool {
             @ToolParam(description = "Optional containing-section heading text to disambiguate when hint_text matches multiple elements.",
                        required = false) String nearLabel,
             @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         String resolvedRole = defaulted(role, "button");
@@ -370,7 +382,7 @@ public class ExtensionBrowserTool {
                                                  String text,
                                                  @Nullable TypePayload.FocusTarget focusTarget,
                                                  @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
@@ -388,7 +400,7 @@ public class ExtensionBrowserTool {
     }
 
     String extension_browser_press_key_at_tab(TabRef tabRef, String key, @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
@@ -418,7 +430,7 @@ public class ExtensionBrowserTool {
                                           double y,
                                           String profile,
                                           @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest move = new ActionRequest(
@@ -461,7 +473,7 @@ public class ExtensionBrowserTool {
                                                   double y,
                                                   String profile,
                                                   @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest move = new ActionRequest(
@@ -531,7 +543,7 @@ public class ExtensionBrowserTool {
                                                    @Nullable Double y,
                                                    @Nullable ToolContext ctx,
                                                    long deadlineMs) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
@@ -580,7 +592,7 @@ public class ExtensionBrowserTool {
             String selector,
             String text,
             @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ScrollRegionPayload.StopWhen stopWhen = null;
@@ -648,7 +660,7 @@ public class ExtensionBrowserTool {
             @ToolParam(description = "Idle threshold in milliseconds (for strategy=network_idle, default 500)",
                        required = false) Long idleThresholdMs,
             @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         ActionRequest req = new ActionRequest(
@@ -945,7 +957,7 @@ public class ExtensionBrowserTool {
                 tabRef,
                 ActionKind.CLICK_PROFILE_ACTION,
                 new ClickProfileActionPayload(labels),
-                DEFAULT_DEADLINE_MS);
+                DM_DEADLINE_MS);
         return executePlan(session, List.of(req));
     }
 
@@ -1049,7 +1061,7 @@ public class ExtensionBrowserTool {
                 tabRef,
                 ActionKind.TYPE_DM_DRAFT,
                 new TypeDmDraftPayload(text, send, sendOnly),
-                DEFAULT_DEADLINE_MS);
+                DM_DEADLINE_MS);
         return executePlan(session, List.of(req));
     }
 
@@ -1071,7 +1083,7 @@ public class ExtensionBrowserTool {
     }
 
     String extension_browser_observe_tab(TabRef tabRef, String filter, @Nullable ToolContext ctx) {
-        BrowserSession session = resolveSession();
+        BrowserSession session = resolveSession(ctx);
         if (session == null) return noSession();
 
         String resolvedFilter = defaulted(filter, "default");
@@ -1110,26 +1122,77 @@ public class ExtensionBrowserTool {
     // Internals
     // -----------------------------------------------------------------
 
-    /** Resolve the active extension session for this tenant. Phase 4 will accept the
-     *  subject from ToolContext; Phase 3 uses a single configured subject with a
-     *  single-session fallback (below). */
+    /** Background/service callers (lead acquisition flows) that have no
+     *  per-conversation ToolContext. Resolves by the configured subject + the
+     *  single-session fallback only — no per-user routing. */
     private BrowserSession resolveSession() {
+        return resolveSession(null);
+    }
+
+    /**
+     * Resolve the active extension session for the CURRENT authenticated user.
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>Derive the caller's subject from {@code ctx} — the same value the
+     *       edge handshake registered under ({@code EdgePrincipal.subject()}:
+     *       JWT=username / PAT=userId.toString). For web-originated chats the
+     *       {@link ChatOrigin#requesterId()} carries that username, so we use it
+     *       as the {@code findBySubject} key to pick THIS user's browser even
+     *       when several browsers are connected.</li>
+     *   <li>Fall back to the configured {@code defaultSubject}.</li>
+     *   <li>Only when no subject resolves a session AND exactly one browser is
+     *       live do we target it (single-session-per-tenant fallback). With more
+     *       than one live session this stays strict (returns null) rather than
+     *       risk driving the wrong user's browser — callers surface
+     *       {@code AMBIGUOUS_SESSION} for that case (see {@link #noSession()}).</li>
+     * </ol>
+     */
+    private BrowserSession resolveSession(@Nullable ToolContext ctx) {
+        // (1) Precise per-user routing via the authenticated subject from ctx.
+        String subject = subjectFromContext(ctx);
+        if (subject != null) {
+            Optional<BrowserSession> mine = registry.findBySubject(subject);
+            if (mine.isPresent()) {
+                return mine.get();
+            }
+        }
+
+        // (2) Configured default subject (Phase 3 single-tenant deployments).
         Optional<BrowserSession> s = registry.findBySubject(defaultSubject);
         if (s.isPresent()) {
             return s.get();
         }
-        // Phase 3 single-session-per-tenant fallback. The edge session is
-        // registered under the authenticated user's subject (the PAT/JWT userId,
-        // e.g. "1"), NOT the configured `defaultSubject` ("default"). Until Phase 4
-        // resolves the subject from ToolContext's auth principal, when exactly one
-        // browser is connected we target it. With more than one live session this
-        // stays strict (returns null) rather than risk driving the wrong user's
-        // browser.
+
+        // (3) Single-session-per-tenant fallback — only safe when exactly one
+        // browser is connected. The edge session is registered under the
+        // authenticated user's subject, NOT the configured `defaultSubject`, so
+        // when the subject above couldn't be derived (e.g. background/service
+        // callers with no ToolContext) we still target the lone browser.
         var all = registry.snapshot();
         if (all.size() == 1) {
             return registry.find(all.getFirst().sessionId()).orElse(null);
         }
         return null;
+    }
+
+    /**
+     * Extract the authenticated caller's subject from the ToolContext, matching
+     * what the edge handshake registered ({@code EdgePrincipal.subject()}). For
+     * the web entry point {@link ChatOrigin#requesterId()} holds the username
+     * (= the JWT subject); cron/system origins carry a non-user sentinel
+     * ("system") which we ignore so they fall through to the configured subject
+     * + single-session fallback. Returns null when no usable subject is present.
+     */
+    @Nullable
+    private String subjectFromContext(@Nullable ToolContext ctx) {
+        if (ctx == null) return null;
+        ChatOrigin origin = ChatOrigin.from(ctx);
+        if (origin.cronOrigin()) return null;
+        String requesterId = origin.requesterId();
+        if (requesterId == null || requesterId.isBlank()) return null;
+        if ("system".equals(requesterId) || "anonymous".equals(requesterId)) return null;
+        return requesterId;
     }
 
     /** Execute the given list of action requests sequentially via PlanExecutionService.
@@ -1194,12 +1257,21 @@ public class ExtensionBrowserTool {
 
     private String noSession() {
         int live = registry.size();
-        String detail = live > 1
-                ? "multiple browsers are connected (" + live + "); per-user routing lands in"
-                        + " Phase 4. Connect exactly one browser for now."
-                : "no browser is connected. Open the MateClaw admin UI → Settings → Browser"
-                        + " and click \"Connect Browser\" (or paste a PAT in the extension sidepanel).";
-        return error("NO_SESSION", detail);
+        // resolveSession() returned null. Two distinct shapes:
+        //  - >1 browser connected but none matched the caller's subject → we
+        //    refuse to guess which is the user's; surface AMBIGUOUS_SESSION so
+        //    the agent tells the user to connect from the right account/device.
+        //  - 0 (or 1 that still didn't resolve) → the target device isn't
+        //    connected; NO_SESSION with onboarding guidance.
+        if (live > 1) {
+            return error("AMBIGUOUS_SESSION",
+                    "目标设备未连接：当前有 " + live + " 个浏览器在线，但没有一个匹配当前登录用户。"
+                            + " 请用发起任务的同一账号在浏览器扩展里连接 MateClaw（或在该浏览器粘贴本人 PAT），"
+                            + " 再重试。");
+        }
+        return error("NO_SESSION",
+                "目标设备未连接：没有可用的浏览器。请打开 MateClaw 管理后台 → Settings → Browser"
+                        + " 点击“Connect Browser”，或在浏览器扩展侧栏粘贴 PAT 后重试。");
     }
 
     private String error(String code, String message) {

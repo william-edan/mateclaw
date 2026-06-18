@@ -6,7 +6,10 @@
  *   - Send 'hello', await 'hello.ack', capture server-issued sessionId
  *   - Run heartbeat loop at server-specified interval
  *   - Expose a single AsyncIterableIterator<Message> (inbound()) for consumers
- *   - Track lastAckAt; throw HeartbeatTimeoutError after 3× silence
+ *   - Track lastAckAt; throw HeartbeatTimeoutError only after a *generous*
+ *     silence window AND a run of consecutive missed ticks (slow-network /
+ *     main-thread-stall tolerance, P0#5) — so elevated RTT is not mistaken for
+ *     a dead connection
  *
  * Single-reader contract: there is exactly ONE ws.on('message', ...) handler
  * in this file (#handleFrame). All consumers of inbound messages go through
@@ -26,7 +29,7 @@ export class AuthError extends Error {
 
 export class HeartbeatTimeoutError extends Error {
   constructor() {
-    super('edge: heartbeat ack timeout — server silent for 3× interval')
+    super('edge: heartbeat ack timeout — server silent past the watchdog window')
     this.name = 'HeartbeatTimeoutError'
   }
 }
@@ -92,6 +95,14 @@ export interface ClientOptions {
   dialTimeoutMs?: number
   /** Default heartbeat interval in ms; overridden by hello.ack. */
   heartbeatIntervalMs?: number
+  /**
+   * Watchdog death window as a multiple of the heartbeat interval (default 6).
+   * The connection is only declared dead after the server has been silent for
+   * more than `watchdogMultiplier × interval` AND that silence has spanned a run
+   * of consecutive ticks. Widened from the original 3× so transient RTT spikes
+   * or a stalled main thread on a slow machine don't cause a false disconnect.
+   */
+  watchdogMultiplier?: number
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -103,6 +114,8 @@ export class Client {
   #intervalMs: number
   /** epoch ms of most recent heartbeat.ack — Node is single-threaded, plain number is fine */
   #lastAckAt = 0
+  /** Consecutive watchdog ticks that saw the server past the death window. */
+  #missedAcks = 0
   #inbound = new AsyncQueue<Message>(64)
 
   constructor(opt: ClientOptions) {
@@ -112,6 +125,7 @@ export class Client {
       agentVersion: opt.agentVersion ?? 'dev',
       dialTimeoutMs: opt.dialTimeoutMs ?? 10_000,
       heartbeatIntervalMs: opt.heartbeatIntervalMs ?? 10_000,
+      watchdogMultiplier: opt.watchdogMultiplier ?? 6,
     }
     this.#intervalMs = this.#opt.heartbeatIntervalMs
   }
@@ -254,7 +268,10 @@ export class Client {
   /**
    * Run the heartbeat loop. Ticks every intervalMs.
    * - Sends heartbeat
-   * - Checks if server has been silent for > 3× interval → HeartbeatTimeoutError
+   * - Declares the connection dead only after the server has been silent past
+   *   the watchdog window (watchdogMultiplier × interval) for a run of
+   *   consecutive ticks → HeartbeatTimeoutError. A single late ack (RTT spike /
+   *   main-thread stall) is tolerated: any inbound ack resets the miss counter.
    * Resolves when signal is aborted (clean stop).
    */
   run(signal: AbortSignal): Promise<void> {
@@ -294,11 +311,21 @@ export class Client {
           return
         }
 
-        // Watchdog: if last ack is > 3× interval ago, timeout
+        // Watchdog: only declare death after the server has stayed silent past
+        // the (generous) window AND across a run of consecutive ticks. This
+        // distinguishes a transient RTT spike / stalled main thread from a real
+        // disconnect — a single late ack is tolerated and resets the counter.
         const silenceMs = Date.now() - this.#lastAckAt
-        if (silenceMs > 3 * this.#intervalMs) {
-          try { this.#ws!.close(1001, 'heartbeat-timeout') } catch {}
-          stop(new HeartbeatTimeoutError())
+        if (silenceMs > this.#opt.watchdogMultiplier * this.#intervalMs) {
+          this.#missedAcks++
+          // Require two consecutive over-window ticks so a one-off stall (where
+          // the timer itself fired late, inflating silenceMs) cannot trip it.
+          if (this.#missedAcks >= 2) {
+            try { this.#ws!.close(1001, 'heartbeat-timeout') } catch {}
+            stop(new HeartbeatTimeoutError())
+          }
+        } else {
+          this.#missedAcks = 0
         }
       }, this.#intervalMs)
     })
@@ -325,6 +352,7 @@ export class Client {
     this.#ws = null
     this.#sessionId = ''
     this.#lastAckAt = 0
+    this.#missedAcks = 0
     this.#intervalMs = this.#opt.heartbeatIntervalMs
     this.#inbound = new AsyncQueue<Message>(64)
   }

@@ -16,6 +16,13 @@ interface DouyinSearchResult {
   reason: string
 }
 
+/** Throw CANCELLED at an await boundary if the run was aborted (action.cancel). */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new ActionFailureError('CANCELLED', 'douyin_search aborted before injection', false)
+  }
+}
+
 /**
  * douyin_search — drive Douyin's REAL search flow entirely in-page (DOM):
  *   1. type the keyword into the React-controlled search input
@@ -29,17 +36,21 @@ interface DouyinSearchResult {
  * the exact flow validated in the page console before wiring it here.
  */
 export const douyinSearchHandler = (deps: DouyinSearchHandlerDeps): ActionHandler<DouyinSearchParams> => {
-  return async (tabId, params) => {
+  return async (tabId, params, _deadlineMs, signal) => {
     const api = deps.chrome ?? globalThis.chrome
     if (!api?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting unavailable', true)
     }
+    // 取消优先:在任何副作用(保活注入/搜索注入)之前先看 signal,已取消则直接抛 CANCELLED 不注入。
+    throwIfAborted(signal)
     // 后台保活:让页面以为自己可见,避免后台暂停加载/续拉(必须赶在用户切后台前就位)
     await ensureVisibilityOverride(api, tabId)
     const keyword = (params?.keyword ?? '').trim()
     if (!keyword) {
       throw new ActionFailureError('HANDLER_ERROR', 'keyword is required', false)
     }
+    // ensureVisibilityOverride 也是一次注入/await,可能跨过一个取消窗口——执行真正搜索前再查一次。
+    throwIfAborted(signal)
 
     let result: DouyinSearchResult | undefined
     try {

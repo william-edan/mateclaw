@@ -26,14 +26,20 @@ import type {
 /**
  * Per-kind handler signature. Every handler receives the resolved
  * chrome tab id (the SW already resolved `tab_ref` before calling),
- * the strongly-typed params, and the deadline (for the handler's own
- * timeout race). Returns ActionResult — but in practice handlers
- * throw on failure (the ActionExecutor catches and wraps).
+ * the strongly-typed params, the deadline (for the handler's own
+ * timeout race), and an optional AbortSignal carrying the inbound
+ * action.cancel. Handlers with side effects (DOM injection, CDP input,
+ * navigation) should check `signal?.aborted` at every await boundary —
+ * especially BEFORE chrome.scripting.executeScript — and throw
+ * `ActionFailureError('CANCELLED', ...)` rather than acting once aborted.
+ * Returns ActionResult — but in practice handlers throw on failure (the
+ * ActionExecutor catches and wraps).
  */
 export type ActionHandler<P> = (
   tabId: number,
   params: P,
   deadlineMs: number,
+  signal?: AbortSignal,
 ) => Promise<ActionResult>
 
 export interface ActionHandlers {
@@ -105,7 +111,7 @@ export class ActionFailureError extends Error {
 export class ActionExecutor {
   constructor(private readonly handlers: Partial<ActionHandlers>) {}
 
-  async run(tabId: number, req: ActionRequest): Promise<ActionResult> {
+  async run(tabId: number, req: ActionRequest, signal?: AbortSignal): Promise<ActionResult> {
     const startedAt = Date.now()
 
     const handler = this.handlers[req.kind] as ActionHandler<unknown> | undefined
@@ -115,11 +121,12 @@ export class ActionExecutor {
         code: 'UNKNOWN_KIND',
         message: `no handler registered for action kind '${req.kind}'`,
         retryable: false,
+        resolvedTabId: tabId,
       }
     }
 
     try {
-      const result = await handler(tabId, req.params, req.deadline_ms)
+      const result = await this.runWithDeadline(handler, tabId, req, signal)
       // Overwrite handler's elapsed_ms with wall-clock measurement.
       // Handlers may not have reliable clocks (e.g. WindMouse's
       // arrived_at_ms is a logical timestamp, not wall-clock); the
@@ -133,9 +140,12 @@ export class ActionExecutor {
           ...result,
           elapsed_ms: Date.now() - startedAt,
           payload: { kind: req.kind, ...(result.payload ?? {}) },
+          // resolvedTabId lets the server invalidate its snapshot cache by
+          // (tabId + kind) for the tab this action actually touched.
+          resolvedTabId: tabId,
         }
       }
-      return result
+      return { ...result, resolvedTabId: tabId }
     } catch (err) {
       if (err instanceof ActionFailureError) {
         return {
@@ -143,6 +153,7 @@ export class ActionExecutor {
           code: err.code,
           message: err.message,
           retryable: err.retryable,
+          resolvedTabId: tabId,
         }
       }
       const message = err instanceof Error ? err.message : String(err)
@@ -151,7 +162,47 @@ export class ActionExecutor {
         code: 'HANDLER_ERROR',
         message,
         retryable: true,
+        resolvedTabId: tabId,
       }
     }
+  }
+
+  /**
+   * Race the handler against its own deadline. The Control Plane already
+   * enforces a deadline (Mono.timeout + action.cancel), but a suspended /
+   * slow handler can outlive a dropped cancel; this self-timeout is the
+   * Extension-side backstop. On expiry we reject with DEADLINE_EXCEEDED
+   * (retryable) — paired with the AbortSignal so an aborted handler that
+   * honours `signal.aborted` short-circuits first with CANCELLED.
+   *
+   * deadline_ms <= 0 disables the race (treat as "no Extension-side limit").
+   */
+  private runWithDeadline(
+    handler: ActionHandler<unknown>,
+    tabId: number,
+    req: ActionRequest,
+    signal?: AbortSignal,
+  ): Promise<ActionResult> {
+    // Pass `signal` ONLY when present, so a caller that supplies none invokes
+    // the handler with the historical 3-arg shape (no trailing `undefined`).
+    const work = signal
+      ? handler(tabId, req.params, req.deadline_ms, signal)
+      : handler(tabId, req.params, req.deadline_ms)
+    if (!(req.deadline_ms > 0)) return work
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<ActionResult>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new ActionFailureError(
+            'DEADLINE_EXCEEDED',
+            `action '${req.kind}' exceeded deadline of ${req.deadline_ms}ms`,
+            true,
+          ),
+        )
+      }, req.deadline_ms)
+    })
+    return Promise.race([work, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer)
+    })
   }
 }

@@ -72,13 +72,50 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
      */
     private static final boolean DOM_ONLY_DEBUG = true;
     private static final int COMMENT_NETWORK_FALLBACK_GRACE_SCROLLS = 6;
-    private static final int COMMENT_NETWORK_ONLY_NO_PAGE_SCROLL_LIMIT = 35;
-    private static final int COMMENT_NETWORK_ONLY_STALE_WINDOW_LIMIT = 60;
+    // 慢网络保守系数:续拉 XHR 在慢网下回包滞后,容易把"还在加载"误判成"到底"。
+    // 把空转/稳定窗口阈值统一放大,宁可多等也不漏采(仍受 MAX_SCROLL_PROTECTION 总上限保护)。
+    private static final double COMMENT_SLOW_NETWORK_WINDOW_FACTOR = 1.5d;
+    private static final int COMMENT_NETWORK_ONLY_NO_PAGE_SCROLL_LIMIT =
+            (int) Math.round(35 * COMMENT_SLOW_NETWORK_WINDOW_FACTOR);
+    private static final int COMMENT_NETWORK_ONLY_STALE_WINDOW_LIMIT =
+            (int) Math.round(60 * COMMENT_SLOW_NETWORK_WINDOW_FACTOR);
+    // 判"到底/无新增"前,若 network capture 仍有"在途未回"的续拉,额外再等一个 settle 再判;
+    // 该窗口既不计入空转也不计入稳定窗口。设总上限避免续拉一直在途时无限等待。
+    private static final long COMMENT_NETWORK_INFLIGHT_SETTLE_MS = 900L;
+    private static final int COMMENT_NETWORK_INFLIGHT_MAX_EXTRA_WAITS = 8;
     private static final int AUTHOR_PROFILE_OPEN_MAX_ATTEMPTS = 2;
     private static final int AUTHOR_PROFILE_CONFIRM_ATTEMPTS = 16;
     private static final int AUTHOR_PROFILE_RETRY_CONFIRM_ATTEMPTS = 24;
     private static final long AUTHOR_PROFILE_CONFIRM_WAIT_MS = 750L;
     private static final long AUTHOR_PROFILE_RETRY_CONFIRM_WAIT_MS = 1_000L;
+
+    // ===== 慢环境(3G/慢机)适配:时间驱动 → 状态/事件驱动 =====
+    // 慢网/慢机下,搜索结果与视频列表懒加载迟迟不就绪。整条主流程旧逻辑在"上一步动作发出"后
+    // 用固定等待/固定轮询次数就进入下一步,还没加载完就判失败(搜索✓→排序✓→点视频❌:
+    // douyin_open_video 拿不到视频卡 no_video_cover_cards / total=0,又回退 a11y candidates,
+    // 慢网下 candidates 同样空 → VIDEO_RESULT_NOT_FOUND → 任务 failed)。
+    // 体系化方向:对关键固定等待乘一个保守的慢环境系数;并把"点视频"从一次性探测改为"重试等列表
+    // 就绪(退避轮询 + 总上限)",直到命中视频卡或超时才回退。系数与上限都很保守,快网下因"条件
+    // 一旦成立立即提前退出"不会白等;所有循环都带总上限,避免无限等待。
+    private static final double SLOW_ENV_WAIT_FACTOR = 1.6d;
+
+    /** 把链路里关键的固定 settle 等待按慢环境系数放大(向上取整)。 */
+    private static long slowMs(long baseMs) {
+        return (long) Math.ceil(Math.max(0L, baseMs) * SLOW_ENV_WAIT_FACTOR);
+    }
+
+    /** 把固定轮询次数按慢环境系数放大(向上取整,至少与原值相同)。 */
+    private static int slowAttempts(int baseAttempts) {
+        return Math.max(baseAttempts, (int) Math.ceil(baseAttempts * SLOW_ENV_WAIT_FACTOR));
+    }
+
+    // 【点视频重试等列表】douyin_open_video 内部已做 ~12s 卡片稳定轮询(见扩展端);后端在其之上
+    // 再包一层"重试等列表加载"的外层循环:每轮重新调 douyin_open_video,退避递增等待,直到命中
+    // 视频卡(确认进入视频页)或达到外层总上限,仍不行才回退 a11y candidates。
+    // 退避序列(ms)。外层尝试数 = 数组长度;总等待上限 ≈ Σ序列 ≈ 12s,叠加每轮扩展内部 ~12s。
+    private static final long[] OPEN_VIDEO_RELOAD_BACKOFF_MS = {1_200L, 1_800L, 2_500L, 3_200L, 3_500L};
+    // 排序会触发结果区整列重载,比首屏更慢:进入点视频前先等结果区出现视频卡的就绪宽限上限。
+    private static final long SORT_RELOAD_SETTLE_MS = slowMs(SORT_SELECT_SETTLE_DELAY_MS);
     private static final List<String> DOUYIN_COMPREHENSIVE_SORT_LABELS =
             List.of("综合排序", "综合", "默认排序");
     private static final List<String> DOUYIN_LIKE_SORT_LABELS =
@@ -228,16 +265,19 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     "https://www.douyin.com/jingxuan",
                     "domcontentloaded",
                     null));
-            waitMs(attempt == 0 ? 2000L : 2800L);
+            // 慢环境:首页搜索栏在慢网下渲染更慢,导航后就绪宽限按慢系数放大,降低首次 douyin_search 落空。
+            waitMs(slowMs(attempt == 0 ? 2000L : 2800L));
         }
         JsonNode res = null;
-        for (int i = 0; i < 5; i++) {
+        // 慢环境:搜索框渲染慢,重试次数/间隔放大,给 React 受控搜索框更多 mount 时间(ok 即提前退出)。
+        int searchTries = slowAttempts(5);
+        for (int i = 0; i < searchTries; i++) {
             res = parse(browser.service_douyin_search_main(kw));
             if (ok(res)) {
                 break;
             }
             // 搜索框尚未渲染/未就绪,等待后重试
-            waitMs(700L);
+            waitMs(slowMs(700L));
         }
         if (res == null || !ok(res)) {
             log.warn("[douyin.lead] real DOM search action not ok after retries: keyword={}, last={}",
@@ -246,8 +286,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
         log.info("[douyin.lead] real DOM search submitted: keyword={}, payload={}",
                 kw, res.path("results").path(0).path("payload"));
-        waitMs(1200L);
-        return waitForSearchVerified(kw, 8, 900L);
+        waitMs(slowMs(1200L));
+        return waitForSearchVerified(kw, slowAttempts(8), 900L);
     }
 
     private boolean hasDouyinSearchBarContext(@Nullable String url) {
@@ -350,6 +390,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         "reused_existing_video_page");
             }
         }
+        // 【搜索/排序后等结果就绪(慢环境)】首个视频(index=0)紧接在排序之后,排序会触发结果区
+        // 整列重载,3G 下比首屏更慢。点视频前先在一个慢环境上限内等"结果区真正出现视频卡"再继续,
+        // 而不是固定等待即点。就绪探测优先复用 douyin_open_video(后台 a11y 树为空时它仍能在页内
+        // 直接探测视频卡),命中即提前退出;探测不出也只是多花就绪宽限,随后照常走下面的打开流程。
+        if (zeroBasedIndex == 0) {
+            waitForVideoResultListReady();
+        }
         // 确定性优先:直接点结果区第 N 张【视频】封面卡(跳过图文、按 top-left,页内点元素本身),
         // 绝不会"落到第二张"。失败再回退候选 + 坐标点击。
         BrowserObservation byCard = openVideoByCoverCard(zeroBasedIndex);
@@ -361,7 +408,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             candidates = videoCandidatesFromObservation(current);
         }
         if (candidates.isEmpty()) {
-            candidates = waitForVideoTargets(8, 700L);
+            // 慢环境:a11y 候选轮询次数/间隔放大,给慢网懒加载更多渲染时间(命中即提前退出)。
+            candidates = waitForVideoTargets(slowAttempts(8), slowMs(700L));
         }
         if (candidates.isEmpty()) {
             BrowserObservation observed = candidates.observation();
@@ -407,51 +455,160 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
      * 确定性打开第 N 个视频:调 douyin_search 同款机制的 douyin_open_video 动作,
      * 页内定位结果区第 N 张【视频】封面卡(跳过图文)并直接点该元素。成功且确认进入
      * 视频页则返回观察;否则返回 null,交回退路径(候选 + 坐标点击)。
+     *
+     * 【慢环境:点视频重试等列表(核心)】单次 douyin_open_video 在 3G 懒加载下可能拿不到视频卡
+     * (no_video_cover_cards / total=0),旧逻辑一拿到 null 就回退 a11y candidates —— 但慢网下
+     * candidates 同样空(a11y 树里只有搜索框),直接 VIDEO_RESULT_NOT_FOUND 让任务失败。这里改为:
+     * 当扩展回报"列表还没出视频卡(no_video_cover_cards / total=0)"时,不立刻放弃,而在一个慢环境
+     * 总上限内退避重试 douyin_open_video、等结果列表加载,直到命中视频卡(确认进入视频页)或超时,
+     * 仍不行才返回 null 走 candidates。命中即提前退出,快网下不会白等。带总上限避免无限循环。
      */
     @Nullable
     private BrowserObservation openVideoByCoverCard(int zeroBasedIndex) {
+        CoverCardOutcome outcome = null;
+        for (int attempt = 0; attempt < OPEN_VIDEO_RELOAD_BACKOFF_MS.length; attempt++) {
+            outcome = tryOpenVideoByCoverCardOnce(zeroBasedIndex);
+            if (outcome.observation() != null) {
+                return outcome.observation();
+            }
+            if (!outcome.listNotReady()) {
+                // 不是"列表未就绪"(例如点了但没进视频页 / 动作异常):重试 douyin_open_video 多半无益,
+                // 直接交回退路径(候选 + 坐标点击)。
+                return null;
+            }
+            if (attempt < OPEN_VIDEO_RELOAD_BACKOFF_MS.length - 1) {
+                long backoff = OPEN_VIDEO_RELOAD_BACKOFF_MS[attempt];
+                log.info("[douyin.lead] cover-card list not ready yet (reason={}), retry waiting list load: "
+                                + "attempt={}/{}, backoffMs={}",
+                        outcome.reason(), attempt + 1, OPEN_VIDEO_RELOAD_BACKOFF_MS.length, backoff);
+                waitMs(backoff);
+            }
+        }
+        log.info("[douyin.lead] cover-card list still not ready after {} reload retries (lastReason={}), "
+                        + "fallback to candidates",
+                OPEN_VIDEO_RELOAD_BACKOFF_MS.length, outcome == null ? "" : outcome.reason());
+        return null;
+    }
+
+    /**
+     * 单次尝试 douyin_open_video 并确认进入视频页。返回 {@link CoverCardOutcome}:
+     *   - observation != null:已确认进入视频页,直接成功;
+     *   - listNotReady == true:扩展回报结果列表尚未出视频卡(no_video_cover_cards / total=0),
+     *     由外层 {@link #openVideoByCoverCard} 退避重试等列表加载;
+     *   - 其余:列表已有卡但本次未确认打开(点了没进页 / 异常),外层不再重试、直接走 candidates。
+     */
+    private CoverCardOutcome tryOpenVideoByCoverCardOnce(int zeroBasedIndex) {
         JsonNode opened;
         try {
             opened = parse(browser.service_douyin_open_video_main(Math.max(0, zeroBasedIndex)));
         } catch (RuntimeException e) {
             log.info("[douyin.lead] open video by cover card threw, fallback to candidates: {}", e.getMessage());
-            return null;
+            return CoverCardOutcome.giveUp("threw:" + e.getMessage());
         }
         if (!ok(opened)) {
-            log.info("[douyin.lead] open video by cover card not ok, fallback to candidates: {}", errorSummary(opened));
-            return null;
+            String summary = errorSummary(opened);
+            // 扩展端 no_video_cover_cards / total=0 会以失败 message 形式回传(见 douyin_open_video.ts):
+            // 这是"列表还没出视频卡",标记为可重试等列表加载,而非直接放弃。
+            if (coverCardListNotReady(opened)) {
+                log.info("[douyin.lead] open video by cover card: list not ready ({}), will retry waiting", summary);
+                return CoverCardOutcome.listNotReady(summary);
+            }
+            log.info("[douyin.lead] open video by cover card not ok, fallback to candidates: {}", summary);
+            return CoverCardOutcome.giveUp(summary);
         }
         JsonNode payload = opened.path("results").path(0).path("payload");
-        waitMs(1_800L);
+        // ok=true 但扩展回报 total=0(理论少见,稳妥兜底):同样按"列表未就绪"重试等加载。
+        if (payload.path("total").asInt(-1) == 0) {
+            log.info("[douyin.lead] open video by cover card ok but total=0, treat as list not ready, will retry");
+            return CoverCardOutcome.listNotReady("total=0");
+        }
+        waitMs(slowMs(1_800L));
         BrowserObservation obs = observeMain("all");
         if (looksLikeVideoOpenHard(obs) || looksLikeLoginWall(obs)) {
             tryOk(browser.service_douyin_ui_main("pause", "")); // 暂停视频,避免自动播放
             log.info("[douyin.lead] opened video by cover card (deterministic): index={}, total={}, title={}",
                     payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
-            return new BrowserObservation(
+            return CoverCardOutcome.opened(new BrowserObservation(
                     obs.ok(), obs.url(), obs.title(), obs.tree(),
                     obs.viewportWidth(), obs.viewportHeight(),
                     "VIDEO_TARGET",
                     "opened_by_cover_card:index=" + payload.path("index").asInt(zeroBasedIndex)
                             + ",total=" + payload.path("total").asInt(-1)
-                            + ",title=" + payload.path("title").asText(""));
+                            + ",title=" + payload.path("title").asText("")));
         }
-        if (DOM_ONLY_DEBUG && payload.path("clicked").asBoolean(false)) {
-            // 后台 observe 空树确认不了视频页,但 douyin_open_video 已 clicked=true,DOM-only 直接信任,
-            // 不回退候选坐标点击(那条路在 DOM-only 下已被切、必然失败)。
+        if (DOM_ONLY_DEBUG && payload.path("clicked").asBoolean(false) && looksLikeVideoOpen(obs)) {
+            // DOM-only 下信任门槛从"dispatch 了点击"升级为"确实进了视频页":要求 clicked=true
+            // 之外,observe 还能软确认视频页(url 含 /video/、modal_id/aweme_id,或视频播放器
+            // 与互动区信号齐全 —— 见 looksLikeVideoOpen)。后台 observe 偶有信号不足时,二次确认
+            // 再放宽一点:轻量补一次 observe,给 SPA 更多渲染时间。
             tryOk(browser.service_douyin_ui_main("pause", ""));
-            log.info("[douyin.lead] opened video by cover card (DOM_ONLY, trust clicked): index={}, total={}, title={}",
+            log.info("[douyin.lead] opened video by cover card (DOM_ONLY, clicked+confirmed): index={}, total={}, title={}",
                     payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
-            return new BrowserObservation(
+            return CoverCardOutcome.opened(new BrowserObservation(
                     obs.ok(), obs.url(), obs.title(), obs.tree(),
                     obs.viewportWidth(), obs.viewportHeight(),
                     "VIDEO_TARGET",
                     "opened_by_cover_card_dom_only:index=" + payload.path("index").asInt(zeroBasedIndex)
                             + ",total=" + payload.path("total").asInt(-1)
-                            + ",title=" + payload.path("title").asText(""));
+                            + ",title=" + payload.path("title").asText("")));
+        }
+        if (DOM_ONLY_DEBUG && payload.path("clicked").asBoolean(false)) {
+            // clicked=true 但首轮 observe 没软确认到视频页:不立刻信任,补一次轻量 observe
+            // 兜底(后台/导航初期视频页信号可能延迟渲染)。仍确认不过则不信任、返回 giveUp 走回退。
+            waitMs(slowMs(900L));
+            BrowserObservation reobs = observeMain("all");
+            if (looksLikeVideoOpen(reobs) || looksLikeLoginWall(reobs)) {
+                tryOk(browser.service_douyin_ui_main("pause", ""));
+                log.info("[douyin.lead] opened video by cover card (DOM_ONLY, clicked+confirmed on retry): index={}, total={}, title={}",
+                        payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
+                return CoverCardOutcome.opened(new BrowserObservation(
+                        reobs.ok(), reobs.url(), reobs.title(), reobs.tree(),
+                        reobs.viewportWidth(), reobs.viewportHeight(),
+                        "VIDEO_TARGET",
+                        "opened_by_cover_card_dom_only:index=" + payload.path("index").asInt(zeroBasedIndex)
+                                + ",total=" + payload.path("total").asInt(-1)
+                                + ",title=" + payload.path("title").asText("")));
+            }
+            log.info("[douyin.lead] cover-card clicked=true but video page not confirmed (DOM_ONLY), fallback to candidates");
+            return CoverCardOutcome.giveUp("clicked_but_not_confirmed");
         }
         log.info("[douyin.lead] cover-card click ok but video not confirmed, fallback to candidates");
-        return null;
+        return CoverCardOutcome.giveUp("ok_but_not_confirmed");
+    }
+
+    /**
+     * 单次 cover-card 尝试的结局载体(见 {@link #tryOpenVideoByCoverCardOnce})。
+     * observation != null → 成功;listNotReady → 列表未就绪可重试;否则放弃走 candidates。
+     */
+    private record CoverCardOutcome(@Nullable BrowserObservation observation,
+                                    boolean listNotReady,
+                                    String reason) {
+        static CoverCardOutcome opened(BrowserObservation obs) {
+            return new CoverCardOutcome(obs, false, "opened");
+        }
+
+        static CoverCardOutcome listNotReady(String reason) {
+            return new CoverCardOutcome(null, true, reason);
+        }
+
+        static CoverCardOutcome giveUp(String reason) {
+            return new CoverCardOutcome(null, false, reason);
+        }
+    }
+
+    /**
+     * 扩展端 douyin_open_video 回报"结果列表还没出视频卡":no_video_cover_cards(失败 message)
+     * 或 total=0。3G 懒加载下这是"还没加载完",应重试等待而非直接判失败。
+     */
+    private boolean coverCardListNotReady(JsonNode openVideoResult) {
+        if (openVideoResult == null) {
+            return false;
+        }
+        String summary = (openVideoResult.path("code").asText("") + " "
+                + openVideoResult.path("message").asText("")).toLowerCase(Locale.ROOT);
+        return summary.contains("no_video_cover_cards")
+                || summary.contains("video_card_not_found")
+                || summary.contains("total=0");
     }
 
     private BrowserObservation switchToNextVideoByKeyboard(BrowserObservation current, int zeroBasedIndex) {
@@ -541,7 +698,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         } catch (RuntimeException e) {
             log.info("[douyin.lead] douyin_ui open_comments threw: {}", e.getMessage());
         }
-        waitMs(1_200L);
+        // 慢环境:点开评论后列表渲染更慢,二次确认前的就绪宽限按慢系数放大,避免前台模式误走 'x' 兜底。
+        waitMs(slowMs(1_200L));
         observed = observeMain("all");
         if (commentsPanelReady(observed)) {
             return commentsOpenedObservation(observed, "douyin_ui_icon");
@@ -796,6 +954,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         int domExtractCursor = 0;
         int lastProgressComments = -1;
         int lastProgressPages = -1;
+        // 已为"续拉在途未回"额外等待的次数,达到上限后即便仍在途也按正常判定收口,避免无限等待。
+        int inflightExtraWaits = 0;
         NetworkCollectionState network = new NetworkCollectionState();
         if (COMMENT_NETWORK_ONLY_COLLECTION && !commentNetworkCaptureActive) {
             startCommentNetworkCapture();
@@ -898,6 +1058,19 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
                         effectiveScrolls, advancedWindows, forwardScrolls, repeatedWindows, totalNewItems, staleScrolls,
                         lastWindowSignature, lastLoopMs, lastScrollEvidence, network);
+            }
+            // 慢网络防漏采:本窗口没有新增,但 network capture 仍有"在途未回"的续拉时,
+            // 不要急着把它计入空转/稳定窗口而提前判到底——多等一个 settle 再重新 drain。
+            // 该等待既不 scroll 也不累加计数器,受 inflightExtraWaits 上限保护避免无限等待。
+            if (!lastCollectionAdvanced
+                    && network.hasPendingPulls()
+                    && inflightExtraWaits < COMMENT_NETWORK_INFLIGHT_MAX_EXTRA_WAITS) {
+                inflightExtraWaits++;
+                waitMs(COMMENT_NETWORK_INFLIGHT_SETTLE_MS);
+                continue;
+            }
+            if (lastCollectionAdvanced) {
+                inflightExtraWaits = 0;
             }
             if (!lastCollectionAdvanced) {
                 stableNoNew++;
@@ -1164,7 +1337,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             boolean useDomFallback
     ) {
         int before = seen.size();
-        ExtractedComments networkResult = drainNetworkComments(current == null ? "" : current.url());
+        ExtractedComments networkResult = drainNetworkComments(current == null ? "" : current.url(), network);
         if (network != null) {
             network.record(networkResult);
         }
@@ -1575,7 +1748,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         false, false, false, false, "failed", "FOLLOW_BUTTON_NOT_FOUND",
                         "未找到可点击的关注入口，已跳过私信以避免未关注直达私信。");
             }
-            profile = waitForFollowConfirmation(engagementTabId, profile, 6, 700L);
+            // 慢环境:关注后"已关注"态在慢机/后台 tab 渲染滞后,轮询次数/间隔放大,避免还没确认就误判。
+            profile = waitForFollowConfirmation(engagementTabId, profile, slowAttempts(6), slowMs(700L));
         }
         boolean followConfirmed = alreadyFollowed || profileFollowConfirmed(profile);
 
@@ -1585,7 +1759,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     followConfirmed, false, false, false, "failed", "DM_BUTTON_NOT_FOUND",
                     "未找到私信入口：A11y 与 DOM 均未命中");
         }
-        BrowserObservation dmPage = waitForDmPage(engagementTabId, 8, 650L);
+        // 慢环境:私信浮层/页在慢网下确认更慢,等待页轮询次数/间隔放大,避免还没到发私信就 DM_PAGE_NOT_CONFIRMED。
+        BrowserObservation dmPage = waitForDmPage(engagementTabId, slowAttempts(8), slowMs(650L));
         // 后台 tab 的 observe(a11y) 必然空(snapshot blank、连 url 都空)——Chrome 对非活动 tab 的硬限制。
         // 私信浮层(#imSaasContainerId)是作者主页上的同页浮层、URL 不变，靠 url/a11y 确认会误判并拦死。
         // 故：observe 可用(前台)时正常确认私信页；observe 空(后台)时不拦，坚持 engagementTabId 直接走
@@ -1611,12 +1786,25 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         boolean typedByDmPrimitive = false;
         boolean typedByGenericFallback = false;
         boolean sentByDmPrimitive = false;
+        // 私信幂等去重:为本条私信生成稳定 dmKey(作者标识 + 私信文本 的 hash),本次触达流程内
+        // 维护已确认发出的集合。重试循环 + send-only 兜底会对同一草稿带 sendDm=true 反复调用,
+        // 慢网络下"已发却报失败"会二次发送 —— 凡 sent=true(组C 确认轮询通过的真发出信号)即记入
+        // 集合并立即终止后续重发与兜底;已在集合中的 dmKey 直接跳过发送,确保"已发出绝不二次发送"。
+        Set<String> sentDmKeys = new HashSet<>();
+        String dmKey = sendDm ? dmKey(comment, dmDraft) : null;
         // 私信浮层(#imSaasContainerId)点开后异步渲染，输入框可能要等几秒才 mount——重试
         // service_type_dm_draft 直到输入成功或超时(~12s)，避免一次找不到输入框就 DM_INPUT_NOT_FOUND。
         long dmTypeDeadlineMs = System.currentTimeMillis() + 12_000L;
         int dmAttempt = 0;
         while (true) {
             dmAttempt++;
+            // 已确认发出过该 dmKey:本条私信已落地,绝不再带 sendDm 二次调用,直接收口。
+            if (dmKey != null && sentDmKeys.contains(dmKey)) {
+                sentByDmPrimitive = true;
+                typedByDmPrimitive = true;
+                log.info("[douyin.lead] dm already confirmed sent (dmKey hit); skip resend: dmKey={}", dmKey);
+                break;
+            }
             try {
                 dmDraftAction = parse(engagementTabId == null
                         ? browser.service_type_dm_draft_active(dmDraft, sendDm)
@@ -1626,6 +1814,14 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             } catch (RuntimeException e) {
                 log.warn("[douyin.lead] type_dm_draft attempt {} failed: {}", dmAttempt, e.getMessage());
                 typedByDmPrimitive = false;
+            }
+            // late success:本次其实已发出(sent=true)即据信号回填 dmKey 并立刻终止循环,
+            // 即使本次 ok=false 也不再重发,避免"已发却报失败→再发一遍"。
+            if (sendDm && sentByDmPrimitive && dmKey != null) {
+                sentDmKeys.add(dmKey);
+                log.info("[douyin.lead] dm confirmed sent by primitive; record dmKey and stop: attempt={}, dmKey={}",
+                        dmAttempt, dmKey);
+                break;
             }
             if (typedByDmPrimitive) {
                 log.info("[douyin.lead] dm draft typed by primitive: attempt={}, sent={}", dmAttempt, sentByDmPrimitive);
@@ -1666,7 +1862,9 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 typedByGenericFallback = true;
             }
         }
-        if (sendDm && !sentByDmPrimitive) {
+        // 幂等:dmKey 已确认发出则跳过 send-only 兜底,绝不二次发送。
+        boolean dmKeyAlreadySent = dmKey != null && sentDmKeys.contains(dmKey);
+        if (sendDm && !sentByDmPrimitive && !dmKeyAlreadySent) {
             BrowserObservation beforeSend = observeEngagementTab(engagementTabId, "all");
             if (looksLikeDouyinDmPage(beforeSend)
                     && (dmDraftVisibleInDmInputArea(beforeSend, dmDraft) || dmDraftVisibleInDmDom(beforeSend, dmDraft))) {
@@ -1676,12 +1874,18 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                             : browser.service_send_dm_tab(engagementTabId, dmDraft));
                     sentByDmPrimitive = ok(sendAction) && actionPayloadBoolean(sendAction, "sent");
                     if (sentByDmPrimitive) {
-                        log.info("[douyin.lead] sent existing dm draft by send-only primitive");
+                        if (dmKey != null) {
+                            sentDmKeys.add(dmKey);
+                        }
+                        log.info("[douyin.lead] sent existing dm draft by send-only primitive; record dmKey={}", dmKey);
                     }
                 } catch (RuntimeException e) {
                     log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
                 }
             }
+        } else if (sendDm && dmKeyAlreadySent) {
+            sentByDmPrimitive = true;
+            log.info("[douyin.lead] dm already confirmed sent (dmKey hit); skip send-only fallback: dmKey={}", dmKey);
         }
         waitMs(500);
         BrowserObservation verify = observeEngagementTab(engagementTabId, "all");
@@ -1789,7 +1993,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
         log.info("[douyin.lead] retried profile action by dom after unconfirmed dm page: labels={}, previousUrl={}, currentUrl={}",
                 dmLabels, unconfirmed == null ? "" : unconfirmed.url(), retryBase.url());
-        return waitForDmPage(engagementTabId, 8, 650L);
+        return waitForDmPage(engagementTabId, slowAttempts(8), slowMs(650L));
     }
 
     private BrowserObservation waitForFollowConfirmation(@Nullable Long engagementTabId,
@@ -1820,6 +2024,18 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return tree.contains("已关注")
                 || tree.contains("互相关注")
                 || tree.toLowerCase(Locale.ROOT).contains("following");
+    }
+
+    /**
+     * 私信幂等键:作者稳定标识 + 私信文本 的稳定 hash。作者标识优先用 authorProfileUrl(整条触达
+     * 流程中不变),否则退到 authorName,再退到 commentKey(构造时必非空)。同一作者的不同私信文本
+     * 不会被合并;同一草稿在重试/兜底中复算得到相同 key,据此判"是否已确认发出"。
+     */
+    private String dmKey(DouyinCommentItem comment, String dmDraft) {
+        String authorIdentity = firstNonBlank(comment.authorProfileUrl(),
+                firstNonBlank(comment.authorName(), comment.commentKey()));
+        String raw = authorIdentity + "|" + (dmDraft == null ? "" : dmDraft.trim());
+        return "dm-" + Integer.toHexString(raw.hashCode());
     }
 
     private boolean actionPayloadBoolean(JsonNode root, String fieldName) {
@@ -1884,7 +2100,9 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         // 找不到就如实失败、继续下一个(并由 clickProfileActionByDom 打印后台 tab 的 DOM 诊断：
         // readyState/按钮数/按钮文本，用于判断是后台根本不渲染、还是按钮在但选择器没匹配)。
         // a11y+CDP 坐标点击仅作兜底(仅活动 tab 有效)。是否真生效由外层 followConfirmed 判定。
-        long retryDeadlineMs = System.currentTimeMillis() + 15_000L;
+        // 慢环境:关注/私信按钮在慢机/后台 tab 的 SPA 渲染更慢,短轮询总上限按慢系数放大(~24s),
+        // 避免还没渲染出按钮就放弃导致 FOLLOW_BUTTON_NOT_FOUND/DM_BUTTON_NOT_FOUND。带总上限不死等。
+        long retryDeadlineMs = System.currentTimeMillis() + slowMs(15_000L);
         int attempt = 0;
         while (true) {
             attempt++;
@@ -1904,7 +2122,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             }
             log.info("[douyin.lead] profile action not present yet, waiting for SPA render: action={}, labels={}, attempt={}",
                     actionName, labels, attempt);
-            waitMs(2_000L);
+            waitMs(slowMs(2_000L));
         }
         if ("dm".equals(actionName) && openProfileMoreMenu(profile, engagementTabId)) {
             waitMs(350L);
@@ -2173,15 +2391,26 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
     }
 
-    private ExtractedComments drainNetworkComments(String videoKey) {
+    private ExtractedComments drainNetworkComments(String videoKey, @Nullable NetworkCollectionState network) {
         try {
             String result = browser.service_douyin_comment_network_main("drain", null, null, null);
             logCommentNetworkAction("drain", result);
             JsonNode root = parse(result);
             if (!root.path("ok").asBoolean(false)) {
+                if (network != null) {
+                    network.recordInflight(0);
+                }
                 return ExtractedComments.empty();
             }
-            JsonNode pages = root.path("results").path(0).path("payload").path("pages");
+            JsonNode payload = root.path("results").path(0).path("payload");
+            // pendingResponses=已收到响应头但响应体未读完(续拉在途);inflight=正在读取响应体的 promise。
+            // 任一 >0 即代表续拉 XHR "在途未回",采集判到底前应再等一个 settle 而非提前收口。
+            if (network != null) {
+                network.recordInflight(
+                        Math.max(0, payload.path("pendingResponses").asInt(0))
+                                + Math.max(0, payload.path("inflight").asInt(0)));
+            }
+            JsonNode pages = payload.path("pages");
             if (!pages.isArray()) {
                 return ExtractedComments.empty();
             }
@@ -2221,6 +2450,9 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     lastNextCursor);
         } catch (Exception e) {
             log.warn("[douyin.comments.network] drain failed: {}", e.toString());
+            if (network != null) {
+                network.recordInflight(0);
+            }
             return ExtractedComments.empty();
         }
     }
@@ -3270,6 +3502,42 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 .anyMatch(line -> parseLikeCount(line.name()) > 0.0d
                         && line.x() >= resultLeftX(1_280)
                         && line.w() >= 24.0d);
+    }
+
+    /**
+     * 【搜索/排序后等结果就绪】进入点视频之前,等"结果区真正出现视频卡"再继续。轻量、无点击副作用:
+     *   - 前台(a11y 树可用):用 {@link #videoCandidatesFromObservation} 检测视频卡,命中即提前退出;
+     *   - 后台(a11y 树为空,检测不出卡):退而给一个排序重载就绪宽限(SORT_RELOAD_SETTLE_MS),
+     *     让结果区有时间懒加载,随后由 douyin_open_video 在页内直接探测/点击。
+     * 带总上限(慢系数放大后的轮询次数),命中或达上限即返回,绝不无限等待。不调 douyin_open_video,
+     * 避免在"就绪等待"阶段就产生点开视频的副作用。
+     */
+    private void waitForVideoResultListReady() {
+        int attempts = slowAttempts(6);
+        long stepMs = slowMs(600L);
+        boolean a11yEverUsable = false;
+        for (int i = 0; i < attempts; i++) {
+            BrowserObservation observed = observeMain("all");
+            if (looksLikeVideoOpenHard(observed)) {
+                // 已经在视频页(复用既有页),无需再等结果列表。
+                return;
+            }
+            boolean a11yUsable = !isBlankObservation(observed);
+            a11yEverUsable = a11yEverUsable || a11yUsable;
+            if (a11yUsable && !videoCandidatesFromObservation(observed).isEmpty()) {
+                log.info("[douyin.lead] video result list ready (cards visible) after {} settle rounds", i);
+                return;
+            }
+            waitMs(stepMs);
+        }
+        if (!a11yEverUsable) {
+            // 全程 a11y 空(后台 tab):无法据 observe 判就绪,给排序重载一个固定就绪宽限再继续。
+            log.info("[douyin.lead] video result readiness unverifiable (background blank a11y); "
+                    + "applying sort-reload settle {}ms before opening video", SORT_RELOAD_SETTLE_MS);
+            waitMs(SORT_RELOAD_SETTLE_MS);
+        } else {
+            log.info("[douyin.lead] video result list not confirmed within {} settle rounds; proceeding to open", attempts);
+        }
     }
 
     private VideoCandidates waitForVideoTargets(int attempts, long waitMs) {
@@ -5487,6 +5755,16 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         private final Set<String> pageKeys = new HashSet<>();
         private String lastCursor = "";
         private String lastNextCursor = "";
+        // 最近一次 drain 时扩展侧报告的"在途未回"续拉数(pendingResponses + inflight)。
+        private int lastInflight;
+
+        void recordInflight(int inflight) {
+            this.lastInflight = Math.max(0, inflight);
+        }
+
+        boolean hasPendingPulls() {
+            return lastInflight > 0;
+        }
 
         void record(ExtractedComments comments) {
             if (comments == null || comments.networkPageCount() <= 0) {

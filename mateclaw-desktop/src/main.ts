@@ -14,10 +14,28 @@ const NATIVE_HOST_NAME = 'com.mateclaw.browser_bridge'
 const EXTENSION_ID = 'bjdhmojdiahokgfcaahphcjgcnffbonf'
 const NATIVE_HOST_MANIFEST_FILE = `${NATIVE_HOST_NAME}.json`
 
+// Chromium-family browsers that share the same NativeMessagingHosts manifest contract.
+// All point to the SAME manifest path; a per-browser failure must not abort the others.
+const NATIVE_HOST_REGISTRY_BRANCHES = [
+  { label: 'Chrome', key: `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}` },
+  { label: 'Edge', key: `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${NATIVE_HOST_NAME}` },
+  { label: 'Brave', key: `HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\${NATIVE_HOST_NAME}` },
+]
+
+// Identity-probe endpoint: unauthenticated, MateClaw-specific. Used to confirm an
+// already-listening server on the target port is actually our backend before reusing it.
+const IDENTITY_PROBE_PATH = '/api/v1/setup/status'
+
+// serverOwnedByDesktop: true only while we own a backend child we spawned ourselves.
+// intentionalShutdown: set in before-quit so the child 'exit' handler can distinguish a
+// user-initiated quit from a crash (the latter triggers auto-restart with backoff).
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let serverProcess: ChildProcess | null = null
 let serverOwnedByDesktop = false
+let intentionalShutdown = false
+let backendRestartAttempts = 0
+const MAX_BACKEND_RESTART_ATTEMPTS = 5
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -153,6 +171,46 @@ function ping(url: string, timeoutMs = 1200): Promise<boolean> {
   })
 }
 
+/**
+ * Identity probe: confirms that whatever is listening on the port is actually a MateClaw
+ * backend, not some unrelated service that happens to occupy the same port. Hits the
+ * unauthenticated MateClaw-specific endpoint {@link IDENTITY_PROBE_PATH} and checks the
+ * body for the unified R-envelope ("code") carrying the setup "initialized" flag. Any
+ * mismatch, non-2xx, or parse failure resolves to false so the caller does not reuse it.
+ */
+function probeIsMateClaw(port: number, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(`${localServerUrl(port)}${IDENTITY_PROBE_PATH}`, { timeout: timeoutMs }, (res) => {
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume()
+        resolve(false)
+        return
+      }
+      let body = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => {
+        body += chunk
+        if (body.length > 64_000) req.destroy() // guard against an unexpectedly large body
+      })
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body) as { code?: unknown; data?: { initialized?: unknown } }
+          // Both the R-envelope ("code") and the setup payload ("initialized") must be present.
+          const ok = typeof parsed?.code === 'number' && typeof parsed?.data?.initialized === 'boolean'
+          resolve(ok)
+        } catch {
+          resolve(false)
+        }
+      })
+    })
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.on('error', () => resolve(false))
+  })
+}
+
 async function waitForServer(port: number): Promise<void> {
   const url = localServerUrl(port)
   const deadline = Date.now() + STARTUP_TIMEOUT_MS
@@ -196,25 +254,93 @@ function startBackend(port: number): void {
   serverProcess = child
   serverOwnedByDesktop = true
 
-  child.once('exit', () => {
+  child.once('exit', (code, signal) => {
+    const wasOwned = serverOwnedByDesktop
     serverProcess = null
     serverOwnedByDesktop = false
+    // Distinguish a user-initiated quit (before-quit set the flag) from a crash. Only a
+    // crash of a backend WE owned triggers the supervised auto-restart with backoff.
+    if (!intentionalShutdown && wasOwned) {
+      console.warn(`[mateclaw] backend exited unexpectedly (code=${code}, signal=${signal}); scheduling restart`)
+      void restartBackendWithBackoff(port)
+    }
   })
+}
+
+/**
+ * Crash guard for the desktop-owned backend. On an unexpected child exit, restarts the
+ * backend with exponential-ish backoff up to {@link MAX_BACKEND_RESTART_ATTEMPTS} times,
+ * health-checking each attempt. A successful health check resets the attempt counter.
+ * If every attempt fails, reports a visible error to the main (or splash) window.
+ */
+async function restartBackendWithBackoff(port: number): Promise<void> {
+  while (backendRestartAttempts < MAX_BACKEND_RESTART_ATTEMPTS) {
+    if (intentionalShutdown) return // app is quitting; abandon the restart loop
+    backendRestartAttempts += 1
+    const attempt = backendRestartAttempts
+    const delayMs = Math.min(30_000, 1000 * 2 ** (attempt - 1)) // 1s,2s,4s,8s,16s (capped 30s)
+    console.warn(`[mateclaw] backend restart attempt ${attempt}/${MAX_BACKEND_RESTART_ATTEMPTS} in ${delayMs}ms`)
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    if (intentionalShutdown) return
+    try {
+      startBackend(port)
+      await waitForServer(port)
+      console.log(`[mateclaw] backend restart attempt ${attempt} succeeded`)
+      backendRestartAttempts = 0 // recovered; reset budget for the next crash
+      return
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[mateclaw] backend restart attempt ${attempt} failed: ${message}`)
+      // If startBackend spawned a child that never became healthy (waitForServer timed
+      // out), it is still alive — kill it before the next attempt so we don't leak a
+      // second JVM fighting over the H2 lock. We null serverProcess first so this kill
+      // does not re-trigger the crash-restart handler.
+      const stale = serverProcess
+      serverProcess = null
+      serverOwnedByDesktop = false
+      if (stale && !stale.killed && stale.pid) {
+        if (os.platform() === 'win32') {
+          spawn('taskkill', ['/pid', String(stale.pid), '/T', '/F'], { windowsHide: true })
+        } else {
+          stale.kill('SIGTERM')
+        }
+      }
+      // Loop continues to the next attempt.
+    }
+  }
+  const message =
+    `化帆AI 后端连续 ${MAX_BACKEND_RESTART_ATTEMPTS} 次重启失败，已停止自动重启。请查看日志后重启应用。`
+  console.error(`[mateclaw] ${message}`)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('startup-error', message)
+  } else if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.webContents.send('startup-error', message)
+  }
 }
 
 async function ensureBackend(port: number): Promise<void> {
   if (await ping(localServerUrl(port))) {
-    // Reusing a server ALREADY listening on this port. If it was not started by
-    // this desktop app (e.g. a dev `mvn spring-boot:run`), it lacks
-    // MATECLAW_DESKTOP=true, so DesktopBridgeProvisioner never runs, ~/.mateclaw/
-    // bridge.yaml is never written, and the browser extension cannot connect via
-    // Native Messaging. Stop that server and restart the app to fix it.
-    console.warn(
-      `[mateclaw] Reusing an existing server on ${port}. If it was not started by ` +
-        'this app (e.g. a dev server), browser-extension auto-connect will not work — ' +
-        'stop it and restart so the desktop server can provision bridge.yaml.',
+    // Something is ALREADY listening on this port. Only reuse it if an identity probe
+    // confirms it is a MateClaw backend — otherwise an unrelated service squatting on
+    // 18088 would silently break auto-pairing (no bridge.yaml, no Native Messaging).
+    if (await probeIsMateClaw(port)) {
+      // Reusing a real MateClaw server. If it was not started by this desktop app
+      // (e.g. a dev `mvn spring-boot:run`), it lacks MATECLAW_DESKTOP=true, so
+      // DesktopBridgeProvisioner never runs and ~/.mateclaw/bridge.yaml is never
+      // written; browser-extension auto-connect still won't work in that case.
+      console.warn(
+        `[mateclaw] Reusing an existing MateClaw server on ${port}. If it was not started ` +
+          'by this app (e.g. a dev server), browser-extension auto-connect will not work — ' +
+          'stop it and restart so the desktop server can provision bridge.yaml.',
+      )
+      return
+    }
+    // Port is occupied by a non-MateClaw service. We cannot auto-pair against it.
+    // Surface a visible error to the splash window instead of silently reusing it.
+    throw new Error(
+      `端口 ${port} 已被其他程序占用，且不是 化帆AI 后端，无法自动配对。` +
+        `请关闭占用该端口的程序后重启，或设置环境变量 MATECLAW_DESKTOP_PORT 指定其他端口。`,
     )
-    return
   }
   startBackend(port)
   await waitForServer(port)
@@ -266,18 +392,31 @@ function ensureNativeHostRegistered(): void {
     }
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 
-    const registryKey = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`
-    const reg = spawn('reg', ['add', registryKey, '/ve', '/d', manifestPath, '/f'], { windowsHide: true })
-    reg.on('error', (error) => {
-      console.warn(`[native-host] reg add failed to launch: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    reg.on('exit', (code) => {
-      if (code === 0) {
-        console.log(`[native-host] registered ${NATIVE_HOST_NAME} -> ${manifestPath}`)
-      } else {
-        console.warn(`[native-host] reg add exited with code ${code}`)
+    // Register the same manifest under Chrome, Edge and Brave. Each branch is isolated:
+    // a failure in one (e.g. the browser's registry root does not exist) never aborts the others.
+    for (const branch of NATIVE_HOST_REGISTRY_BRANCHES) {
+      try {
+        const reg = spawn('reg', ['add', branch.key, '/ve', '/d', manifestPath, '/f'], { windowsHide: true })
+        reg.on('error', (error) => {
+          console.warn(
+            `[native-host] ${branch.label} reg add failed to launch: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+          )
+        })
+        reg.on('exit', (code) => {
+          if (code === 0) {
+            console.log(`[native-host] registered ${branch.label} ${NATIVE_HOST_NAME} -> ${manifestPath}`)
+          } else {
+            console.warn(`[native-host] ${branch.label} reg add exited with code ${code}`)
+          }
+        })
+      } catch (error) {
+        console.warn(
+          `[native-host] ${branch.label} registration error: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        )
       }
-    })
+    }
   } catch (error) {
     console.warn(`[native-host] registration error: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -365,6 +504,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Mark this as a deliberate shutdown so the child 'exit' handler does NOT treat the
+  // ensuing termination as a crash and try to auto-restart the backend.
+  intentionalShutdown = true
   if (serverOwnedByDesktop && serverProcess && !serverProcess.killed) {
     if (os.platform() === 'win32') {
       spawn('taskkill', ['/pid', String(serverProcess.pid), '/T', '/F'], { windowsHide: true })

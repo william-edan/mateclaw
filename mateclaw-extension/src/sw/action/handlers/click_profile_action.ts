@@ -1,14 +1,22 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { ClickProfileActionParams } from '../types'
+import { activateTabForRender } from './activate-tab'
 
 export interface ClickProfileActionHandlerDeps {
   chrome?: typeof globalThis.chrome
 }
 
+/** Throw CANCELLED at an await boundary if the run was aborted (action.cancel). */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new ActionFailureError('CANCELLED', 'click_profile_action aborted before injection', false)
+  }
+}
+
 export const clickProfileActionHandler = (
   deps: ClickProfileActionHandlerDeps = {},
 ): ActionHandler<ClickProfileActionParams> => {
-  return async (tabId, params, _deadlineMs) => {
+  return async (tabId, params, _deadlineMs, signal) => {
     const labels = Array.isArray(params?.labels)
       ? params.labels.map(label => String(label || '').trim()).filter(Boolean)
       : []
@@ -20,14 +28,32 @@ export const clickProfileActionHandler = (
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
 
-    const results = await chromeApi.scripting.executeScript({
-      target: { tabId, allFrames: false },
-      func: clickProfileActionInPage,
-      args: [labels],
-    })
-    const payload = results?.[0]?.result as
-      | { ok?: boolean; label?: string; reason?: string }
-      | undefined
+    const runOnce = async () => {
+      const results = await chromeApi.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        func: clickProfileActionInPage,
+        args: [labels],
+      })
+      return results?.[0]?.result as
+        | { ok?: boolean; label?: string; reason?: string }
+        | undefined
+    }
+
+    // 取消优先:点关注/回关是不可逆副作用,每次注入前先看 signal,已取消则抛 CANCELLED 不注入。
+    throwIfAborted(signal)
+    // 1. 后台先试 —— 快机/前台一次就命中,保持静默(不激活)。
+    let payload = await runOnce()
+    // 2. 慢机自适应兜底:后台 tab 被 Chrome 节流时,关注/私信按钮迟迟不渲染、单次扑空。
+    //    激活 tab 解除节流、让抖音全速渲染,再轮询重试几次(每次 1.5s,约 6s 渲染余量)。
+    if (payload?.ok !== true) {
+      throwIfAborted(signal)
+      await activateTabForRender(chromeApi, tabId)
+      for (let i = 0; i < 4 && payload?.ok !== true; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        throwIfAborted(signal)
+        payload = await runOnce()
+      }
+    }
     if (payload?.ok !== true) {
       throw new ActionFailureError(
         'GROUNDING_AMBIGUOUS',

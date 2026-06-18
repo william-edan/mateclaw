@@ -3,18 +3,50 @@
  *
  * Chrome Native Messaging protocol:
  *   - Each message is framed with a 4-byte little-endian length prefix.
- *   - Maximum frame size is 1 MB (Chrome's documented cap).
+ *   - Chrome's documented per-message cap on the EXTENSION side is 1 MB for
+ *     messages the extension sends, and effectively unbounded (read in chunks)
+ *     for messages the host sends. The host process itself has no Chrome-imposed
+ *     cap; the practical ceiling here is the Control Plane WSS buffer (8 MiB,
+ *     see WebSocketConfig.java). We size MAX_FRAME_BYTES to match that ceiling
+ *     so a large screenshot/snapshot frame round-trips instead of being killed.
  *
  * Exported API:
- *   - MAX_FRAME_BYTES  — the 1 MB cap constant
+ *   - MAX_FRAME_BYTES  — the 8 MiB cap constant (aligned with WSS buffer)
  *   - readFrame(stream)          — read one frame; returns null on EOF
  *   - writeFrame(stream, payload) — write one frame
  *   - writeJsonFrame(stream, v)   — convenience: JSON.stringify + writeFrame
  */
 import type { Readable, Writable } from 'node:stream'
 
-/** Chrome Native Messaging 1 MB cap. */
-export const MAX_FRAME_BYTES = 1024 * 1024
+/**
+ * Maximum decoded frame size, in bytes.
+ *
+ * Aligned with the Control Plane WSS text/binary buffer (8 MiB in
+ * WebSocketConfig.java). The extension base64-encodes screenshots up to ~2 MB;
+ * with envelope overhead a single frame can comfortably exceed the old 1 MB cap,
+ * so 8 MiB keeps the whole pipeline (Extension → Native Host → WSS) consistent.
+ */
+export const MAX_FRAME_BYTES = 8 * 1024 * 1024
+
+/**
+ * Result of {@link readFrame} when a frame's declared length exceeds
+ * {@link MAX_FRAME_BYTES}. The oversize body has already been drained from the
+ * stream so framing stays aligned; the caller is expected to surface this as a
+ * typed error (e.g. an `action.result` with code `RESULT_TOO_LARGE`) rather than
+ * tearing down the connection — throwing here would cascade into SESSION_DETACHED.
+ */
+export interface OversizeFrame {
+  readonly oversize: true
+  /** Declared (over-limit) length from the 4-byte length prefix. */
+  readonly declaredBytes: number
+  /** The cap that was exceeded. */
+  readonly maxBytes: number
+}
+
+/** Narrowing helper: true when a readFrame result is an {@link OversizeFrame}. */
+export function isOversizeFrame(v: unknown): v is OversizeFrame {
+  return typeof v === 'object' && v !== null && (v as OversizeFrame).oversize === true
+}
 
 /**
  * Read exactly n bytes from a Node Readable stream.
@@ -73,12 +105,64 @@ async function readN(stream: Readable, n: number): Promise<Buffer | null> {
 }
 
 /**
+ * Discard exactly n bytes from a Readable stream without buffering them all.
+ * Used to drain an over-limit frame body so the next length prefix stays aligned.
+ * Returns false on unexpected EOF mid-drain (nothing left to keep reading).
+ */
+async function drainN(stream: Readable, n: number): Promise<boolean> {
+  let remaining = n
+
+  while (remaining > 0) {
+    // Read in capped slices so a multi-MB oversize body never lands in one Buffer.
+    const want = Math.min(remaining, 64 * 1024)
+    const chunk = stream.read(want) as Buffer | null
+
+    if (chunk === null) {
+      if (stream.readableEnded) return false
+
+      const ended = await new Promise<boolean>((resolve) => {
+        const onReadable = (): void => {
+          cleanup()
+          resolve(false)
+        }
+        const onEnd = (): void => {
+          cleanup()
+          resolve(true)
+        }
+        const cleanup = (): void => {
+          stream.off('readable', onReadable)
+          stream.off('end', onEnd)
+        }
+        stream.once('readable', onReadable)
+        stream.once('end', onEnd)
+      })
+
+      if (ended) return false
+      continue
+    }
+
+    remaining -= chunk.length
+  }
+
+  return true
+}
+
+/**
  * Read one Native Messaging frame from a Readable stream.
  *
- * @returns Buffer with the frame payload, or null on clean EOF.
- * @throws  Error if the frame exceeds MAX_FRAME_BYTES or on unexpected EOF.
+ * @returns
+ *   - a {@link Buffer} with the frame payload, or
+ *   - `null` on clean EOF, or
+ *   - an {@link OversizeFrame} sentinel when the declared length exceeds
+ *     {@link MAX_FRAME_BYTES}. In that case the over-limit body is drained from
+ *     the stream so the next frame stays aligned, and the caller MUST translate
+ *     the sentinel into a typed error rather than throwing — throwing kills the
+ *     connection and cascades into SESSION_DETACHED.
+ * @throws  Error only on unexpected EOF mid-frame (genuine stream corruption).
  */
-export async function readFrame(stream: Readable): Promise<Buffer | null> {
+export async function readFrame(
+  stream: Readable,
+): Promise<Buffer | OversizeFrame | null> {
   const header = await readN(stream, 4)
   if (header === null) return null
 
@@ -87,9 +171,17 @@ export async function readFrame(stream: Readable): Promise<Buffer | null> {
   if (length === 0) return Buffer.alloc(0)
 
   if (length > MAX_FRAME_BYTES) {
-    throw new Error(
-      `nm: frame length ${length} exceeds 1MB cap (${MAX_FRAME_BYTES} bytes)`,
-    )
+    // Drain the over-limit body so the next length prefix stays aligned, then
+    // hand back a structured sentinel instead of throwing. If the drain hits a
+    // genuine mid-frame EOF the stream is unrecoverable, so surface that as the
+    // usual hard error.
+    const drained = await drainN(stream, length)
+    if (!drained) {
+      throw new Error(
+        `nm: unexpected EOF while draining over-size frame (declared ${length} bytes)`,
+      )
+    }
+    return { oversize: true, declaredBytes: length, maxBytes: MAX_FRAME_BYTES }
   }
 
   return readN(stream, length)

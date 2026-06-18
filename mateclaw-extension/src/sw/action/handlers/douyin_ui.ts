@@ -91,22 +91,26 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
 
   if (op === 'open_comments') {
     const hasList = () => Array.from(document.querySelectorAll('#merge-all-comment-container [data-e2e="comment-list"], [data-e2e="comment-list"]')).some(vis)
+    // 步长 500ms;tries 即总上限步数(传入处已按慢网放大),带总上限避免无限轮询
     const waitForList = async (tries: number): Promise<boolean> => {
-      for (let t = 0; t < tries && !hasList(); t++) await sleep(400)
+      for (let t = 0; t < tries && !hasList(); t++) await sleep(500)
       return hasList()
     }
     if (hasList()) return { ok: true, op, detail: 'already_open' }
+    // 【慢环境】评论图标本身也可能懒加载晚出,先等它出现再点(最多 ~6s),避免一上来就 comment_icon_not_found
     const findBtn = (): HTMLElement | null =>
       document.querySelector<HTMLElement>('[data-e2e="feed-comment-icon"],[data-e2e="comment-icon"],[data-e2e="video-comment"],[aria-label*="评论"]')
     let btn = findBtn()
+    for (let t = 0; t < 12 && !btn; t++) { await sleep(500); btn = findBtn() }
     if (!btn) return { ok: false, op, detail: 'comment_icon_not_found' }
-    // 点评论图标后【轮询】等列表出现(后台加载常 > 1.5s,固定等会误判 clicked_but_no_list)
+    // 点评论图标后【轮询】等列表出现(后台加载常 > 1.5s,固定等会误判 clicked_but_no_list)。
+    // 【慢环境放大】3G 下评论懒加载更晚,首轮上限从 12×400ms(~4.8s)放大到 30×500ms(~15s 总上限)。
     click(btn)
-    if (await waitForList(12)) return { ok: true, op, detail: 'opened' }
-    // 再点一次(后台首点可能没触发懒加载)
+    if (await waitForList(30)) return { ok: true, op, detail: 'opened' }
+    // 再点一次(后台首点可能没触发懒加载),重试轮询也放大到 16×500ms(~8s)
     btn = findBtn() || btn
     click(btn)
-    if (await waitForList(8)) return { ok: true, op, detail: 'opened_retry' }
+    if (await waitForList(16)) return { ok: true, op, detail: 'opened_retry' }
     // 兜底:合成 'x' 快捷键(抖音全局快捷键开评论;纯 DOM keydown,后台可用,不走 CDP)
     const kev = { key: 'x', code: 'KeyX', keyCode: 88, which: 88, bubbles: true } as KeyboardEventInit
     for (const tgt of [document, document.body, window].filter(Boolean) as EventTarget[]) {
@@ -117,15 +121,27 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
   }
 
   if (op === 'sort') {
-    const flt = byText('筛选')
+    // 【慢环境】筛选触发器也可能懒加载晚出,先等它出现(最多 ~6s)再 hover
+    let flt = byText('筛选')
+    for (let t = 0; t < 12 && !flt; t++) { await sleep(500); flt = byText('筛选') }
     if (!flt) return { ok: false, op, detail: 'filter_trigger_not_found' }
-    hover(flt)
-    await sleep(900)
     const want = label || '最多点赞'
     const alt = want === '最多点赞' ? '点赞最多' : want === '最新发布' ? '发布时间' : ''
-    const opt = byText(want) || (alt ? byText(alt) : undefined)
+    const findOpt = () => byText(want) || (alt ? byText(alt) : undefined)
+    // hover 后【轮询】等下拉面板里的目标选项出现,而非固定 sleep(900) 就找——
+    // 慢网下面板 JS 渲染晚,固定等会 sort_option_not_found。最多 16×500ms(~8s 总上限);
+    // 每隔几次重新 hover 一次,防首个 pointerenter 在面板就绪前被吞掉。
+    hover(flt)
+    let opt = findOpt()
+    for (let t = 0; t < 16 && !opt; t++) {
+      await sleep(500)
+      if (t % 4 === 3) { flt = byText('筛选') || flt; hover(flt) }
+      opt = findOpt()
+    }
     if (!opt) return { ok: false, op, detail: 'sort_option_not_found:' + want }
     click(opt)
+    // 点完排序选项后给重排留时间;固定 sleep(1500) 在快网足够,慢网这里不强等结果就绪
+    // (下一步 douyin_open_video 自带"等卡稳定+慢系数"轮询,会兜住列表重排的延迟)。
     await sleep(1500)
     return { ok: true, op, detail: 'sorted:' + want }
   }
