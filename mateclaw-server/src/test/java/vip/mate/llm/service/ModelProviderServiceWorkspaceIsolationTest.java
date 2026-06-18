@@ -111,15 +111,18 @@ class ModelProviderServiceWorkspaceIsolationTest {
     }
 
     @Test
-    void seedWorkspaceModelsInjectsConfiguredDefaultKeysForNewRegistrations() {
-        // 新设计：平台 key 只注入受管「默认版」provider（dashscope-default / deepseek-default），
-        // 原版 dashscope/deepseek 保持空 key（自带 key 模式），不被平台 key 覆盖。
+    void seedWorkspaceModelsFiltersToManagedDefaultsAndLocalProviders() {
+        // 新设计：注册种子化只保留本地 provider + 托管默认版（dashscope-default / deepseek-default）；
+        // 原版 dashscope、其它云端 openai 一律不种子化。
         when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of())
                 .thenReturn(List.of(
                         provider("dashscope-default", 1L, ""),
                         provider("deepseek-default", 1L, ""),
-                        provider("dashscope", 1L, "")));
+                        provider("dashscope", 1L, ""),       // 原版云端 → 不种子
+                        providerLocal("ollama", 1L),         // 本地 → 保留
+                        provider("openai", 1L, ""),          // 其它云端 → 不种子
+                        provider("dashscope-compat-default", 1L, ""))); // 受管但注册不种子 → 应被过滤
 
         service.seedWorkspaceModels(20L);
 
@@ -128,6 +131,11 @@ class ModelProviderServiceWorkspaceIsolationTest {
                 org.mockito.ArgumentCaptor.forClass(ModelProviderEntity.class);
         verify(providerMapper, times(3)).insert(captor.capture());
         List<ModelProviderEntity> copies = captor.getAllValues();
+
+        assertEquals(java.util.Set.of("dashscope-default", "deepseek-default", "ollama"),
+                copies.stream().map(ModelProviderEntity::getProviderId)
+                        .collect(java.util.stream.Collectors.toSet()),
+                "注册种子只保留本地 provider + 两个默认版云端");
 
         ModelProviderEntity dashscopeDefault = copyByProvider(copies, "dashscope-default");
         assertEquals(20L, dashscopeDefault.getWorkspaceId());
@@ -139,9 +147,13 @@ class ModelProviderServiceWorkspaceIsolationTest {
         assertEquals("sk-test-deepseek-default", deepseekDefault.getApiKey());
         assertTrue(deepseekDefault.getEnabled());
 
-        // 原版 dashscope 留空，用户自带 key
-        ModelProviderEntity dashscope = copyByProvider(copies, "dashscope");
-        assertEquals("", dashscope.getApiKey());
+        // 模型复制按实际保留的 provider 集合过滤
+        verify(modelConfigService).copyModelsToWorkspace(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(
+                        java.util.Set.of("dashscope-default", "deepseek-default", "ollama")));
+
         verify(quotaService).ensureDefaultQuotas(20L);
     }
 
@@ -151,7 +163,7 @@ class ModelProviderServiceWorkspaceIsolationTest {
         // second = template providers from the default workspace.
         when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of())
-                .thenReturn(List.of(provider("dashscope", 1L, "")));
+                .thenReturn(List.of(provider("dashscope-default", 1L, "")));
 
         service.seedWorkspaceModels(20L);
 
@@ -229,5 +241,11 @@ class ModelProviderServiceWorkspaceIsolationTest {
                 .filter(copy -> providerId.equals(copy.getProviderId()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private static ModelProviderEntity providerLocal(String id, Long workspaceId) {
+        ModelProviderEntity p = provider(id, workspaceId, "");
+        p.setIsLocal(true);
+        return p;
     }
 }
