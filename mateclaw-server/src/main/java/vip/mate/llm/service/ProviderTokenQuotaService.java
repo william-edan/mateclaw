@@ -20,8 +20,8 @@ public class ProviderTokenQuotaService {
     private static final Map<String, Long> DEFAULT_LIMITS = java.util.LinkedHashMap.newLinkedHashMap(2);
 
     static {
-        DEFAULT_LIMITS.put("dashscope", 2_000_000L);
-        DEFAULT_LIMITS.put("deepseek", 3_000_000L);
+        DEFAULT_LIMITS.put("dashscope-default", 2_000_000L);
+        DEFAULT_LIMITS.put("deepseek-default", 3_000_000L);
     }
 
     private final ProviderTokenQuotaMapper mapper;
@@ -30,9 +30,14 @@ public class ProviderTokenQuotaService {
         return DEFAULT_LIMITS.containsKey(providerId);
     }
 
+    /** 默认（管理员/平台模板）工作区豁免配额限制。 */
+    private boolean isDefaultWorkspace(Long workspaceId) {
+        return workspaceId != null && workspaceId == ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID;
+    }
+
     @Transactional
     public void ensureDefaultQuotas(Long workspaceId) {
-        if (workspaceId == null) {
+        if (workspaceId == null || isDefaultWorkspace(workspaceId)) {
             return;
         }
         for (Map.Entry<String, Long> entry : DEFAULT_LIMITS.entrySet()) {
@@ -41,7 +46,7 @@ public class ProviderTokenQuotaService {
     }
 
     public ProviderTokenQuotaDTO getQuota(Long workspaceId, String providerId) {
-        if (workspaceId == null || !isManagedProvider(providerId)) {
+        if (workspaceId == null || isDefaultWorkspace(workspaceId) || !isManagedProvider(providerId)) {
             return null;
         }
         ProviderTokenQuotaEntity quota = findQuota(workspaceId, providerId);
@@ -60,7 +65,7 @@ public class ProviderTokenQuotaService {
 
     @Transactional
     public void recordUsage(Long workspaceId, String providerId, int promptTokens, int completionTokens) {
-        if (workspaceId == null || !isManagedProvider(providerId)) {
+        if (workspaceId == null || isDefaultWorkspace(workspaceId) || !isManagedProvider(providerId)) {
             return;
         }
         long delta = Math.max(0, promptTokens) + Math.max(0, completionTokens);

@@ -54,6 +54,13 @@ public class ModelProviderService {
     static final java.util.Set<String> MANAGED_DEFAULT_PROVIDER_IDS = java.util.Set.of(
             "dashscope-default", "dashscope-compat-default", "deepseek-default");
 
+    /**
+     * 新工作区注册时种子化的云端 provider 白名单（仅托管「默认版」）。本地 provider
+     * （is_local=TRUE）始终保留；其余所有云端 provider 一律不种子化给新用户。
+     */
+    static final java.util.Set<String> REGISTRATION_CLOUD_PROVIDER_IDS = java.util.Set.of(
+            "dashscope-default", "deepseek-default");
+
     static boolean isManagedDefaultProvider(String providerId) {
         return providerId != null && MANAGED_DEFAULT_PROVIDER_IDS.contains(providerId);
     }
@@ -427,12 +434,18 @@ public class ModelProviderService {
                         .orderByDesc(ModelProviderEntity::getIsLocal)
                         .orderByAsc(ModelProviderEntity::getIsCustom)
                         .orderByAsc(ModelProviderEntity::getName));
+        java.util.Set<String> keptProviderIds = new java.util.LinkedHashSet<>();
         for (ModelProviderEntity template : templates) {
+            if (!shouldSeedForRegistration(template)) {
+                continue;
+            }
             ModelProviderEntity copy = copyProviderForWorkspace(template, workspaceId);
             modelProviderMapper.insert(copy);
+            keptProviderIds.add(copy.getProviderId());
         }
         providerTokenQuotaService.ensureDefaultQuotas(workspaceId);
-        modelConfigService.copyModelsToWorkspace(ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId);
+        modelConfigService.copyModelsToWorkspace(
+                ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId, keptProviderIds);
         // Hand the freshly-seeded (enabled + default-keyed) providers to ProviderInitProbe.
         // Without this they stay Liveness.UNPROBED ("检测中") until an app restart, because the
         // init probe only runs on ApplicationReadyEvent or this event. ProviderInitProbe listens
@@ -447,6 +460,13 @@ public class ModelProviderService {
             throw new MateClawException("err.llm.provider_not_found", "Provider 不存在: " + providerId);
         }
         return provider;
+    }
+
+    /** 注册种子白名单：本地 provider 全留；云端只留托管默认版。 */
+    private boolean shouldSeedForRegistration(ModelProviderEntity template) {
+        return Boolean.TRUE.equals(template.getIsLocal())
+                || (template.getProviderId() != null
+                    && REGISTRATION_CLOUD_PROVIDER_IDS.contains(template.getProviderId()));
     }
 
     private ModelProviderEntity copyProviderForWorkspace(ModelProviderEntity template, Long workspaceId) {
