@@ -15,7 +15,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -97,6 +96,44 @@ class VerificationCodeServiceTest {
         MateClawException tooMany = assertThrows(MateClawException.class,
                 () -> service.verifyAndConsume("p", "000000"));
         assertEquals(400, tooMany.getCode());
-        verify(sender, never()).send(anyString(), anyString());
+    }
+
+    @Test
+    void releaseSendLockAllowsImmediateResend() {
+        service.sendRegisterCode("p", "1.1.1.1");
+        service.releaseSendLock("p");
+        service.sendRegisterCode("p", "1.1.1.1");
+        verify(sender, org.mockito.Mockito.times(2)).send(eq("p"), anyString());
+    }
+
+    @Test
+    void sendFailureRollsBackDailyCounter() {
+        props.setDailyLimitPerPhone(1);
+        props.setResendIntervalSeconds(0);
+        doThrow(new SmsSendException("boom")).when(sender).send(anyString(), anyString());
+        assertEquals(502, assertThrows(MateClawException.class,
+                () -> service.sendRegisterCode("p", "1.1.1.1")).getCode());
+        // 计数已回滚 → 第二次仍因发送失败抛 502，而不是因日限抛 429
+        assertEquals(502, assertThrows(MateClawException.class,
+                () -> service.sendRegisterCode("p", "1.1.1.1")).getCode());
+    }
+
+    @Test
+    void perIpDailyLimitEnforced() {
+        props.setDailyLimitPerIp(2);
+        props.setResendIntervalSeconds(0);
+        service.sendRegisterCode("p1", "9.9.9.9");
+        service.sendRegisterCode("p2", "9.9.9.9");
+        MateClawException ex = assertThrows(MateClawException.class,
+                () -> service.sendRegisterCode("p3", "9.9.9.9"));
+        assertEquals(429, ex.getCode());
+    }
+
+    @Test
+    void resendAllowedAfterLockExpires() {
+        service.sendRegisterCode("p", "1.1.1.1");
+        now.addAndGet(61_000L);
+        service.sendRegisterCode("p", "1.1.1.1");
+        verify(sender, org.mockito.Mockito.times(2)).send(eq("p"), anyString());
     }
 }

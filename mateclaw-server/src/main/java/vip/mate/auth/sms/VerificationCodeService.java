@@ -1,7 +1,6 @@
 package vip.mate.auth.sms;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
 
@@ -13,7 +12,6 @@ import java.time.Duration;
  *
  * @author MateClaw Team
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VerificationCodeService {
@@ -47,6 +45,7 @@ public class VerificationCodeService {
         boolean phoneInc = false;
         boolean ipInc = false;
         boolean globalInc = false;
+        boolean sendFailed = false;
         try {
             // 每个计数：先自增，再置回滚标志，最后判限。标志在自增成功之后置位，
             // 保证只回滚真正发生过的自增（即便 incrementWindow 抛异常也不会误退）。
@@ -71,6 +70,7 @@ public class VerificationCodeService {
             try {
                 sender.send(phone, code);
             } catch (SmsSendException e) {
+                sendFailed = true;
                 store.removeCode(phone);
                 throw new MateClawException("err.sms.send_failed", 502, "验证码发送失败，请稍后重试");
             }
@@ -84,7 +84,10 @@ public class VerificationCodeService {
             if (globalInc) {
                 store.decrementWindow("global", minute);
             }
-            store.overwriteSendLock(phone, Duration.ofSeconds(props.getFailureCooldownSeconds()));
+            // 仅发送失败缩短为失败冷却，允许较快重试；限流拒绝保持原 60s 重发锁。
+            if (sendFailed) {
+                store.overwriteSendLock(phone, Duration.ofSeconds(props.getFailureCooldownSeconds()));
+            }
             throw e;
         }
     }
