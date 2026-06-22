@@ -145,22 +145,167 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         this.collector = collector;
     }
 
+    // ===== 断连续跑(方案A止血 D 组)=====
+    // 旧逻辑:中途断连(SESSION_DETACHED / 任务期间扩展短暂掉线 / 单步 DEADLINE_EXCEEDED)在大多数步骤会
+    // 直接抛 DouyinBrowserException 终止整轮(只有 search/sort/profile 各自有零散的 SESSION_DETACHED 重试)。
+    // 体系化方向:把"断连归一为可重试"收编进统一的 withReconnect(step) 包装——把
+    // SESSION_DETACHED / DEADLINE_EXCEEDED / CANCELLED 归一为 retryable,在重试前给一段"等浏览器会话重现"的
+    // 宽限(短轮询,最多 ~10s),宽限内连续观察到主页可观测(observe 不再 SESSION_DETACHED)即认为会话重连成功,
+    // 然后重跑【当前步】,而不是整轮失败,也不是干等 60s deadline。
+    //
+    // 重连依赖:重连本身由 C 组负责——扩展重新握手后 EdgeSessionRegistry 会以发起人 subject(D 组在执行入口
+    // RoutingSubjectContext.set 的 userId)重新登记 session;ExtensionBrowserTool.resolveSession 在 ChatOrigin
+    // 无 subject 时回退读 RoutingSubjectContext.get() 精确命中本人新会话。故这里的宽限只需"轮询到主页可观测"
+    // 即可,无需直接持有 registry——下一次 service_* 调用会自动落到重连后的新 session 上。
+    private static final long RECONNECT_GRACE_MAX_MS = 10_000L;
+    private static final long RECONNECT_GRACE_POLL_MS = 800L;
+    private static final int RECONNECT_MAX_ATTEMPTS = 2;
+
+    // 私信幂等(跨重试/续跑):followAndDraft 内的 sentDmKeys 只在单次方法调用内防"重复点发"。一旦把
+    // followAndDraft 这一步纳入 withReconnect 重跑,新一次调用会得到空的本地集合 —— 若上次已点过发送但
+    // 在确认阶段断连,重跑就可能二次发私信。故把"已点过发送的 dmKey"提升为实例级守卫:重跑进入
+    // followAndDraft 时若该 dmKey 已在守卫集合中,直接走"跳过点发、只强制复核"路径,确保续跑绝不重复发私信。
+    // 用并发安全集合:@Component 单例下可能有多个获客 run 并发(各自虚拟线程)。dmKey = hash(作者标识+草稿文本),
+    // 与 followAndDraft 内既有口径完全一致;不同 run 对"同一作者+同一草稿"会共享同一 dmKey(与现状同质,见 notes)。
+    private final Set<String> clickedDmKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    // 守卫集合上限:单例长期运行下避免无限增长。守卫的有效窗口仅为"同一步 withReconnect 的数次重跑"
+    // (秒级),故达到上限直接清空是安全的——极端情况下最多丢失"恰好正在重跑中的某条 dmKey"守卫,
+    // 概率极低且仅退化为现状(单次调用内仍有本地 sentDmKeys 防重发)。
+    private static final int CLICKED_DM_KEYS_MAX = 4_096;
+
+    /** 记录"已点过发送"的 dmKey 到实例级守卫,带上限清理,防止单例长期运行下集合无限增长。 */
+    private void recordClickedDmKey(String dmKey) {
+        if (dmKey == null) {
+            return;
+        }
+        if (clickedDmKeys.size() >= CLICKED_DM_KEYS_MAX) {
+            clickedDmKeys.clear();
+        }
+        clickedDmKeys.add(dmKey);
+    }
+
+    /**
+     * 统一的"断连即重连重试当前步"包装。把 {@code SESSION_DETACHED / DEADLINE_EXCEEDED / CANCELLED}
+     * 归一为可重试:重试前先给一段"等浏览器会话重现"的宽限(短轮询,最多 {@link #RECONNECT_GRACE_MAX_MS}),
+     * 宽限内观察到主页可观测即认为重连成功,再重跑 {@code work};不可重试的异常原样抛出。
+     *
+     * <p>注意:仅用于【幂等或带自身幂等守卫】的步骤。导航/打开评论/采集/打开主页这些步骤天然幂等
+     * (重新导航/重新打开无副作用);私信触达(followAndDraft)非幂等,靠 {@link #clickedDmKeys} 实例级
+     * dmKey 守卫保证重跑不重复点发。RUN_CANCELLED(用户主动取消)不在重试之列,原样抛出尽快收口。
+     */
+    private <T> T withReconnect(String step, Supplier<T> work) {
+        DouyinBrowserException last = null;
+        for (int attempt = 0; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
+            try {
+                return work.get();
+            } catch (DouyinBrowserException e) {
+                last = e;
+                if (attempt >= RECONNECT_MAX_ATTEMPTS || !isReconnectRetryable(e)) {
+                    throw e;
+                }
+                // 用户主动停止(RunService.cancel 会 interrupt 本执行线程)与"会话层 CANCELLED"会用同一
+                // CANCELLED code(见 ActionExecutionService.completeCancelling:user_stop / deadline 共用);
+                // 故重试前先看线程是否被中断:被中断 = 用户停止,绝不重试,原样抛出尽快收口,保住停止响应性。
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("[douyin.lead] step '{}' got reconnectable code={} but thread is interrupted "
+                            + "(user stop); not retrying", step, e.code());
+                    throw e;
+                }
+                log.warn("[douyin.lead] step '{}' hit reconnectable failure (code={}, attempt={}); "
+                                + "waiting for browser session to reappear then retrying step",
+                        step, e.code(), attempt + 1);
+                waitForBrowserSessionReconnect(step);
+            }
+        }
+        throw last == null ? new DouyinBrowserException("STEP_FAILED", "step failed: " + step) : last;
+    }
+
+    /**
+     * 断连可重试判定:扩展掉线 / CDP 目标关闭 → SESSION_DETACHED;单步在断连窗口内超时 → DEADLINE_EXCEEDED;
+     * 任务期间浏览器侧因重连取消在途调用 → CANCELLED。这三类都属于"会话层瞬态",重连后重跑当前步可恢复。
+     * 用户主动取消(RUN_CANCELLED)不在此列。
+     */
+    private boolean isReconnectRetryable(DouyinBrowserException e) {
+        if (e == null) {
+            return false;
+        }
+        String code = e.code();
+        return "SESSION_DETACHED".equals(code)
+                || "DEADLINE_EXCEEDED".equals(code)
+                || "CANCELLED".equals(code);
+    }
+
+    /**
+     * 重连宽限:短轮询最多 {@link #RECONNECT_GRACE_MAX_MS},直到主页 observe 不再 SESSION_DETACHED
+     * (即扩展已重新握手、C 组按 subject 重登记了 session、下一次 service_* 能落到新会话)。
+     * 超时仍未重现也返回——由上层 withReconnect 再发起一次重跑,重跑若仍断连则按不可恢复抛出。
+     */
+    private void waitForBrowserSessionReconnect(String step) {
+        long deadline = System.currentTimeMillis() + RECONNECT_GRACE_MAX_MS;
+        while (System.currentTimeMillis() < deadline) {
+            sleepLocal(RECONNECT_GRACE_POLL_MS);
+            try {
+                // observeMain 不抛异常:失败时返回 ok=false 且 code=SESSION_DETACHED/OBSERVE_FAILED。
+                // 故必须看 probe.ok() —— ok=true 才代表 service_observe_main 真正落到了一个可观测的会话上
+                // (扩展已重新握手、C 组按 subject 重登记了新 session)。后台 tab 空树但会话在线时 ok 仍为
+                // true(url 可能为空但请求成功返回),足以判定"会话重现",页面内容由重跑的步骤自行校验。
+                BrowserObservation probe = observeMain("all");
+                if (probe != null && probe.ok()) {
+                    log.info("[douyin.lead] browser session reappeared during grace for step '{}'; retrying step", step);
+                    return;
+                }
+                if (probe != null && !isReconnectRetryable(observeFailureCode(probe))) {
+                    // 探测返回的失败码非会话层(非 SESSION_DETACHED/DEADLINE_EXCEEDED/CANCELLED),
+                    // 不再傻等;交由重跑/上层处理。
+                    return;
+                }
+                // 仍断连(ok=false 且会话层码),继续轮询直到宽限耗尽。
+            } catch (DouyinBrowserException probeError) {
+                // observeMain 理论上不抛(仅 parse JSON 异常会抛 BROWSER_JSON_INVALID),稳妥兜底:
+                // 非会话层异常不再傻等。
+                if (!isReconnectRetryable(probeError)) {
+                    return;
+                }
+            }
+        }
+        log.warn("[douyin.lead] browser session did not reappear within grace ({}ms) for step '{}'; "
+                + "will retry step once more anyway", RECONNECT_GRACE_MAX_MS, step);
+    }
+
+    /** 按错误码判定会话层瞬态(observeMain 返回失败码时复用此判定,不必造异常)。 */
+    private boolean isReconnectRetryable(String code) {
+        return code != null
+                && ("SESSION_DETACHED".equals(code)
+                || "DEADLINE_EXCEEDED".equals(code)
+                || "CANCELLED".equals(code));
+    }
+
+    private String observeFailureCode(BrowserObservation probe) {
+        return probe == null ? "" : (probe.code() == null ? "" : probe.code());
+    }
+
     @Override
     public BrowserObservation openDouyinAndSearch(DouyinLeadAcquisitionInput input) {
         clearSortedVideoSnapshot();
-        DouyinBrowserException last = null;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                return openDouyinAndSearchOnce(input, attempt);
-            } catch (DouyinBrowserException e) {
-                last = e;
-                if (!"SESSION_DETACHED".equals(e.code()) || attempt >= 2) {
-                    throw e;
+        // 断连续跑:整步纳入 withReconnect —— 单步内仍保留搜索自身的多次重试(搜索框慢渲染/未验证等
+        // 业务性恢复),会话层断连(SESSION_DETACHED/DEADLINE_EXCEEDED/CANCELLED)则由 withReconnect 在
+        // 等会话重现后重跑整步。搜索天然幂等(重新导航+重新输入),重跑安全。
+        return withReconnect("open_douyin_search", () -> {
+            DouyinBrowserException last = null;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    return openDouyinAndSearchOnce(input, attempt);
+                } catch (DouyinBrowserException e) {
+                    last = e;
+                    // 会话层断连交给外层 withReconnect 统一处理(等重现再整步重跑);此处只做搜索业务性退避重试。
+                    if (isReconnectRetryable(e) || attempt >= 2) {
+                        throw e;
+                    }
+                    sleepLocal(1200L + attempt * 900L);
                 }
-                sleepLocal(1200L + attempt * 900L);
             }
-        }
-        throw last == null ? new DouyinBrowserException("SEARCH_FAILED", "抖音搜索失败") : last;
+            throw last == null ? new DouyinBrowserException("SEARCH_FAILED", "抖音搜索失败") : last;
+        });
     }
 
     private BrowserObservation openDouyinAndSearchOnce(DouyinLeadAcquisitionInput input, int attempt) {
@@ -299,44 +444,29 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     public BrowserObservation applySort(DouyinLeadAcquisitionInput input) {
         DouyinSortSpec sort = DouyinSortSpec.from(input == null ? "" : input.sort());
         String keyword = input == null ? DouyinLeadAcquisitionInput.DEFAULT_KEYWORD : input.keyword();
-        DouyinBrowserException lastDetached = null;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                BrowserObservation observed = waitForSearchVerified(keyword, 4, 600L);
-                observed = ensurePlainSearchResultPage(observed, keyword);
-                if (sort.isComprehensive()) {
-                    rememberSortedVideoSnapshot(keyword, observed);
-                    return observed;
-                }
-                if (sortVerified(observed, keyword, sort)) {
-                    rememberSortedVideoSnapshot(keyword, observed);
-                    return observed;
-                }
-                // 后台可用优先:douyin_ui(合成 hover 展开「筛选」+ 点排序选项),不依赖 CDP hover
-                BrowserObservation byUi = sortByDouyinUi(keyword, sort);
-                if (byUi != null) {
-                    rememberSortedVideoSnapshot(keyword, byUi);
-                    return byUi;
-                }
-                // 兜底(仅前台):CDP hover/click 打开筛选面板再选
-                BrowserObservation panel = openFilterPanel(observed, keyword, sort);
-                return selectSortOption(panel, keyword, sort);
-            } catch (DouyinBrowserException e) {
-                if (!"SESSION_DETACHED".equals(e.code()) || attempt >= 2) {
-                    throw e;
-                }
-                lastDetached = e;
-                sleepLocal(1_200L);
-                BrowserObservation recovered = waitForSearchVerified(keyword, 4, 700L);
-                if (sortVerified(recovered, keyword, sort)) {
-                    rememberSortedVideoSnapshot(keyword, recovered);
-                    return recovered;
-                }
+        // 断连续跑:整步纳入 withReconnect。排序天然幂等(重新等结果页 + 重选排序),会话层断连由外层
+        // 等会话重现后整步重跑。
+        return withReconnect("apply_sort", () -> {
+            BrowserObservation observed = waitForSearchVerified(keyword, 4, 600L);
+            observed = ensurePlainSearchResultPage(observed, keyword);
+            if (sort.isComprehensive()) {
+                rememberSortedVideoSnapshot(keyword, observed);
+                return observed;
             }
-        }
-        throw lastDetached == null
-                ? new DouyinBrowserException("SORT_FAILED", "抖音排序失败")
-                : lastDetached;
+            if (sortVerified(observed, keyword, sort)) {
+                rememberSortedVideoSnapshot(keyword, observed);
+                return observed;
+            }
+            // 后台可用优先:douyin_ui(合成 hover 展开「筛选」+ 点排序选项),不依赖 CDP hover
+            BrowserObservation byUi = sortByDouyinUi(keyword, sort);
+            if (byUi != null) {
+                rememberSortedVideoSnapshot(keyword, byUi);
+                return byUi;
+            }
+            // 兜底(仅前台):CDP hover/click 打开筛选面板再选
+            BrowserObservation panel = openFilterPanel(observed, keyword, sort);
+            return selectSortOption(panel, keyword, sort);
+        });
     }
 
     /**
@@ -373,6 +503,19 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public BrowserObservation openVideo(int zeroBasedIndex) {
+        // 断连续跑:仅【首个视频(index=0)】整步纳入 withReconnect —— index=0 走"点结果区第 N 张封面卡"
+        // 路径,天然幂等(已在视频页则复用,否则重新点卡片),重跑安全。
+        // index>0 走 douyin_ui next_video 键盘式切换(每次前进一个),【非幂等】:若在一次成功 next_video
+        // 之后、方法返回之前断连,重跑会把已切到的"下一个"误判为 already-open 并再次 next_video,造成跳过/错位。
+        // 故 index>0 不做整步重连重跑(其内部已有 slowAttempts 业务重试);该视频若因断连失败,executor 会
+        // 捕获单视频失败并继续下一个,绝不整轮失败,也不会切错目标。
+        if (zeroBasedIndex == 0) {
+            return withReconnect("open_video", () -> openVideoInternal(zeroBasedIndex));
+        }
+        return openVideoInternal(zeroBasedIndex);
+    }
+
+    private BrowserObservation openVideoInternal(int zeroBasedIndex) {
         startCommentNetworkCapture();
         BrowserObservation current = observeMain("all");
         if (looksLikeVideoOpenHard(current)) {
@@ -753,6 +896,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public BrowserObservation openComments() {
+        // 断连续跑:整步纳入 withReconnect。打开评论天然幂等(已打开则复用),会话层断连由外层
+        // 等会话重现后整步重跑。
+        return withReconnect("open_comments", this::openCommentsInternal);
+    }
+
+    private BrowserObservation openCommentsInternal() {
         startCommentNetworkCapture();
         BrowserObservation observed = observeMain("all");
         if (commentsPanelReady(observed)) {
@@ -898,6 +1047,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public RegionInfo detectCommentRegion() {
+        // 断连续跑:整步纳入 withReconnect。区域探测/注册天然幂等(重新探测+重新注册无副作用),
+        // 会话层断连由外层等会话重现后整步重跑。
+        return withReconnect("detect_comment_region", this::detectCommentRegionInternal);
+    }
+
+    private RegionInfo detectCommentRegionInternal() {
         BrowserObservation observed = observeMain("all");
         RegionInfo domDetected = detectRuntimeCommentRegion();
         if (domDetected != null) {
@@ -1006,6 +1161,16 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     @Override
     public CommentCollectionResult collectAllComments(RegionInfo region,
                                                       Consumer<CommentCollectionProgress> progressConsumer) {
+        // 断连续跑:整步纳入 withReconnect。采集天然幂等(以 commentKey 去重累积,重跑会重新去重收敛),
+        // 会话层断连(滚动/抽取在断连窗口内抛 SESSION_DETACHED/DEADLINE_EXCEEDED)由外层等会话重现后整步重跑,
+        // 而非整轮失败。注意:采集步本身已内吞了大量滚动失败(keep collector alive),只有真正逃逸到顶层的
+        // 会话层异常才会触发重连重跑。
+        return withReconnect("collect_all_comments",
+                () -> collectAllCommentsInternal(region, progressConsumer));
+    }
+
+    private CommentCollectionResult collectAllCommentsInternal(RegionInfo region,
+                                                               Consumer<CommentCollectionProgress> progressConsumer) {
         LinkedHashMap<String, DouyinCommentItem> seen = new LinkedHashMap<>();
         int stableNoNew = 0;
         int stableEndMarker = 0;
@@ -1691,7 +1856,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public BrowserObservation openAuthorProfile(DouyinCommentItem comment) {
-        return openAuthorProfileForEngagement(comment).observation();
+        // 断连续跑:整步纳入 withReconnect。打开作者主页本身幂等(新开 tab,未确认的 tab 会被清理),
+        // 会话层断连由外层等会话重现后整步重跑。注意:openAuthorProfileForEngagement 自身的重试只处理
+        // PROFILE_OPEN_FAILED/PROFILE_TAB_NOT_CONTROLLED 等业务性失败;会话层断连统一交给本包装。
+        return withReconnect("open_author_profile",
+                () -> openAuthorProfileForEngagement(comment).observation());
     }
 
     private OpenedAuthorProfile openAuthorProfileForEngagement(DouyinCommentItem comment) {
@@ -1803,6 +1972,16 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     @Override
     public EngagementResult followAndDraft(DouyinCommentItem comment, String dmDraft, boolean sendDm) {
+        // 断连续跑 + 幂等:整步纳入 withReconnect,会话层断连(关注/打开私信/输入/发送各子动作在断连窗口内
+        // 抛 SESSION_DETACHED/DEADLINE_EXCEEDED/CANCELLED)等会话重现后重跑整步,而非整轮失败。
+        // 关键:私信非幂等,重跑前后用实例级 clickedDmKeys 守卫"已点过发送的 dmKey",重跑只复核不重发(见
+        // followAndDraftInternal 起始处的 dmKey 预置)。重跑安全的另一前提:关注/打开私信对同一作者重复操作
+        // 无副作用(已关注则复用、私信浮层重开同一会话)。
+        return withReconnect("engage_matched_comment_author",
+                () -> followAndDraftInternal(comment, dmDraft, sendDm));
+    }
+
+    private EngagementResult followAndDraftInternal(DouyinCommentItem comment, String dmDraft, boolean sendDm) {
         boolean profileOpened = false;
         Long engagementTabId = null;
         try {
@@ -1871,6 +2050,14 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         // 已点过发送按钮)即记入集合,已在集合中的 dmKey 不再二次点发送,确保"已点过绝不重复点发"。
         Set<String> sentDmKeys = new HashSet<>();
         String dmKey = sendDm ? dmKey(comment, dmDraft) : null;
+        // 断连续跑幂等(跨重跑):若本步在上一次尝试中已点过发送(dmKey 记入实例级 clickedDmKeys),
+        // 本次重跑直接把它预置进本地 sentDmKeys —— 下面的 DM 循环与 send-only 兜底都会据此走"跳过点发、
+        // 只强制复核"路径,确保 withReconnect 重跑【绝不重复发私信】。
+        if (dmKey != null && clickedDmKeys.contains(dmKey)) {
+            sentDmKeys.add(dmKey);
+            log.info("[douyin.lead] dmKey already clicked in a previous attempt (instance guard); "
+                    + "this retry will re-check only, never resend: dmKey={}", dmKey);
+        }
         // 私信浮层(#imSaasContainerId)点开后异步渲染，输入框可能要等几秒才 mount——重试
         // service_type_dm_draft 直到输入成功或超时(~12s)，避免一次找不到输入框就 DM_INPUT_NOT_FOUND。
         // 慢环境:发送前台化后单次 handler 内部最坏预算(切前台+渲染+输入+点发送)更长,外层输入
@@ -1905,6 +2092,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             // 或 sent=false(发送未确认)也不再重试点发,避免"已点但确认失败→再点一遍"造成重复发送。
             if (sendDm && clickedByDmPrimitive && dmKey != null) {
                 sentDmKeys.add(dmKey);
+                recordClickedDmKey(dmKey); // 断连续跑幂等:跨重跑也记住"已点过发送",重跑不重发
                 log.info("[douyin.lead] dm clicked-send by primitive; record dmKey and stop: attempt={}, sent={}, dmKey={}",
                         dmAttempt, sentByDmPrimitive, dmKey);
                 break;
@@ -1976,6 +2164,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 // 幂等:send-only 已点过发送即记入 dmKey,即便复核未过也不再二次点发。
                 if (sendClicked && dmKey != null) {
                     sentDmKeys.add(dmKey);
+                    recordClickedDmKey(dmKey); // 断连续跑幂等:跨重跑也记住"已点过发送",重跑不重发
                 }
                 // 后端是发出与否的唯一权威:只要点了发送(前台化后 trusted),就强制复核,不管扩展自报
                 // sent 是否为 false(前台化后可能已真发出,扩展的 sent=false 可能是假阴性)。

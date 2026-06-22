@@ -138,7 +138,10 @@ public class EdgeWebSocketHandler extends TextWebSocketHandler implements SubPro
             return;
         }
         String agentVersion = (String) hello.getPayload().getOrDefault("agent_version", "unknown");
-        BrowserSession session = registry.register(principal.subject(), ws, agentVersion);
+        // 契约4: register the session under the subject AND every resolved alias
+        // (PAT userId ⇄ username) so web and desktop-PAT routes hit one browser.
+        BrowserSession session =
+                registry.register(principal.subject(), principal.allKeys(), ws, agentVersion);
         sessionIdByWsId.put(ws.getId(), session.getId());
 
         EdgeMessage ack = reply(hello, EdgeMessageKind.HELLO_ACK, Map.of(

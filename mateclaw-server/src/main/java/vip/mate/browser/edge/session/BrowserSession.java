@@ -6,6 +6,7 @@ import lombok.Data;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Instant;
+import java.util.Set;
 
 /**
  * Live, in-memory representation of one Browser Agent edge session.
@@ -39,4 +40,16 @@ public class BrowserSession {
 
     /** Last time we received any message (heartbeat or otherwise). */
     private volatile Instant lastHeartbeatAt;
+
+    /**
+     * Every subject-string key this session is reachable under in the registry's
+     * alias map — at minimum {@link #subject}, plus (契约4) the PAT {@code userId}
+     * string and the owning username when the registrar could resolve both. The
+     * registry owns this set; it is used to remove ALL alias entries when the
+     * session is dropped (reap / ws-close / conflict) so no alias dangles to a
+     * dead session. Defaults to just {@link #subject} for the legacy 3-arg
+     * {@code register} path. Never {@code null}.
+     */
+    @Builder.Default
+    private final Set<String> aliasKeys = Set.of();
 }

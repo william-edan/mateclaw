@@ -81,7 +81,12 @@ class ExtensionBrowserToolTest {
                 .id("sess-1").subject("default").agentVersion("0.1.0")
                 .ws(null).lastHeartbeatAt(java.time.Instant.now()).build();
 
-        when(registry.findBySubject("default")).thenReturn(Optional.of(session));
+        // resolveSession now goes through findLiveBySubject + isLive (the
+        // activity-checked path). For these dispatch-logic unit tests the session
+        // has a null ws, so stub isLive(...) to treat the test session as live;
+        // findLiveBySubject mirrors what the old findBySubject stub returned.
+        when(registry.findLiveBySubject("default")).thenReturn(Optional.of(session));
+        when(registry.isLive(any())).thenReturn(true);
     }
 
     // -----------------------------------------------------------------
@@ -90,7 +95,7 @@ class ExtensionBrowserToolTest {
 
     @Test
     void allTools_returnNO_SESSION_whenNoSubjectMatch() throws Exception {
-        when(registry.findBySubject("default")).thenReturn(Optional.empty());
+        when(registry.findLiveBySubject("default")).thenReturn(Optional.empty());
 
         String out = tool.extension_browser_navigate("https://example.com", null, null);
 
@@ -105,7 +110,7 @@ class ExtensionBrowserToolTest {
         // Real edge sessions register under the authed user's id (e.g. "1"), not
         // the configured "default". With exactly one browser connected the tool
         // should target it rather than fail NO_SESSION.
-        when(registry.findBySubject("default")).thenReturn(Optional.empty());
+        when(registry.findLiveBySubject("default")).thenReturn(Optional.empty());
         when(registry.snapshot()).thenReturn(List.of(
                 new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now())));
         when(registry.find("sess-1")).thenReturn(Optional.of(session));
@@ -123,8 +128,12 @@ class ExtensionBrowserToolTest {
     @Test
     void resolveSession_staysStrict_whenMultipleSessionsAndSubjectMisses() throws Exception {
         // Ambiguous: more than one browser connected and none match the subject.
-        // Don't guess — return NO_SESSION until Phase 4 resolves per-user routing.
-        when(registry.findBySubject("default")).thenReturn(Optional.empty());
+        // Don't guess which is the user's — noSession() surfaces AMBIGUOUS_SESSION
+        // (registry.size() > 1) so the agent tells the user to connect from the
+        // right account/device. (Pre-existing assertion drift: this test asserted
+        // NO_SESSION while production has long returned AMBIGUOUS_SESSION for the
+        // >1-browser case; corrected to match actual behaviour.)
+        when(registry.findLiveBySubject("default")).thenReturn(Optional.empty());
         when(registry.size()).thenReturn(2);
         when(registry.snapshot()).thenReturn(List.of(
                 new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now()),
@@ -134,7 +143,7 @@ class ExtensionBrowserToolTest {
 
         JsonNode j = mapper.readTree(out);
         assertThat(j.get("ok").asBoolean()).isFalse();
-        assertThat(j.get("code").asText()).isEqualTo("NO_SESSION");
+        assertThat(j.get("code").asText()).isEqualTo("AMBIGUOUS_SESSION");
         verify(planExec, never()).execute(any(), any());
     }
 

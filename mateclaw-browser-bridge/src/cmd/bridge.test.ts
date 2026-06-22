@@ -7,7 +7,17 @@
  * must still enter the running path in that case.
  */
 import { describe, it, expect } from 'vitest'
-import { decideMode, isNativeMessagingArgv } from './bridge.js'
+import { PassThrough } from 'node:stream'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  decideMode,
+  isNativeMessagingArgv,
+  waitForToken,
+  pumpStdinWithPingFilter,
+} from './bridge.js'
+import { readFrame, writeFrame } from '../internal/nm/server.js'
 
 const EXT = 'chrome-extension://bjdhmojdiahokgfcaahphcjgcnffbonf/'
 
@@ -56,5 +66,139 @@ describe('decideMode', () => {
 
   it('shows usage for a bare interactive terminal invocation', () => {
     expect(decideMode([], true)).toBe('usage')
+  })
+})
+
+// ── NO_TOKEN 有界轮询(契约2)──────────────────────────────────────────────────
+
+describe('waitForToken — 有界轮询', () => {
+  const origEnv = { ...process.env }
+
+  function tmpHome(): string {
+    return mkdtempSync(join(tmpdir(), 'mateclaw-bridge-'))
+  }
+
+  function restoreEnv(): void {
+    for (const key of ['MATECLAW_HOME', 'MATECLAW_BRIDGE_AUTH_TOKEN']) {
+      if (origEnv[key] !== undefined) process.env[key] = origEnv[key]
+      else delete process.env[key]
+    }
+  }
+
+  it('token 已就绪 → 立即返回 Config,不轮询', async () => {
+    process.env.MATECLAW_HOME = tmpHome()
+    process.env.MATECLAW_BRIDGE_AUTH_TOKEN = 'ready-tok'
+    let slept = 0
+    const cfg = await waitForToken({
+      timeoutMs: 5000,
+      intervalMs: 1000,
+      sleep: async () => { slept++ },
+    })
+    expect(cfg?.authToken).toBe('ready-tok')
+    expect(slept).toBe(0)
+    delete process.env.MATECLAW_BRIDGE_AUTH_TOKEN
+    restoreEnv()
+  })
+
+  it('先无 token、轮询期间被写入 → 接续返回 Config', async () => {
+    const home = tmpHome()
+    process.env.MATECLAW_HOME = home
+    delete process.env.MATECLAW_BRIDGE_AUTH_TOKEN
+
+    let polls = 0
+    const cfg = await waitForToken({
+      timeoutMs: 10_000,
+      intervalMs: 10,
+      now: () => 0, // 冻结时间,确保不会因超时退出
+      sleep: async () => {
+        polls++
+        if (polls === 3) {
+          // 模拟桌面壳第三次轮询前写出 bridge.yaml
+          writeFileSync(join(home, 'bridge.yaml'), 'auth_token: late-tok\n', 'utf8')
+        }
+      },
+    })
+    expect(cfg?.authToken).toBe('late-tok')
+    restoreEnv()
+  })
+
+  it('超时仍无 token → 返回 null(调用方据此发 NO_TOKEN)', async () => {
+    process.env.MATECLAW_HOME = tmpHome()
+    delete process.env.MATECLAW_BRIDGE_AUTH_TOKEN
+
+    // now 第一次返回 0(算 deadline),之后返回超过 deadline 的值 → 一轮即超时
+    let t = 0
+    const cfg = await waitForToken({
+      timeoutMs: 1000,
+      intervalMs: 1,
+      now: () => { const v = t; t = 5000; return v },
+      sleep: async () => {},
+    })
+    expect(cfg).toBeNull()
+    restoreEnv()
+  })
+})
+
+// ── ping/pong 拦截过滤器(契约1)──────────────────────────────────────────────
+
+describe('pumpStdinWithPingFilter — 应用层心跳拦截', () => {
+  /** 把若干 JSON 对象按 NM 帧写进一个可读 PassThrough。 */
+  async function feed(...objs: unknown[]): Promise<PassThrough> {
+    const src = new PassThrough()
+    for (const o of objs) await writeFrame(src, JSON.stringify(o))
+    src.end()
+    return src
+  }
+
+  it('ping 被就地回 pong(带回 ts)且不下发给 Runner', async () => {
+    const stdin = await feed({ kind: 'ping', ts: 42 })
+    const stdout = new PassThrough()
+    const out = new PassThrough()
+
+    await pumpStdinWithPingFilter(stdin, stdout, out)
+
+    // stdout 收到 pong
+    stdout.end()
+    const pongFrame = await readFrame(stdout)
+    expect(JSON.parse(pongFrame!.toString())).toEqual({ kind: 'pong', ts: 42 })
+
+    // out(给 Runner 的流)不应有任何 ping 帧 —— 已 end,直接 EOF
+    const forwarded = await readFrame(out)
+    expect(forwarded).toBeNull()
+  })
+
+  it('业务帧原样转发给 Runner,ping 被过滤掉', async () => {
+    const stdin = await feed(
+      { kind: 'ping', ts: 1 },
+      { kind: 'action.execute', payload: { a: 1 } },
+      { kind: 'ping', ts: 2 },
+    )
+    const stdout = new PassThrough()
+    const out = new PassThrough()
+
+    await pumpStdinWithPingFilter(stdin, stdout, out)
+    out.end()
+
+    // out 里只剩那一帧业务帧
+    const f1 = await readFrame(out)
+    expect(JSON.parse(f1!.toString())).toEqual({ kind: 'action.execute', payload: { a: 1 } })
+    const f2 = await readFrame(out)
+    expect(f2).toBeNull()
+
+    // stdout 里有两帧 pong
+    stdout.end()
+    const p1 = await readFrame(stdout)
+    expect(JSON.parse(p1!.toString())).toEqual({ kind: 'pong', ts: 1 })
+    const p2 = await readFrame(stdout)
+    expect(JSON.parse(p2!.toString())).toEqual({ kind: 'pong', ts: 2 })
+  })
+
+  it('stdin EOF → end 掉下游 out(Runner 据此干净收尾)', async () => {
+    const stdin = await feed() // 空 → 立即 EOF
+    const stdout = new PassThrough()
+    const out = new PassThrough()
+    await pumpStdinWithPingFilter(stdin, stdout, out)
+    const f = await readFrame(out)
+    expect(f).toBeNull()
   })
 })

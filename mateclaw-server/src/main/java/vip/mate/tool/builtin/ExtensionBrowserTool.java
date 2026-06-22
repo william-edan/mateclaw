@@ -10,6 +10,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import vip.mate.agent.context.ChatOrigin;
+import vip.mate.browser.edge.RoutingSubjectContext;
 import vip.mate.browser.edge.action.ActionKind;
 import vip.mate.browser.edge.action.ActionRequest;
 import vip.mate.browser.edge.action.ClickProfileActionPayload;
@@ -1132,19 +1133,27 @@ public class ExtensionBrowserTool {
     /**
      * Resolve the active extension session for the CURRENT authenticated user.
      *
-     * <p>Resolution order:
+     * <p>Resolution order (every subject-keyed hit is liveness-checked via
+     * {@link BrowserSessionRegistry#findLiveBySubject} — an open socket with a
+     * fresh heartbeat — so a session inside the ~40 s reaper window is treated as
+     * a miss and evicted on the spot rather than dispatched into):
      * <ol>
      *   <li>Derive the caller's subject from {@code ctx} — the same value the
      *       edge handshake registered under ({@code EdgePrincipal.subject()}:
      *       JWT=username / PAT=userId.toString). For web-originated chats the
      *       {@link ChatOrigin#requesterId()} carries that username, so we use it
-     *       as the {@code findBySubject} key to pick THIS user's browser even
-     *       when several browsers are connected.</li>
+     *       as the {@code findLiveBySubject} key to pick THIS user's browser even
+     *       when several browsers are connected. The registry's alias map (契约4)
+     *       means a username key also hits a session that registered under the
+     *       owner's PAT userId, and vice versa.</li>
+     *   <li>Fall back to {@link RoutingSubjectContext#get()} — the edge subject a
+     *       background / service task (e.g. 抖音获客, group D) bound on its worker
+     *       thread when there is no per-conversation {@code ctx} (契约3).</li>
      *   <li>Fall back to the configured {@code defaultSubject}.</li>
-     *   <li>Only when no subject resolves a session AND exactly one browser is
-     *       live do we target it (single-session-per-tenant fallback). With more
-     *       than one live session this stays strict (returns null) rather than
-     *       risk driving the wrong user's browser — callers surface
+     *   <li>Only when no subject resolves a LIVE session AND exactly one browser
+     *       is live do we target it (single-session-per-tenant fallback). With
+     *       more than one live session this stays strict (returns null) rather
+     *       than risk driving the wrong user's browser — callers surface
      *       {@code AMBIGUOUS_SESSION} for that case (see {@link #noSession()}).</li>
      * </ol>
      */
@@ -1152,26 +1161,39 @@ public class ExtensionBrowserTool {
         // (1) Precise per-user routing via the authenticated subject from ctx.
         String subject = subjectFromContext(ctx);
         if (subject != null) {
-            Optional<BrowserSession> mine = registry.findBySubject(subject);
+            Optional<BrowserSession> mine = registry.findLiveBySubject(subject);
             if (mine.isPresent()) {
                 return mine.get();
             }
         }
 
-        // (2) Configured default subject (Phase 3 single-tenant deployments).
-        Optional<BrowserSession> s = registry.findBySubject(defaultSubject);
+        // (2) Background / service tasks with no ctx: the thread-bound routing
+        //     subject set by the task entry point (契约3). Precise per-user
+        //     routing for the lead-acquisition flows.
+        String bound = RoutingSubjectContext.get();
+        if (bound != null && !bound.equals(subject)) {
+            Optional<BrowserSession> mine = registry.findLiveBySubject(bound);
+            if (mine.isPresent()) {
+                return mine.get();
+            }
+        }
+
+        // (3) Configured default subject (Phase 3 single-tenant deployments).
+        Optional<BrowserSession> s = registry.findLiveBySubject(defaultSubject);
         if (s.isPresent()) {
             return s.get();
         }
 
-        // (3) Single-session-per-tenant fallback — only safe when exactly one
+        // (4) Single-session-per-tenant fallback — only safe when exactly one
         // browser is connected. The edge session is registered under the
         // authenticated user's subject, NOT the configured `defaultSubject`, so
         // when the subject above couldn't be derived (e.g. background/service
-        // callers with no ToolContext) we still target the lone browser.
+        // callers with no ToolContext) we still target the lone browser — but
+        // only if it is actually live (open socket + fresh heartbeat).
         var all = registry.snapshot();
         if (all.size() == 1) {
-            return registry.find(all.getFirst().sessionId()).orElse(null);
+            BrowserSession only = registry.find(all.getFirst().sessionId()).orElse(null);
+            return registry.isLive(only) ? only : null;
         }
         return null;
     }

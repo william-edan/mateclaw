@@ -44,6 +44,20 @@ public class ActionExecutionService {
      */
     private static final long DEADLINE_CANCEL_ACK_GRACE_MS = 1_500L;
 
+    /**
+     * Reconnect grace for the fast-fail dispatch path: when the target session's
+     * socket is found closed right before send (the "same subject just dropped
+     * and is reconnecting" case), wait up to this long for the registry to
+     * re-publish a LIVE session under the SAME subject before giving up. Bounded
+     * small so a genuinely gone browser still fails quickly with a retryable
+     * SESSION_DETACHED rather than stuffing the envelope into the 1 MB send buffer
+     * and waiting out the action deadline. Exposed for group D's continue-run
+     * reuse via {@link #awaitReattachedSession}.
+     */
+    static final long RECONNECT_GRACE_MS = 8_000L;
+    /** Poll cadence inside {@link #RECONNECT_GRACE_MS} while waiting for reattach. */
+    static final long RECONNECT_POLL_MS = 200L;
+
     private final BrowserSessionRegistry registry;
     private final ObjectMapper mapper;
     private final Clock clock;
@@ -94,12 +108,34 @@ public class ActionExecutionService {
             return existing.mono();
         }
 
+        // Fast-fail + reconnect grace (契约4): confirm the socket is open BEFORE
+        // we reserve the single-flight lock and write. A closed socket would
+        // otherwise have the envelope buffered into the decorator's 1 MB queue and
+        // only surface as a failure when the action deadline fires — turning a
+        // momentary disconnect into a multi-second hang. If the same subject is
+        // mid-reconnect, give the registry a short window to re-publish a live
+        // session under that subject and retarget to it; only then fail.
+        BrowserSession target = session;
+        if (target.getWs() == null || !target.getWs().isOpen()) {
+            BrowserSession reattached = awaitReattachedSession(target.getSubject());
+            if (reattached == null) {
+                return Mono.just(new ActionResult.Failure(
+                        "SESSION_DETACHED",
+                        "browser session detached before dispatch (socket closed); "
+                                + "the browser may be reconnecting — retry shortly",
+                        true));
+            }
+            target = reattached;
+        }
+        // Effectively-final handle for the lambda capture below.
+        final BrowserSession liveSession = target;
+
         CompletableFuture<ActionResult> future = new CompletableFuture<>();
         PendingRequest created = new PendingRequest(
                 new AtomicReference<>(State.INFLIGHT),
                 future,
                 clock.instant().plusMillis(req.deadlineMs()),
-                session.getId(),
+                liveSession.getId(),
                 req.msgId(),
                 req.tabRef(),
                 Mono.fromFuture(future).cache(),
@@ -107,18 +143,18 @@ public class ActionExecutionService {
 
         PendingRequest winner = pending.putIfAbsent(req.msgId(), created);
         if (winner != null) {
-            if (!winner.sessionId().equals(session.getId())) {
+            if (!winner.sessionId().equals(liveSession.getId())) {
                 throw new IllegalStateException("action msgId is already in-flight on another session");
             }
             return winner.mono();
         }
-        if (!reserveSession(session, req, created)) {
+        if (!reserveSession(liveSession, req, created)) {
             return pending.get(req.msgId()).mono();
         }
 
         PendingRequest registered = created;
         ScheduledFuture<?> deadlineTask = deadlines.schedule(
-                () -> completeOnDeadline(session, registered, req.deadlineMs()),
+                () -> completeOnDeadline(liveSession, registered, req.deadlineMs()),
                 req.deadlineMs(),
                 TimeUnit.MILLISECONDS);
         registered.deadlineTask().set(deadlineTask);
@@ -127,7 +163,7 @@ public class ActionExecutionService {
         }
 
         try {
-            sendActionExecute(session, req);
+            sendActionExecute(liveSession, req);
         } catch (Exception e) {
             completeWithFailure(registered, "SEND_FAILED",
                     "failed to send action.execute: " + e.getMessage(), true);
@@ -253,6 +289,28 @@ public class ActionExecutionService {
             return;
         }
         completeWithFailure(slot, "SESSION_DETACHED", "browser session detached", false);
+    }
+
+    /**
+     * Wait up to {@link #RECONNECT_GRACE_MS} for a LIVE session to (re)appear
+     * under {@code subject} (the "browser just dropped, is reconnecting" case),
+     * polling every {@link #RECONNECT_POLL_MS}. Returns the live session or
+     * {@code null} on timeout / blank subject.
+     *
+     * <p>Reusable by group D's continue-run path: after a transient
+     * SESSION_DETACHED, call this with the task's routing subject to re-acquire
+     * the reconnected browser before retrying the action, instead of failing the
+     * whole run. Blocks the calling thread — keep the grace small.
+     */
+    public BrowserSession awaitReattachedSession(String subject) {
+        if (subject == null || subject.isBlank()) {
+            return null;
+        }
+        return registry.awaitLiveBySubject(
+                        subject,
+                        java.time.Duration.ofMillis(RECONNECT_GRACE_MS),
+                        java.time.Duration.ofMillis(RECONNECT_POLL_MS))
+                .orElse(null);
     }
 
     private boolean reserveSession(BrowserSession session, ActionRequest req, PendingRequest created) {

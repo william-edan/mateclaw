@@ -277,6 +277,18 @@ function isConnected(): boolean {
   )
 }
 
+/**
+ * True when the active native bridge has declared itself NON-retryably
+ * unavailable (NO_TOKEN). In this state the NativeBridge already runs its OWN
+ * sparse ~30s re-probe, so the keepalive alarm must NOT tear it down and rebuild
+ * a fresh NativeBridge — doing so would discard the unpaired latch and drop the
+ * bridge back into the dense 1s→30s spawn storm on every alarm wake. Returns
+ * false for the direct/offscreen transports (they have no such state).
+ */
+function isNativeUnpaired(): boolean {
+  return activeBridge instanceof NativeBridge && activeBridge.unpaired
+}
+
 const tabGroupManager = new TabGroupManager(chrome, sendUp)
 // Fire-and-forget rehydrate; subsequent reads await internal #loadGroups
 // which handles the race correctly.
@@ -529,6 +541,11 @@ try {
 }
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== KEEPALIVE_ALARM) return
+  // Unpaired native host (NO_TOKEN): the NativeBridge already owns a sparse ~30s
+  // re-probe and the unpaired latch. Rebuilding it here on every wake would
+  // discard that state and restart the dense spawn storm — so leave it be and
+  // let its own probe detect when the user configures the token. (Contract §2.)
+  if (isNativeUnpaired()) return
   if (!isConnected()) {
     // Reconnect on the paired channel (not always native). When the socket is
     // offscreen-hosted, reconnectByPairing re-issues an idempotent CONNECT whose
@@ -608,6 +625,9 @@ chrome.runtime.onMessageExternal.addListener(
               alive: true,
               deviceName: cfg.deviceName ?? null,
               connected: isConnected(),
+              // 未配对(NO_TOKEN)态:native host 起来了但没 token,前端据此显示“未配对/
+              // 未授权”并停止 connected:true 的轮询,而不是一直空转等连接。
+              unpaired: isNativeUnpaired(),
               deviceId: cfg.deviceId,
             })
           })
@@ -643,7 +663,7 @@ chrome.runtime.onMessageExternal.addListener(
         // 选通道(有 serverUrl+pat 走 direct WSS/offscreen,否则回退 native“装好即连”),offscreen
         // 路走幂等 CONNECT 往返、不拆仍活着的 socket。前端随后轮询 ping 等 connected:true。
         reconnectByPairing()
-          .then(() => sendResponse({ ok: true, connected: isConnected() }))
+          .then(() => sendResponse({ ok: true, connected: isConnected(), unpaired: isNativeUnpaired() }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true
       }
@@ -706,6 +726,7 @@ chrome.runtime.onMessage.addListener(
           .then(cfg =>
             sendResponse({
               connected: isConnected(),
+              unpaired: isNativeUnpaired(),
               serverUrl: cfg.serverUrl ?? null,
               deviceName: cfg.deviceName ?? null,
               deviceId: cfg.deviceId,

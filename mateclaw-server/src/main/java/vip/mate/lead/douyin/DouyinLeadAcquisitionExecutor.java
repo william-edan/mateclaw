@@ -1,6 +1,7 @@
 package vip.mate.lead.douyin;
 
 import org.springframework.stereotype.Service;
+import vip.mate.browser.edge.RoutingSubjectContext;
 import vip.mate.lead.douyin.browser.DouyinBrowserAdapter;
 import vip.mate.lead.douyin.browser.DouyinBrowserException;
 import vip.mate.lead.douyin.match.CommentMatcher;
@@ -11,6 +12,7 @@ import vip.mate.lead.douyin.model.DouyinLeadAcquisitionInput;
 import vip.mate.lead.douyin.model.DouyinLeadRunSummary;
 import vip.mate.lead.douyin.model.EngagementResult;
 import vip.mate.lead.douyin.store.LeadPersistenceService;
+import vip.mate.os.run.model.AgentRunEntity;
 import vip.mate.os.run.model.AgentRunStatus;
 import vip.mate.os.run.model.AgentStepEntity;
 import vip.mate.os.run.model.AgentStepStatus;
@@ -61,8 +63,15 @@ public class DouyinLeadAcquisitionExecutor {
     public void execute(Long runId, Long taskId, DouyinLeadAcquisitionInput input) {
         List<VideoRunState> videos = new ArrayList<>();
         DouyinLeadRunSummary summary = DouyinLeadRunSummary.empty(input.videoLimit());
+        boolean routingSubjectSet = false;
         try {
-            runKernel.startRun(runId);
+            AgentRunEntity run = runKernel.startRun(runId);
+            // 契约3:在抖音获客任务入口(虚拟线程内)set 发起人 edge subject,使后台 service_*
+            // (resolveSession(null) 无 ChatOrigin subject)能回退读 RoutingSubjectContext.get() 精确命中
+            // 本人浏览器,而非靠"恰好 1 个在线"的单会话兜底。这里用发起人的 userId(createdBy)作为 subject,
+            // 与 C 组的 subject 别名口径一致(register 时同一 session 以 PAT userId 字符串 + username 双键可检索,
+            // 优先 userId)。任务结束在 finally 清理,避免线程复用导致 subject 串号。
+            routingSubjectSet = applyRoutingSubject(run);
             if (input.startFromCurrentVideo()) {
                 events.publish(new RunEvent(runId, null, "lead.current_video.started", "info", payload(
                         "keyword", input.keyword(),
@@ -145,7 +154,30 @@ public class DouyinLeadAcquisitionExecutor {
             events.publish(new RunEvent(runId, null, "lead.run.failed", "error",
                     Map.of("code", code, "message", message), null));
         } finally {
+            if (routingSubjectSet) {
+                // 虚拟线程在 newVirtualThreadPerTaskExecutor 下虽不复用,但 RoutingSubjectContext 基于
+                // ThreadLocal,clear 是 ThreadLocal 卫生的硬约束:绝不把发起人 subject 泄漏到任何后续使用。
+                RoutingSubjectContext.clear();
+            }
         }
+    }
+
+    /**
+     * 解析发起人的 edge subject 并写入 {@link RoutingSubjectContext}(ThreadLocal)。
+     *
+     * <p>口径与 C 组别名一致:优先用 PAT 的 userId 字符串(= 桌面端 {@code EdgePrincipal.subject()} 之一);
+     * C 组在 register session 时会同时以 userId 字符串与 username 双键登记别名映射,故这里设 userId 即可
+     * 被 web(username)/ 桌面(userId)两侧命中。createdBy 为 null(理论上不会发生)时不设置,退回单会话兜底。
+     *
+     * @return 是否成功设置(用于 finally 决定是否需要 clear)
+     */
+    private boolean applyRoutingSubject(AgentRunEntity run) {
+        Long createdBy = run == null ? null : run.getCreatedBy();
+        if (createdBy == null) {
+            return false;
+        }
+        RoutingSubjectContext.set(String.valueOf(createdBy));
+        return true;
     }
 
     private void executeVideo(Long runId, Long taskId, DouyinLeadAcquisitionInput input,

@@ -65,6 +65,13 @@ async function loadYaml(home: string): Promise<YamlConfig | null> {
 /**
  * loadConfig resolves configuration by merging defaults, YAML file, and env vars.
  * Env vars always win.
+ *
+ * NOTE: This loader treats a missing bridge.yaml and a malformed bridge.yaml
+ * differently is NOT its concern — it returns whatever it can and lets the
+ * caller decide on the (possibly empty) authToken. For the bounded NO_TOKEN
+ * polling path (see {@link tryLoadConfig} / bridge.ts) we need to tell those
+ * cases apart so we keep waiting on "no token yet" but fail fast on a real
+ * parse/IO error. Use {@link tryLoadConfig} there.
  */
 export async function loadConfig(): Promise<Config> {
   const home = resolveHome()
@@ -94,4 +101,57 @@ export async function loadConfig(): Promise<Config> {
   if (agentVersion && agentVersion.trim() !== '') cfg.agentVersion = agentVersion.trim()
 
   return cfg
+}
+
+/**
+ * Outcome of {@link tryLoadConfig} — a pollable, fault-tolerant config read.
+ *
+ * Three distinct states so the bounded NO_TOKEN poller in bridge.ts can react
+ * correctly:
+ *   - 'ready'    — a non-empty authToken resolved (env or YAML). `config` set.
+ *                  Stop polling, proceed to Client.connect.
+ *   - 'no-token' — config read fine but the token is still empty (bridge.yaml
+ *                  missing entirely, OR present without an auth_token yet). This
+ *                  is the EXPECTED transient on desktop first-launch while the
+ *                  SW/desktop shell is still writing bridge.yaml. `config` still
+ *                  carries the resolved (token-less) defaults so callers can read
+ *                  controlPlaneUrl etc. Keep polling.
+ *   - 'error'    — a genuine IO error or YAML parse failure. NOT a transient;
+ *                  no amount of re-reading the same broken file will fix it.
+ *                  `error` set. Caller may choose to stop early.
+ */
+export type ConfigReadStatus = 'ready' | 'no-token' | 'error'
+
+export interface ConfigReadResult {
+  status: ConfigReadStatus
+  /** Present for 'ready' and 'no-token' (token-less defaults overlay). */
+  config?: Config
+  /** Present for 'error'. */
+  error?: Error
+}
+
+/**
+ * Pollable, non-throwing variant of {@link loadConfig}.
+ *
+ * Distinguishes "no token yet" (file absent or token field empty — the normal
+ * desktop first-launch race where bridge.yaml has not been written yet) from a
+ * hard parse/IO error (malformed YAML, permission denied). The bounded NO_TOKEN
+ * poller in bridge.ts uses this so it keeps waiting on 'no-token' but can bail
+ * out on 'error', instead of the old "no token ⇒ instant self-kill ⇒ SW respawn
+ * storm" behaviour.
+ *
+ * loadConfig() already swallows a missing file (returns null from loadYaml) and
+ * only throws on a real read failure / parse failure, so we map any thrown error
+ * to 'error' and an empty resolved token to 'no-token'.
+ */
+export async function tryLoadConfig(): Promise<ConfigReadResult> {
+  try {
+    const config = await loadConfig()
+    if (config.authToken && config.authToken.trim() !== '') {
+      return { status: 'ready', config }
+    }
+    return { status: 'no-token', config }
+  } catch (err) {
+    return { status: 'error', error: err instanceof Error ? err : new Error(String(err)) }
+  }
 }

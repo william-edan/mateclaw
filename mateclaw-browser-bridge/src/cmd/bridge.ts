@@ -31,13 +31,40 @@
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { loadConfig } from '../internal/config/config.js'
+import { PassThrough, type Readable, type Writable } from 'node:stream'
+import { tryLoadConfig, type Config } from '../internal/config/config.js'
 import { Client } from '../internal/edge/client.js'
 import { Runner } from '../internal/runner/runner.js'
-import { writeJsonFrame } from '../internal/nm/server.js'
+import {
+  writeJsonFrame,
+  readFrame,
+  writeFrame,
+  isOversizeFrame,
+  parsePingFrame,
+  writePongFrame,
+} from '../internal/nm/server.js'
 import { Kind, make } from '../internal/edgeproto/edgeproto.js'
 
 export const VERSION = '0.1.0'
+
+/**
+ * 无 token 时的有界轮询参数(契约2 / 止血核心)。
+ *
+ * 背景:桌面首启时,扩展 SW 会抢在桌面壳写出 bridge.yaml 之前就尝试连接 native host,
+ * 触发 bridge 启动。旧实现"读不到 token 就发一帧 NO_TOKEN 后立即 return 1 自杀",
+ * 叠加 SW 的密集自动重连 → bridge 被反复秒拉起又秒退 = spawn 风暴。
+ *
+ * 改为:无 token 时不立即退出,而是有界轮询重读配置,等桌面壳把 token 写出来即可正常
+ * 接续 Client.connect;只有超时仍无 token 才发 {kind:'error',code:'NO_TOKEN'} 退出。
+ *
+ * 取值理由:
+ *   - 上限 60s:覆盖桌面首启"SW 抢跑 → 桌面壳完成 PAT 申领并写 bridge.yaml"的常见窗口
+ *     (慢机/慢网下后端起 + PAT 下发可能需要十几秒到几十秒);太短会退回 spawn 风暴,
+ *     太长则在"用户确实未配对"时让进程白挂着,60s 是体感等待与无谓挂起的折中。
+ *   - 间隔 1s:文件出现的检测延迟上界 1s,足够灵敏;轮询的是本地小文件,1s/次 的 IO 可忽略。
+ */
+export const NO_TOKEN_POLL_TIMEOUT_MS = 60_000
+export const NO_TOKEN_POLL_INTERVAL_MS = 1_000
 
 /** Resolved invocation mode for the bridge process. */
 export type Mode = 'version' | 'run' | 'usage'
@@ -86,22 +113,21 @@ export function decideMode(argv: readonly string[], isStdinTTY: boolean): Mode {
  * process.exit() itself so callers/tests can decide what to do with the code.
  */
 export async function runBridge(): Promise<number> {
-  const cfg = await loadConfig()
+  // 无 token 时不再立即自杀,而是有界轮询等待桌面壳写出 token(契约2 / 止血核心)。
+  // 轮询期间已经开始接收并应答扩展的 ping(保活),即便还没拿到 token —— 这能在配对
+  // 完成前就让扩展 SW 维持续期、避免它把 bridge 当成"刚启动就崩"而疯狂重拉。
+  const cfg = await waitForToken()
 
-  if (!cfg.authToken) {
-    // Always log a human-readable hint to stderr.
+  if (!cfg) {
+    // 轮询超时仍无 token:走原来的"发一帧结构化 error 再退出"路径(契约2)。
+    // 这一帧是合法 EdgeMessage(v:1, kind:'error'),扩展 parseEdgeMessage 才会接受;
+    // 扩展(组A)收到 retryable===false 时应停止 1s 起步的密集自动重连、emit
+    // 'unpaired'/'no_token' 状态、改为稀疏探测(如 30s/次)。
     process.stderr.write(
-      'bridge run: MATECLAW_BRIDGE_AUTH_TOKEN or bridge.yaml auth_token is required\n',
+      'bridge run: MATECLAW_BRIDGE_AUTH_TOKEN or bridge.yaml auth_token is required ' +
+        `(waited ${Math.round(NO_TOKEN_POLL_TIMEOUT_MS / 1000)}s)\n`,
     )
 
-    // When Chrome (or any Chromium browser) spawned us as a Native Messaging
-    // host, a bare early return looks to the extension like the host crashed:
-    // the port closes immediately, the SW's backoff loop re-spawns us, and the
-    // cycle repeats — a spawn storm. Emit ONE structured error frame on stdout
-    // first so the extension can surface "未授权/未配对" instead of silently
-    // retrying. The frame is a well-formed EdgeMessage (v:1, kind:'error') so the
-    // extension's parseEdgeMessage accepts it; bare {kind:'error'} would be
-    // dropped at parse-time.
     if (isNativeMessagingArgv(process.argv) || process.stdin.isTTY !== true) {
       try {
         await writeJsonFrame(
@@ -132,9 +158,19 @@ export async function runBridge(): Promise<number> {
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
   })
 
+  // ping/pong 拦截:在 stdin 与 Runner 之间插一层"应用层心跳过滤器"。
+  // 扩展(组A)经 NM 发来的 {kind:'ping'} 在这里被就地应答 {kind:'pong'} 回 stdout,
+  // 【不】转发给 Runner → 后端 WSS(契约1)。其余业务帧原样喂给 Runner。
+  // 这样既不改动 runner.ts(不在本组允许文件),又满足"bridge.ts 分发"的拦截点。
+  const filteredStdin = new PassThrough()
+  const pingDone = pumpStdinWithPingFilter(process.stdin, process.stdout, filteredStdin)
+  // 不让过滤泵的异常变成 unhandledRejection(stdin 异常时它会 end 掉 filteredStdin,
+  // Runner 随后看到 EOF 正常收尾);这里仅吞掉 reject。
+  void pingDone.catch(() => {})
+
   const runner = new Runner({
     client,
-    stdin: process.stdin,
+    stdin: filteredStdin,
     stdout: process.stdout,
   })
 
@@ -155,6 +191,115 @@ export async function runBridge(): Promise<number> {
   } finally {
     process.off('SIGINT', handleSignal)
     process.off('SIGTERM', handleSignal)
+  }
+}
+
+/**
+ * 有界轮询等待 token(契约2 / 止血核心)。
+ *
+ * 反复 {@link tryLoadConfig} 直到:
+ *   - 拿到非空 authToken              → 返回该 Config,调用方接续 Client.connect。
+ *   - 距首次尝试已超过 timeoutMs 仍无 → 返回 null,调用方发 NO_TOKEN error 后退出。
+ *   - 读到硬错误(YAML 解析/IO 失败) → 立即返回 null(重读同一坏文件不会变好),
+ *     避免在已知坏配置上白白挂满整个超时窗口。
+ *
+ * 这取代了旧的"无 token 即 return 1 自杀"——桌面首启 SW 抢跑只会让 bridge 安静等
+ * token 写出,而非反复秒退被 SW 拉起(spawn 风暴)。注入 timeoutMs/intervalMs/now/sleep
+ * 仅为可测试性;生产用默认常量。
+ */
+export async function waitForToken(opts?: {
+  timeoutMs?: number
+  intervalMs?: number
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}): Promise<Config | null> {
+  const timeoutMs = opts?.timeoutMs ?? NO_TOKEN_POLL_TIMEOUT_MS
+  const intervalMs = opts?.intervalMs ?? NO_TOKEN_POLL_INTERVAL_MS
+  const now = opts?.now ?? Date.now
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+
+  const deadline = now() + timeoutMs
+
+  for (;;) {
+    const res = await tryLoadConfig()
+    if (res.status === 'ready' && res.config) {
+      return res.config
+    }
+    if (res.status === 'error') {
+      // 硬错误:坏 YAML / 权限问题。重试无意义,提早收手让调用方发 NO_TOKEN。
+      process.stderr.write(
+        `bridge run: config read error, not retrying — ${String(res.error)}\n`,
+      )
+      return null
+    }
+    // status === 'no-token':桌面壳尚未写出 token,继续等待——除非已到截止时间。
+    if (now() >= deadline) {
+      return null
+    }
+    await sleep(intervalMs)
+  }
+}
+
+/**
+ * stdin → Runner 之间的"应用层心跳过滤器"(契约1)。
+ *
+ * 从真实 stdin 逐帧读 NM 帧:
+ *   - {kind:'ping'}  → 就地经 stdout 回 {kind:'pong', ts:<原 ts>},【不】下发给 Runner
+ *                      (因此也不会被转发到后端 WSS);ping/pong 只服务扩展⇄bridge 段保活。
+ *   - 其余业务帧      → 原样(重新加 4 字节长度前缀)写入 `out`,交给 Runner 正常处理。
+ *   - 超大帧 sentinel → 与 Runner 旧行为一致:记一条 stderr 诊断后丢弃,不杀连接、保持对齐。
+ *   - EOF            → end 掉 `out`,Runner 看到 EOF 干净收尾。
+ *
+ * 之所以放在这里而非 runner.ts:runner.ts 不在本组允许文件,且契约明确拦截点为
+ * "nm/server.ts 读帧 / bridge.ts 分发"。本函数仅消费真实 stdin 一次(单一消费者),
+ * Runner 改读本函数产出的 `out` 流,因此不存在 stdin 双读竞态。
+ */
+export async function pumpStdinWithPingFilter(
+  stdin: Readable,
+  stdout: Writable,
+  out: PassThrough,
+): Promise<void> {
+  try {
+    for (;;) {
+      const frame = await readFrame(stdin)
+      if (frame === null) {
+        // stdin EOF —— 告诉 Runner 没有更多帧了。
+        out.end()
+        return
+      }
+
+      if (isOversizeFrame(frame)) {
+        process.stderr.write(
+          `[bridge] dropped oversize NM frame: declared=${frame.declaredBytes} max=${frame.maxBytes}\n`,
+        )
+        continue
+      }
+
+      // frame 是普通帧 body(Buffer)。先看是不是 ping。
+      const ping = parsePingFrame(frame)
+      if (ping) {
+        // 就地回 pong,原样带回 ts;不下发给 Runner(契约1:不污染 edge 业务帧、不上 WSS)。
+        try {
+          await writePongFrame(stdout, ping)
+        } catch {
+          // stdout 可能已被浏览器关闭;静默——保活失败由扩展侧的 watchdog 兜底。
+        }
+        continue
+      }
+
+      // 普通业务帧:重新封帧后转交 Runner(Runner 内部会再 parse + 入队 + 上 WSS)。
+      try {
+        await writeFrame(out, frame)
+      } catch {
+        // 下游 PassThrough 异常(极少见)——结束转发,让 Runner 看到 EOF 收尾。
+        out.end()
+        return
+      }
+    }
+  } catch (err) {
+    // readFrame 仅在"帧中途 EOF"(真正的流损坏)时抛错。结束下游让 Runner 干净收尾。
+    process.stderr.write(`[bridge] stdin ping-filter stopped: ${String(err)}\n`)
+    out.end()
   }
 }
 

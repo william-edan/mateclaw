@@ -211,3 +211,66 @@ export function writeFrame(stream: Writable, payload: Buffer | string): Promise<
 export function writeJsonFrame(stream: Writable, v: unknown): Promise<void> {
   return writeFrame(stream, JSON.stringify(v))
 }
+
+// ── 应用层心跳(扩展 ⇄ bridge 段保活)──────────────────────────────────────────
+//
+// 跨组契约1:扩展(组A)每 ~20s 经 port.postMessage 发 {kind:'ping', ts}; bridge(组B)
+// 从 native stdin 收到 ping 立即经 stdout 回 {kind:'pong', ts}(原样带回 ts)。
+// 目的:扩展收到 inbound NM 消息(pong)才是 Chrome 认可的 SW idle 续期事件,纯
+// chrome.* API 空转不算。这些帧【只用于扩展⇄bridge 段】,不得转发给后端 WSS。
+//
+// 这里用最小依赖的方式识别/构造 ping/pong:直接看 JSON 的 kind 字段,避免把 nm 编解码
+// 层耦合到完整的 edgeproto 信封校验(ping/pong 是裸 {kind, ts},不带 v/msg_id 等)。
+
+/** 应用层心跳帧的最小形状(裸帧:扩展只发 kind+ts,不走 edgeproto 信封)。 */
+export interface PingPongFrame {
+  kind: 'ping' | 'pong'
+  /** 发起方时间戳(ms);pong 必须原样带回 ping 的 ts。 */
+  ts?: number
+}
+
+/**
+ * 解析一个 NM 帧 body,判断它是否是应用层 ping 帧。
+ * 返回解析出的 PingPongFrame(便于回 pong 时取 ts),否则返回 null。
+ *
+ * 容错:JSON 解析失败 / 非对象 / kind 非 'ping' 一律返回 null —— 业务 edge 帧(action.*
+ * 等)绝不会被误判为 ping(它们 kind 不为 'ping')。
+ */
+export function parsePingFrame(body: Buffer | string): PingPongFrame | null {
+  let obj: unknown
+  try {
+    obj = JSON.parse(typeof body === 'string' ? body : body.toString())
+  } catch {
+    return null
+  }
+  if (typeof obj !== 'object' || obj === null) return null
+  const o = obj as Record<string, unknown>
+  if (o['kind'] !== 'ping') return null
+  return { kind: 'ping', ts: typeof o['ts'] === 'number' ? o['ts'] : undefined }
+}
+
+/**
+ * 判断一个 NM 帧 body 是否是 ping 或 pong(任一方向的应用层心跳)。
+ * 调用方据此【过滤】这两类帧,避免把它们转发给后端 WSS(契约1)。
+ */
+export function isPingOrPongFrame(body: Buffer | string): boolean {
+  let obj: unknown
+  try {
+    obj = JSON.parse(typeof body === 'string' ? body : body.toString())
+  } catch {
+    return false
+  }
+  if (typeof obj !== 'object' || obj === null) return false
+  const k = (obj as Record<string, unknown>)['kind']
+  return k === 'ping' || k === 'pong'
+}
+
+/**
+ * 针对收到的 ping 帧,经 stdout(或任意 Writable)写回一帧 pong,原样带回 ts。
+ * 不带 ts 的 ping 回不带 ts 的 pong(向后兼容)。
+ */
+export function writePongFrame(stream: Writable, ping: PingPongFrame): Promise<void> {
+  const pong: PingPongFrame =
+    typeof ping.ts === 'number' ? { kind: 'pong', ts: ping.ts } : { kind: 'pong' }
+  return writeJsonFrame(stream, pong)
+}

@@ -9,7 +9,17 @@
  */
 import { describe, it, expect } from 'vitest'
 import { PassThrough } from 'node:stream'
-import { readFrame, writeFrame, writeJsonFrame, MAX_FRAME_BYTES, isOversizeFrame, type OversizeFrame } from './server.js'
+import {
+  readFrame,
+  writeFrame,
+  writeJsonFrame,
+  MAX_FRAME_BYTES,
+  isOversizeFrame,
+  parsePingFrame,
+  isPingOrPongFrame,
+  writePongFrame,
+  type OversizeFrame,
+} from './server.js'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -108,5 +118,46 @@ describe('NM codec — B6', () => {
     expect(frame).not.toBeNull()
     const parsed = JSON.parse(frame!.toString())
     expect(parsed).toEqual(original)
+  })
+})
+
+// ── 应用层 ping/pong 心跳(契约1)─────────────────────────────────────────────
+
+describe('NM ping/pong helpers', () => {
+  it('parsePingFrame 识别 ping 并带回 ts', () => {
+    const p = parsePingFrame(JSON.stringify({ kind: 'ping', ts: 1234 }))
+    expect(p).not.toBeNull()
+    expect(p!.ts).toBe(1234)
+  })
+
+  it('parsePingFrame 对非 ping / 坏 JSON / pong 返回 null', () => {
+    expect(parsePingFrame(JSON.stringify({ kind: 'pong', ts: 1 }))).toBeNull()
+    expect(parsePingFrame(JSON.stringify({ kind: 'action.execute' }))).toBeNull()
+    expect(parsePingFrame('not-json')).toBeNull()
+    expect(parsePingFrame(JSON.stringify(['ping']))).toBeNull()
+  })
+
+  it('isPingOrPongFrame 对 ping 与 pong 都为 true,业务帧为 false', () => {
+    expect(isPingOrPongFrame(JSON.stringify({ kind: 'ping', ts: 1 }))).toBe(true)
+    expect(isPingOrPongFrame(JSON.stringify({ kind: 'pong', ts: 1 }))).toBe(true)
+    expect(isPingOrPongFrame(JSON.stringify({ kind: 'heartbeat' }))).toBe(false)
+    expect(isPingOrPongFrame('garbage')).toBe(false)
+  })
+
+  it('writePongFrame 原样带回 ts,可被 readFrame 解出', async () => {
+    const pt = new PassThrough()
+    await writePongFrame(pt, { kind: 'ping', ts: 987654 })
+    pt.end()
+    const frame = await readFrame(pt)
+    expect(frame).not.toBeNull()
+    expect(JSON.parse(frame!.toString())).toEqual({ kind: 'pong', ts: 987654 })
+  })
+
+  it('writePongFrame 对无 ts 的 ping 回无 ts 的 pong', async () => {
+    const pt = new PassThrough()
+    await writePongFrame(pt, { kind: 'ping' })
+    pt.end()
+    const frame = await readFrame(pt)
+    expect(JSON.parse(frame!.toString())).toEqual({ kind: 'pong' })
   })
 })
