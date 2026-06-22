@@ -48,16 +48,21 @@ public class VerificationCodeService {
         boolean ipInc = false;
         boolean globalInc = false;
         try {
+            // 每个计数：先自增，再置回滚标志，最后判限。标志在自增成功之后置位，
+            // 保证只回滚真正发生过的自增（即便 incrementWindow 抛异常也不会误退）。
+            long phoneCount = store.incrementWindow(phoneKey, day);
             phoneInc = true;
-            if (store.incrementWindow(phoneKey, day) > props.getDailyLimitPerPhone()) {
+            if (phoneCount > props.getDailyLimitPerPhone()) {
                 throw new MateClawException("err.sms.daily_limit", 429, "今日验证码发送次数已达上限");
             }
+            long ipCount = store.incrementWindow(ipKey, day);
             ipInc = true;
-            if (store.incrementWindow(ipKey, day) > props.getDailyLimitPerIp()) {
+            if (ipCount > props.getDailyLimitPerIp()) {
                 throw new MateClawException("err.sms.daily_limit", 429, "今日验证码发送次数已达上限");
             }
+            long globalCount = store.incrementWindow("global", minute);
             globalInc = true;
-            if (store.incrementWindow("global", minute) > props.getGlobalLimitPerMinute()) {
+            if (globalCount > props.getGlobalLimitPerMinute()) {
                 throw new MateClawException("err.sms.busy", 429, "系统繁忙，请稍后再试");
             }
 
