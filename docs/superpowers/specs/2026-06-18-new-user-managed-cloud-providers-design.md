@@ -119,3 +119,16 @@ DEFAULT_LIMITS.put("deepseek-default", 3_000_000L);
 - 清理 V135 遗留的 `dashscope`/`deepseek` 惰性配额行。
 - 配额充值 / 运行期可配限额 / 按套餐分层。
 - 老用户 provider 列表的回溯清理。
+
+## 9. 修订 (2026-06-22)：全种子化 + 仅两个默认版默认启用
+
+原 §2/§4 的"种子白名单（新用户只种子化两个默认版云端 + 本地）"被用户修订：
+
+- **「添加提供商」目录是按当前工作区已种子化的 provider 列出**（`/models/catalog` → `ModelProviderService.listProvidersInternal(false)`，含 `enabled=false` 行；「启用」按钮只是把该行 `enabled` 置 true）。因此要让所有云端 provider 在目录里显示出来，必须把它们都种子化进新工作区。
+- **新策略**：新用户注册时**全部 provider 都种子化**进新工作区（都显示在目录里）；但**只有 `dashscope-default` + `deepseek-default` 默认启用并注入平台 key**，其余（含 `dashscope-compat-default`、原版/其它云端、本地 provider）**默认禁用**——用户在目录里自行「启用」并填写自己的 key。
+- 配额（§4.3）与管理员豁免**不变**：仍只对 `dashscope-default`(2M)/`deepseek-default`(3M) 生效，`ensureDefaultQuotas` 只建这两行。
+
+**实现差异**（相对原 §6）：
+- 回退 `seedWorkspaceModels` 的白名单过滤——改为复制全部 provider + 全量 `copyModelsToWorkspace`（移除按 provider 过滤的重载，回退原 2 参方法）。
+- `REGISTRATION_CLOUD_PROVIDER_IDS = {dashscope-default, deepseek-default}` 改用途为"注册时**默认启用**集"；`applyRegistrationDefaultProviderKey` 只对该集合启用+注入平台 key，其余一律 `enabled=false`（含受管的 `dashscope-compat-default`）。
+- 测试：`ModelProviderServiceWorkspaceIsolationTest` 改为断言"全种子化、仅两个默认版启用、其余禁用、2 参全量复制"；端到端 IT 重命名为 `NewWorkspaceRegistrationSeedIT`，断言"全部云端种子化 / 仅两个启用 / compat-default 与本地种子但禁用 / 全量模型复制 / 默认 chat+embedding 在 dashscope-default / 配额 2M·3M / 管理员豁免"；删除 `ModelConfigServiceCopyModelsTest`（过滤重载已移除）。
