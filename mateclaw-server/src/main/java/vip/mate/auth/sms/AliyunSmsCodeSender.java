@@ -27,7 +27,7 @@ public class AliyunSmsCodeSender implements SmsCodeSender {
         this.props = props;
     }
 
-    /** 测试注入 Client。 */
+    /** 仅供测试使用：注入 Mock Client，跳过懒加载真实客户端。 */
     AliyunSmsCodeSender(SmsProperties props, Client client) {
         this.props = props;
         this.client = client;
@@ -60,6 +60,7 @@ public class AliyunSmsCodeSender implements SmsCodeSender {
                 .setPhoneNumbers(phone)
                 .setSignName(props.getAliyun().getSignName())
                 .setTemplateCode(props.getAliyun().getTemplateCode())
+                // code 由 VerificationCodeService 保证为纯数字，故直接拼 JSON 无需转义
                 .setTemplateParam("{\"code\":\"" + code + "\"}");
         try {
             SendSmsResponse resp = client().sendSms(req);
@@ -69,14 +70,22 @@ public class AliyunSmsCodeSender implements SmsCodeSender {
                 String message = body != null ? body.getMessage() : null;
                 String bizId = body != null ? body.getBizId() : null;
                 log.warn("[SMS-ALIYUN] send failed phone={} code={} message={} bizId={}",
-                        phone, respCode, message, bizId);
+                        maskPhone(phone), respCode, message, bizId);
                 throw new SmsSendException("阿里云短信发送失败: " + respCode);
             }
         } catch (SmsSendException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("[SMS-ALIYUN] send error phone={}: {}", phone, e.getMessage());
+            log.warn("[SMS-ALIYUN] send error phone={}: {}", maskPhone(phone), e.getMessage());
             throw new SmsSendException("阿里云短信发送异常", e);
         }
+    }
+
+    /** 日志脱敏：保留前 3 后 4 位。 */
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 7) {
+            return "***";
+        }
+        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
     }
 }

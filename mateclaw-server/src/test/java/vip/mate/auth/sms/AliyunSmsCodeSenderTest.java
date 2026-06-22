@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -50,5 +51,15 @@ class AliyunSmsCodeSenderTest {
 
         AliyunSmsCodeSender sender = new AliyunSmsCodeSender(props(), client);
         assertThrows(SmsSendException.class, () -> sender.send("13800138000", "123456"));
+    }
+
+    @Test
+    void sendWrapsUnderlyingException() throws Exception {
+        Client client = mock(Client.class);
+        when(client.sendSms(any(SendSmsRequest.class))).thenThrow(new RuntimeException("timeout"));
+
+        AliyunSmsCodeSender sender = new AliyunSmsCodeSender(props(), client);
+        SmsSendException ex = assertThrows(SmsSendException.class, () -> sender.send("13800138000", "123456"));
+        assertNotNull(ex.getCause());
     }
 }
