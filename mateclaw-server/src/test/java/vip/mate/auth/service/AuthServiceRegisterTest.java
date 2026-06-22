@@ -15,6 +15,7 @@ import vip.mate.auth.model.LoginRequest;
 import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
 import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.sms.VerificationCodeService;
 import vip.mate.auth.repository.UserMapper;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
@@ -31,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -50,6 +52,9 @@ class AuthServiceRegisterTest {
 
     @Mock
     private AccountEntitlementService entitlementService;
+
+    @Mock
+    private VerificationCodeService verificationCodeService;
 
     @InjectMocks
     private AuthService authService;
@@ -135,6 +140,9 @@ class AuthServiceRegisterTest {
     void registerRejectsInvalidVerificationCode() {
         RegisterRequest request = validRequest();
         request.setCode("123456");
+        when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+        doThrow(new MateClawException("err.auth.invalid_verification_code", 400, "验证码错误"))
+                .when(verificationCodeService).verifyAndConsume(eq("13800138000"), eq("123456"));
 
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
@@ -147,6 +155,9 @@ class AuthServiceRegisterTest {
     void registerRejectsMissingVerificationCode() {
         RegisterRequest request = validRequest();
         request.setCode(null);
+        when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+        doThrow(new MateClawException("err.auth.invalid_verification_code", 400, "验证码错误"))
+                .when(verificationCodeService).verifyAndConsume(eq("13800138000"), eq(null));
 
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
