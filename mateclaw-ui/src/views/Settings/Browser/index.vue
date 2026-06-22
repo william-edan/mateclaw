@@ -57,6 +57,13 @@
           {{ t('settings.browser.deviceLabel') }}: <strong>{{ deviceName }}</strong>
         </div>
         <p class="connected-hint">{{ t('settings.browser.connectedHint') }}</p>
+        <p
+          v-if="extVersion"
+          class="connected-hint"
+          :style="extOutdated ? 'color:#d33;font-weight:600' : ''"
+        >
+          扩展版本 v{{ extVersion }}<template v-if="extOutdated"> —— 版本过旧,请更新到 v{{ MIN_SUPPORTED_EXTENSION_VERSION }}+ 并重新加载扩展</template>
+        </p>
         <button class="btn-secondary btn-danger" :disabled="busy" @click="disconnect">
           <el-icon v-if="disconnecting" class="is-loading"><Loading /></el-icon>
           {{ t('settings.browser.disconnect') }}
@@ -112,6 +119,23 @@ const probing = ref(false)
 const connecting = ref(false)
 const disconnecting = ref(false)
 
+// 扩展版本自诊断:显示当前实际挂载的扩展版本,低于最低支持版 → 标红提示更新。
+// 测试者最常见的"已连接却打不开"就是扩展版本过旧 / 更新 exe 后没重载扩展(版本错配)。
+const extVersion = ref<string | null>(null)
+const extOutdated = ref(false)
+/** 当前期望的最低扩展版本(随扩展发布同步上调)。低于它即标红。 */
+const MIN_SUPPORTED_EXTENSION_VERSION = '0.1.16'
+/** 简易 semver 比较:a<b → -1,a==b → 0,a>b → 1。只取数字段,容忍位数不同。 */
+function cmpVersion(a: string, b: string): number {
+  const pa = a.split('.').map(n => parseInt(n, 10) || 0)
+  const pb = b.split('.').map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d < 0 ? -1 : 1
+  }
+  return 0
+}
+
 const defaultName = defaultDeviceName()
 const deviceNameInput = ref(defaultName)
 const isDesktopClient = computed(() => {
@@ -160,9 +184,17 @@ async function refresh() {
   try {
     if (isDesktopClient.value) {
       const resp = await browserPairingApi.listSessions()
-      const connected = Array.isArray(resp?.data) && resp.data.length > 0
-      status.value = connected ? 'connected' : 'not-detected'
+      const sessions = Array.isArray(resp?.data) ? resp.data : []
+      // 仅 bridge WSS session 存在还不够:要有"扩展真在场"(extensionAttached)的会话才算已连接,
+      // 否则删/禁用扩展后 bridge 仍持 session 会一直误显示"已连接"。旧后端无字段 → 按 true。
+      const attached = sessions.find(s => s.extensionAttached !== false)
+      status.value = attached ? 'connected' : 'not-detected'
       deviceName.value = null
+      // 版本自诊断:显示挂载的扩展版本;低于最低支持版 → 标红提示更新。
+      extVersion.value = attached?.extensionVersion ?? null
+      extOutdated.value = Boolean(
+        extVersion.value && cmpVersion(extVersion.value, MIN_SUPPORTED_EXTENSION_VERSION) < 0,
+      )
       return
     }
     const resp = await sendToExtension<PingResponse>({ type: 'ping' })

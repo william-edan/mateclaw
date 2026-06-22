@@ -186,6 +186,18 @@ export class LocalBridgeClient {
 
     ws.onopen = () => {
       this.reconnectAttempt = 0
+      // 上报扩展版本给 bridge(loopback 控制帧 {kind:'ext_hello', extension_version},非业务
+      // EdgeMessage;bridge 拦截、不上后端业务流)。bridge 再经 heartbeat 把 extension_version 转报
+      // 后端 → UI 显示/校验扩展版本,自诊断"exe 与扩展版本错配"(测试者最常见:扩展是旧的)。
+      try {
+        const version =
+          typeof chrome !== 'undefined' && chrome.runtime?.getManifest
+            ? chrome.runtime.getManifest().version
+            : ''
+        if (version) ws.send(JSON.stringify({ kind: 'ext_hello', extension_version: version }))
+      } catch {
+        // 无 chrome(单测)/ 发送失败:忽略 —— 版本上报是诊断增强,非连接必需。
+      }
       // Loopback socket OPEN — but NOT yet end-to-end connected. We wait for the
       // bridge's {kind:'upstream'} frame before `connected` flips true. Emit
       // 'open' for the local socket so the offscreen relay can report ipcOpen,

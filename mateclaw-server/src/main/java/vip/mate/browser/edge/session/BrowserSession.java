@@ -42,6 +42,23 @@ public class BrowserSession {
     private volatile Instant lastHeartbeatAt;
 
     /**
+     * 常驻 bridge 的 loopback 上当前是否真的挂着浏览器扩展。由 {@code EdgeWebSocketHandler.onHeartbeat}
+     * 从 bridge heartbeat 的 {@code extension_attached} 字段更新。默认 true —— 非 bridge 会话(直连 WSS /
+     * Claude Code)不上报该字段,保持原"有 session 即视为连上"的语义。常驻 bridge 会随扩展删/禁用把它置
+     * false,使 UI 显示真实连接状态(bridge WSS 活着 ≠ 扩展在场)。
+     */
+    @Builder.Default
+    private volatile boolean extensionAttached = true;
+
+    /**
+     * 扩展自报的版本号(常驻 bridge 经 heartbeat 的 {@code extension_version} 转报)。用于 UI 显示当前
+     * 实际挂载的扩展版本、并对过旧版本标红("exe 与扩展版本错配"自诊断)。null=未知(非 bridge 会话 /
+     * 旧扩展不上报)。
+     */
+    @Builder.Default
+    private volatile String extensionVersion = null;
+
+    /**
      * Every subject-string key this session is reachable under in the registry's
      * alias map — at minimum {@link #subject}, plus (契约4) the PAT {@code userId}
      * string and the owning username when the registrar could resolve both. The

@@ -54,6 +54,13 @@ import {
  *  时仍可被扩展 parseEdgeMessage 接受 —— payload.state 携带 'up'|'down'。 */
 export const UPSTREAM_KIND = 'upstream'
 
+/**
+ * 扩展在场判定的宽限窗口(ms)。MV3 SW 被回收时扩展会短暂断开 loopback(秒级,随后自动重连),
+ * 宽限内仍视为"扩展在场",避免上报给后端的 extension_attached 在 SW 回收瞬间抖成 false → UI 闪
+ * "未连接"。只有持续断开(删/禁用扩展,超过此窗口)才会上报 false。
+ */
+const EXTENSION_PRESENCE_GRACE_MS = 8_000
+
 export interface LoopbackServerOptions {
   /** 扩展帧来源队列。由 Runner 持有同一实例(IpcDelegate.inboundQueue),loopback 入队、Runner 消费。 */
   inboundQueue: MsgQueue
@@ -85,6 +92,12 @@ export class LoopbackServer {
   #wss: WebSocketServer | null = null
   /** 当前唯一的扩展连接。新连接到来会取代并关闭旧连接。 */
   #current: WebSocket | null = null
+  /** 最近一次扩展断开 loopback 的时刻(epoch ms);供 isExtensionAttached 的宽限判定用。0=从未断开。 */
+  #lastDetachAt = 0
+  /** 扩展经 ext_hello 控制帧上报的版本号(供 heartbeat 转报后端做版本校验)。null=未知。 */
+  #extensionVersion: string | null = null
+  /** 扩展 attach / ext_hello 时的回调(bridge 接到 Runner.notifyExtensionPresence,触发即时上报后端)。 */
+  #presenceListener: (() => void) | null = null
   /** 最近一次已知的后端段健康度,用于新扩展连接接入时立即补发(契约3)。 */
   #lastUpstream: 'up' | 'down' = 'down'
 
@@ -176,6 +189,8 @@ export class LoopbackServer {
 
     // 新连接接入即补发一次最近已知 upstream 状态(契约3),让扩展立刻拿到后端死活。
     this.#sendUpstream(ws, this.#lastUpstream)
+    // 扩展刚接入 → 即时上报后端"扩展在场",连接状态秒级翻转为"已连接"(不等 ~10s 心跳)。
+    this.#notifyPresence()
 
     ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
       if (isBinary) {
@@ -192,6 +207,7 @@ export class LoopbackServer {
       // 帧队列与后端段毫发无伤(契约5:去 stdin-EOF=死)。
       if (this.#current === ws) {
         this.#current = null
+        this.#lastDetachAt = Date.now()
         this.#log('[loopback] extension disconnected (current detached; backend link untouched)')
       }
     })
@@ -209,6 +225,11 @@ export class LoopbackServer {
     if (isPingOrPongFrame(raw)) {
       return
     }
+    // 扩展在 loopback OPEN 后发的 {kind:'ext_hello', extension_version} 是控制帧(非业务 EdgeMessage):
+    // 仅记录扩展版本供 heartbeat 转报后端做版本校验,绝不入队上后端业务流。
+    if (this.#tryHandleExtHello(raw)) {
+      return
+    }
     const msg = parse(raw)
     if (!msg) {
       this.#log('[loopback] dropped unparseable extension frame')
@@ -217,6 +238,25 @@ export class LoopbackServer {
     // 入队交给 Runner —— Runner 会盖上后端下发的 session_id 覆盖扩展传来的(保持现状安全语义),
     // 再上后端 WSS。loopback 不在这里改 session_id,职责单一。
     this.#inboundQueue.enqueue(msg)
+  }
+
+  /** 若 raw 是扩展的 ext_hello 控制帧,记录扩展版本并返回 true(已消费,不转发上后端)。 */
+  #tryHandleExtHello(raw: string): boolean {
+    let obj: unknown
+    try {
+      obj = JSON.parse(raw)
+    } catch {
+      return false
+    }
+    if (!obj || typeof obj !== 'object') return false
+    const rec = obj as Record<string, unknown>
+    if (rec.kind !== 'ext_hello') return false
+    if (typeof rec.extension_version === 'string' && rec.extension_version) {
+      this.#extensionVersion = rec.extension_version
+      // 收到扩展版本 → 即时上报后端(随同 extension_attached),让 UI 立刻拿到版本做校验显示。
+      this.#notifyPresence()
+    }
+    return true
   }
 
   /**
@@ -265,6 +305,39 @@ export class LoopbackServer {
     ws.removeAllListeners('message')
     ws.removeAllListeners('close')
     ws.removeAllListeners('error')
+  }
+
+  /**
+   * 当前 loopback 上是否挂着浏览器扩展(含 SW 回收的短暂宽限,见 {@link EXTENSION_PRESENCE_GRACE_MS})。
+   * bridge 用它在每次后端 heartbeat 里上报 extension_attached,使后端/UI 显示真实连接状态 ——
+   * bridge↔后端 session 活着 ≠ 扩展在场(删/禁用扩展后 bridge 仍持 session,此处会转 false)。
+   */
+  isExtensionAttached(): boolean {
+    if (this.#current && this.#current.readyState === WebSocket.OPEN) return true
+    return this.#lastDetachAt > 0 && Date.now() - this.#lastDetachAt < EXTENSION_PRESENCE_GRACE_MS
+  }
+
+  /** 扩展经 ext_hello 上报的版本号(供 bridge 经 heartbeat 转报后端做版本校验)。未知=null。 */
+  extensionVersion(): string | null {
+    return this.#extensionVersion
+  }
+
+  /**
+   * 注册"扩展在场变化"监听(bridge 接到 {@code Runner.notifyExtensionPresence})。扩展 attach /
+   * ext_hello 时触发,使 bridge 立即补发一帧 heartbeat 把"扩展在场 + 版本"即时报给后端,连接状态
+   * ~1s 内翻转为"已连接",不必等下一个 ~10s 心跳周期 —— 实现"点连接→扩展回执→才算连上"的脆握手。
+   * (detach 不在此即时上报:由 isExtensionAttached 的宽限 + 周期心跳处理,避免 SW 回收瞬断闪"未连接"。)
+   */
+  setPresenceListener(fn: () => void): void {
+    this.#presenceListener = fn
+  }
+
+  #notifyPresence(): void {
+    try {
+      this.#presenceListener?.()
+    } catch {
+      // 即时上报失败由周期心跳兜底,忽略。
+    }
   }
 
   /** 关闭 loopback server(进程收尾用)。不影响后端段。 */

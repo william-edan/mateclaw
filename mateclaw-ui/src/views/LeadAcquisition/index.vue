@@ -1007,7 +1007,10 @@ async function submitDouyinRun() {
       sessionConnected: async () => {
         try {
           const r = await browserPairingApi.listSessions()
-          return Array.isArray(r?.data) && r.data.length > 0
+          // 必须有"扩展真在场"的会话才算连上:bridge 的 WSS session 活着 ≠ 扩展在场
+          // (删/禁用扩展后 bridge 仍持 session)。extensionAttached 由 bridge 经 heartbeat 上报;
+          // 旧后端无此字段 → undefined → 按 true 处理(!== false),行为不变。
+          return Array.isArray(r?.data) && r.data.some(s => s.extensionAttached !== false)
         } catch {
           return false
         }

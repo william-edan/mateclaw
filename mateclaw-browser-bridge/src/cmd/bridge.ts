@@ -218,12 +218,21 @@ export async function runBridge(): Promise<number> {
  * 用给定 cfg + authToken 构造一个 Client。bridge.ts 拥有 cfg(controlPlaneUrl 等),
  * 故 token 长跑重读(契约5)的 Client 重建由这里提供给 Runner.rebuildClient。
  */
-function makeClient(cfg: Config, authToken: string): Client {
+function makeClient(
+  cfg: Config,
+  authToken: string,
+  extensionAttached?: () => boolean,
+  extensionVersion?: () => string | null,
+): Client {
   return new Client({
     url: cfg.controlPlaneUrl,
     authToken,
     agentVersion: cfg.agentVersion,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
+    // 常驻模式:把"loopback 上是否挂着扩展 + 扩展版本"经 heartbeat 上报后端
+    // (契约:extension_attached / extension_version)。不传(NM/直连)时 Client 默认 ()=>true / ()=>null。
+    extensionAttached,
+    extensionVersion,
   })
 }
 
@@ -271,7 +280,13 @@ export async function runResident(): Promise<number> {
   }
 
   // 初始 Client(用当前 token);后续 token 轮换由 Runner 经 rebuildClient 重建。
-  const client = makeClient(cfg, cfg.authToken)
+  // 注入"扩展在场"查询器 —— 每次 heartbeat 上报后端,使 UI 显示真实连接状态。
+  const client = makeClient(
+    cfg,
+    cfg.authToken,
+    () => loopback.isExtensionAttached(),
+    () => loopback.extensionVersion(),
+  )
 
   const runner = new Runner({
     client,
@@ -288,8 +303,13 @@ export async function runResident(): Promise<number> {
       return res.status === 'ready' && res.config ? res.config.authToken : null
     },
     // 用新 token 重建 Client。复用当前 cfg 的 url/version/心跳;仅换凭据。
-    rebuildClient: (authToken: string) => makeClient(cfg, authToken),
+    rebuildClient: (authToken: string) =>
+      makeClient(cfg, authToken, () => loopback.isExtensionAttached(), () => loopback.extensionVersion()),
   })
+
+  // 脆握手:扩展 attach / ext_hello 时,让 Runner 用当前 Client 立即补发一帧 heartbeat 即时上报后端,
+  // 使"已连接 + 扩展版本"~1s 内到达 UI,而非等 ~10s 心跳周期(实现"点连接→扩展回执→才算连上")。
+  loopback.setPresenceListener(() => runner.notifyExtensionPresence())
 
   const ac = new AbortController()
   const handleSignal = (): void => {

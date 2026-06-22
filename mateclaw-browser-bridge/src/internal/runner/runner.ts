@@ -375,6 +375,19 @@ export class Runner {
     }
   }
 
+  /**
+   * loopback 在扩展 attach/detach/ext_hello 时调用:让当前 Client 立即发一帧 heartbeat,把最新
+   * extension_attached/version 即时报给后端(不等 ~10s 周期),使后端/UI 的连接状态秒级翻转。
+   * 用 this.#client(token 轮换会重建,始终指向当前 Client);无连接/重连中时静默忽略(周期心跳兜底)。
+   */
+  notifyExtensionPresence(): void {
+    try {
+      this.#client.sendHeartbeatNow()
+    } catch {
+      // 忽略 —— 周期心跳兜底。
+    }
+  }
+
   /** 向 loopback-server 上报后端段健康度(契约3)。仅 IPC 模式有效;NM 模式为 no-op。 */
   #reportUpstream(state: 'up' | 'down'): void {
     try {

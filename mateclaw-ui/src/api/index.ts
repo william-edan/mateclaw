@@ -1708,6 +1708,17 @@ export interface BrowserSessionView {
   subject: string
   agentVersion: string
   lastHeartbeatAt: string
+  /**
+   * 常驻 bridge 的 loopback 上当前是否真的挂着浏览器扩展。bridge 的 WSS session 活着 ≠ 扩展在场
+   * (删/禁用扩展后 bridge 仍持 session,此值转 false)。非 bridge 会话(直连/Claude Code)后端默认
+   * true;旧后端不返回该字段 → undefined → 按 true 处理(`!== false`)。
+   */
+  extensionAttached?: boolean
+  /**
+   * 扩展自报的版本号(常驻 bridge 经 heartbeat 的 extension_version 转报)。用于显示当前实际挂载的
+   * 扩展版本、并对过旧版本标红("exe 与扩展版本错配"自诊断)。可能为 undefined(未知/旧后端)。
+   */
+  extensionVersion?: string
 }
 
 /**

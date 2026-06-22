@@ -112,7 +112,7 @@ class ExtensionBrowserToolTest {
         // should target it rather than fail NO_SESSION.
         when(registry.findLiveBySubject("default")).thenReturn(Optional.empty());
         when(registry.snapshot()).thenReturn(List.of(
-                new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now())));
+                new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now(), true, "0.1.0")));
         when(registry.find("sess-1")).thenReturn(Optional.of(session));
         when(planExec.execute(any(), any())).thenReturn(Mono.just((PlanResult)
                 new PlanResult.Success(List.of(new ActionResult.Success(10L,
@@ -136,8 +136,8 @@ class ExtensionBrowserToolTest {
         when(registry.findLiveBySubject("default")).thenReturn(Optional.empty());
         when(registry.size()).thenReturn(2);
         when(registry.snapshot()).thenReturn(List.of(
-                new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now()),
-                new BrowserSessionView("sess-2", "2", "0.1.0", java.time.Instant.now())));
+                new BrowserSessionView("sess-1", "1", "0.1.0", java.time.Instant.now(), true, "0.1.0"),
+                new BrowserSessionView("sess-2", "2", "0.1.0", java.time.Instant.now(), true, "0.1.0")));
 
         String out = tool.extension_browser_navigate("https://example.com", null, null);
 

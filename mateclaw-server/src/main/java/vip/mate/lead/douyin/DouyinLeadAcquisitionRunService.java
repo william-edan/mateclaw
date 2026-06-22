@@ -10,9 +10,7 @@ import vip.mate.os.run.runtime.AgentRunRequest;
 import vip.mate.os.run.runtime.RunCancellationService;
 import vip.mate.os.run.model.LeadTaskEntity;
 
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -24,7 +22,6 @@ public class DouyinLeadAcquisitionRunService {
     private final LeadPersistenceService persistence;
     private final DouyinLeadAcquisitionExecutor executor;
     private final ExecutorService worker = Executors.newVirtualThreadPerTaskExecutor();
-    private final Map<Long, Thread> runningThreads = new ConcurrentHashMap<>();
 
     public DouyinLeadAcquisitionRunService(AgentRunKernel runKernel,
                                            RunCancellationService cancellationService,
@@ -40,14 +37,7 @@ public class DouyinLeadAcquisitionRunService {
         RunAndTask created = createRunAndTask(workspaceId, createdBy, input);
         Long runId = created.run().getId();
         Long taskId = created.task().getId();
-        worker.submit(() -> {
-            runningThreads.put(runId, Thread.currentThread());
-            try {
-                executor.execute(runId, taskId, input);
-            } finally {
-                runningThreads.remove(runId, Thread.currentThread());
-            }
-        });
+        worker.submit(() -> executor.execute(runId, taskId, input));
         return DouyinLeadAcquisitionRunResponse.started(runId, taskId, created.run().getStatus());
     }
 
@@ -73,15 +63,13 @@ public class DouyinLeadAcquisitionRunService {
     }
 
     public void cancel(Long runId) {
+        // 仅置取消标志(协作式)。执行线程在评论滚动循环、分片 sleep 与 assertNotCancelled 检查点处
+        // 主动收口并把任务置为 ABORTED。绝不再 interrupt 执行线程 —— 它同时在做 H2 JDBC 写,Java NIO
+        // 中断会关闭 H2 共享 FileChannel,导致整库 "The database has been closed"、后端虽不退出却彻底
+        // 瘫痪(就是"停止任务→服务被kill"的真因;详见 LeadRunContext)。响应性由"分片 sleep 每片
+        // 检查 + 循环每轮检查"保证,不再依赖中断。
         cancellationService.requestCancel(runId);
         runKernel.requestCancel(runId);
-        Thread runningThread = runningThreads.get(runId);
-        if (runningThread != null) {
-            // 中断执行线程：让正在进行的评论采集滚动循环 / sleep 立即跳出，
-            // 配合 assertNotCancelled 检查点把任务快速置为 ABORTED，
-            // 避免等到整段视频采集结束才响应取消（这是“停止延迟很大”的根因）。
-            runningThread.interrupt();
-        }
     }
 
     private record RunAndTask(AgentRunEntity run, LeadTaskEntity task) {

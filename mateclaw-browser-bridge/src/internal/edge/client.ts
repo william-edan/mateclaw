@@ -103,6 +103,18 @@ export interface ClientOptions {
    * or a stalled main thread on a slow machine don't cause a false disconnect.
    */
   watchdogMultiplier?: number
+  /**
+   * 返回"loopback 上当前是否挂着扩展"的查询器(常驻 bridge 注入 `() => loopback.isExtensionAttached()`)。
+   * 每次 heartbeat 把结果作为 `payload.extension_attached` 上报后端,使后端/UI 显示真实连接状态
+   * (bridge↔后端 session 活着 ≠ 扩展在场)。默认 `() => true`:NM/直连等无 loopback 的模式行为不变。
+   */
+  extensionAttached?: () => boolean
+  /**
+   * 返回"loopback 上挂着的扩展版本号"的查询器(常驻 bridge 注入 `() => loopback.extensionVersion()`)。
+   * 每次 heartbeat 作为 `payload.extension_version` 上报后端,供 UI 显示并校验"exe 与扩展版本错配"。
+   * 默认 `() => null`:无 loopback 的模式(NM/直连)不带该字段。
+   */
+  extensionVersion?: () => string | null
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -126,6 +138,8 @@ export class Client {
       dialTimeoutMs: opt.dialTimeoutMs ?? 10_000,
       heartbeatIntervalMs: opt.heartbeatIntervalMs ?? 10_000,
       watchdogMultiplier: opt.watchdogMultiplier ?? 6,
+      extensionAttached: opt.extensionAttached ?? (() => true),
+      extensionVersion: opt.extensionVersion ?? (() => null),
     }
     this.#intervalMs = this.#opt.heartbeatIntervalMs
   }
@@ -296,14 +310,18 @@ export class Client {
 
       signal.addEventListener('abort', () => stop(), { once: true })
 
+      // 连上后立即发一帧 heartbeat,把当前 extension_attached/version 即时报给后端(不等第一个
+      // ~10s 周期)→ 关闭"刚连上、后端 extensionAttached 还停在默认值"的短暂窗口。
+      this.sendHeartbeatNow()
+
       tickHandle = setInterval(() => {
         if (signal.aborted) {
           stop()
           return
         }
 
-        // Send heartbeat
-        const hb = make({ kind: Kind.Heartbeat, sessionId: this.#sessionId })
+        // Send heartbeat —— 带上扩展在场/版本,后端据此判定真实连接状态 + 版本校验。
+        const hb = this.#buildHeartbeat()
         try {
           this.#ws!.send(JSON.stringify(hb))
         } catch {
@@ -328,6 +346,32 @@ export class Client {
           this.#missedAcks = 0
         }
       }, this.#intervalMs)
+    })
+  }
+
+  /**
+   * 立即发一帧 heartbeat(携带最新 extension_attached/version)。供 Runner 在扩展 attach/detach/
+   * ext_hello 时即时上报后端,使"已连接/未连接"~1s 内翻转,不必等下一个 ~10s 心跳周期。ws 未 OPEN
+   * 或尚无 session 时静默跳过(下个周期心跳会补报)。
+   */
+  sendHeartbeatNow(): void {
+    const ws = this.#ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.#sessionId) return
+    try {
+      ws.send(JSON.stringify(this.#buildHeartbeat()))
+    } catch {
+      // 即时上报失败不致命:周期心跳会再报。
+    }
+  }
+
+  #buildHeartbeat(): Message {
+    return make({
+      kind: Kind.Heartbeat,
+      sessionId: this.#sessionId,
+      payload: {
+        extension_attached: this.#opt.extensionAttached(),
+        extension_version: this.#opt.extensionVersion(),
+      },
     })
   }
 

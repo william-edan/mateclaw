@@ -97,6 +97,33 @@ async function preferLocalBridge(): Promise<boolean> {
 }
 
 /**
+ * 用户主动"断开连接"的持久闩(chrome.storage.local)。常驻架构下扩展会自动重连
+ * (顶层 SW 加载 + onStartup/onInstalled + 30s keepalive alarm 全部经 reconnectByPairing),
+ * 否则"断开连接"会在 ~30s 内被自动拉回 → 用户反馈"点了没效果"。置位后 reconnectByPairing 直接
+ * 跳过自动重连;显式"连接"(pair)/发起获客(reconnect)会清位。持久化以跨 SW 回收/重启生效。
+ */
+const USER_DISCONNECTED_KEY = 'userDisconnected'
+
+/** 是否处于"用户主动断开"态。读失败 → false(失败开放:绝不因读错而长期连不上)。 */
+async function isUserDisconnected(): Promise<boolean> {
+  try {
+    const got = (await chrome.storage.local.get([USER_DISCONNECTED_KEY])) as Record<string, unknown>
+    return got[USER_DISCONNECTED_KEY] === true
+  } catch {
+    return false
+  }
+}
+
+/** 置/清"用户主动断开"闩。 */
+async function setUserDisconnected(v: boolean): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [USER_DISCONNECTED_KEY]: v })
+  } catch {
+    // ignore — 闩写失败时退化为"自动重连"现状,不致命。
+  }
+}
+
+/**
  * Phase 2 hardcoded subject. Phase 4 will derive this from the
  * authenticated user (sidepanel auth flow). For now everything routes
  * to a single "default" subject so the TabGroupManager has somewhere to
@@ -339,6 +366,13 @@ function connectResidentLocal(): void {
  * DirectBridgeClient) don't survive suspension, so they reconnect normally.
  */
 async function reconnectByPairing(): Promise<void> {
+  // 用户主动断开闩:抑制【所有】自动重连入口(顶层 SW 加载 / onStartup / onInstalled / 30s
+  // keepalive alarm 都经此)。否则常驻架构会在 ~30s 内把刚"断开连接"的会话自动连回 → 用户
+  // 反馈"点了没效果"。显式"连接"(pair)/发起获客(reconnect)会先清闩再调本函数,故不受影响。
+  if (await isUserDisconnected()) {
+    disconnectActive()
+    return
+  }
   const cfg = await configStore.getConfig()
   if (cfg.serverUrl && cfg.pat) {
     if (usingOffscreen) {
@@ -772,15 +806,20 @@ chrome.runtime.onMessageExternal.addListener(
             pat: msg.pat,
             deviceName: msg.deviceName,
           })
+          .then(() => setUserDisconnected(false))
           .then(() => connectDirect(msg.serverUrl, msg.pat))
           .then(() => sendResponse({ ok: true }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true
       }
       case 'unpair': {
-        disconnectActive()
-        configStore
-          .clearPairing()
+        // 置"用户主动断开"闩,再断开当前连接。闩会让 reconnectByPairing(顶层加载/onStartup/
+        // onInstalled/30s alarm)全部跳过自动重连 —— 否则常驻架构 ~30s 内把会话拉回,断开"没效果"。
+        setUserDisconnected(true)
+          .then(() => {
+            disconnectActive()
+          })
+          .then(() => configStore.clearPairing())
           .then(() => sendResponse({ ok: true }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true
@@ -789,7 +828,9 @@ chrome.runtime.onMessageExternal.addListener(
         // 发起获客时由前端触发：先唤醒(可能已休眠的)SW，再重连。reconnectByPairing 按配对状态
         // 选通道(有 serverUrl+pat 走 direct WSS/offscreen,否则回退 native“装好即连”),offscreen
         // 路走幂等 CONNECT 往返、不拆仍活着的 socket。前端随后轮询 ping 等 connected:true。
-        reconnectByPairing()
+        // 显式重连(发起获客时由前端触发):先清"用户主动断开"闩,使自动重连恢复。
+        setUserDisconnected(false)
+          .then(() => reconnectByPairing())
           .then(() => sendResponse({ ok: true, connected: isConnected(), unpaired: isNativeUnpaired() }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))
         return true

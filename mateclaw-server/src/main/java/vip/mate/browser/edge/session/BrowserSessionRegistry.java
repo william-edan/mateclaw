@@ -257,9 +257,23 @@ public class BrowserSessionRegistry {
     }
 
     public void heartbeat(String sessionId) {
+        heartbeat(sessionId, null, null);
+    }
+
+    /**
+     * Heartbeat 续命,并(可选)更新 bridge 上报的"扩展是否在场 / 扩展版本"。任一参数为 {@code null}
+     * 表示本次心跳不带该信息(非 bridge 会话)→ 不动对应字段,仅续 lastHeartbeatAt。
+     */
+    public void heartbeat(String sessionId, Boolean extensionAttached, String extensionVersion) {
         BrowserSession s = byId.get(sessionId);
         if (s != null) {
             s.setLastHeartbeatAt(clock.instant());
+            if (extensionAttached != null) {
+                s.setExtensionAttached(extensionAttached);
+            }
+            if (extensionVersion != null && !extensionVersion.isBlank()) {
+                s.setExtensionVersion(extensionVersion);
+            }
         }
     }
 
@@ -278,7 +292,8 @@ public class BrowserSessionRegistry {
         var out = new ArrayList<BrowserSessionView>(byId.size());
         for (var s : byId.values()) {
             out.add(new BrowserSessionView(
-                    s.getId(), s.getSubject(), s.getAgentVersion(), s.getLastHeartbeatAt()));
+                    s.getId(), s.getSubject(), s.getAgentVersion(), s.getLastHeartbeatAt(),
+                    s.isExtensionAttached(), s.getExtensionVersion()));
         }
         return out;
     }

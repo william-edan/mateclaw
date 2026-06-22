@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.browser.edge.action.TypePayload;
+import vip.mate.lead.douyin.LeadRunContext;
 import vip.mate.lead.douyin.collect.DouyinCommentCollector;
 import vip.mate.lead.douyin.model.CommentCollectionResult;
 import vip.mate.lead.douyin.model.DouyinCommentItem;
@@ -227,8 +228,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 // 用户主动停止(RunService.cancel 会 interrupt 本执行线程)与"会话层 CANCELLED"会用同一
                 // CANCELLED code(见 ActionExecutionService.completeCancelling:user_stop / deadline 共用);
                 // 故重试前先看线程是否被中断:被中断 = 用户停止,绝不重试,原样抛出尽快收口,保住停止响应性。
-                if (Thread.currentThread().isInterrupted()) {
-                    log.info("[douyin.lead] step '{}' got reconnectable code={} but thread is interrupted "
+                if (LeadRunContext.isCancelled()) {
+                    log.info("[douyin.lead] step '{}' got reconnectable code={} but run is cancelled "
                             + "(user stop); not retrying", step, e.code());
                     throw e;
                 }
@@ -1234,7 +1235,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
         for (int scrolls = 0; scrolls <= MAX_SCROLL_PROTECTION; scrolls++) {
             long loopStartedAt = System.nanoTime();
-            if (Thread.currentThread().isInterrupted()) {
+            if (LeadRunContext.isCancelled()) {
                 return collectionResult(seen, declared, false, "INTERRUPTED", scrolls, stableNoNew,
                         stableEndMarker, lastExtractedCount, lastVisibleCount, lastNewItems,
                         lastCollectionAdvanced, lastWindowBeforeCount, lastWindowAfterCount,
@@ -3253,11 +3254,27 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private void sleepLocal(long ms) {
-        try {
-            Thread.sleep(Math.max(0L, ms));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new DouyinBrowserException("INTERRUPTED", "等待搜索重试时被中断");
+        // 协作式可取消的分片 sleep:绝不依赖 interrupt(NIO 中断会关闭 H2 共享 FileChannel,致整库
+        // "database has been closed",详见 LeadRunContext)。每 200ms 检查一次取消标志,用户点"停止
+        // 任务"最多约 200ms 内从 settle 等待中跳出并抛 RUN_CANCELLED,由执行器收口为 ABORTED。
+        long remaining = Math.max(0L, ms);
+        final long slice = 200L;
+        while (remaining > 0L) {
+            if (LeadRunContext.isCancelled()) {
+                throw new DouyinBrowserException("RUN_CANCELLED", "用户已停止任务");
+            }
+            long chunk = Math.min(slice, remaining);
+            try {
+                Thread.sleep(chunk);
+            } catch (InterruptedException e) {
+                // 正常路径已不再 interrupt 执行线程;此处纯防御:若仍被外部中断,恢复中断位并按取消收口。
+                Thread.currentThread().interrupt();
+                throw new DouyinBrowserException("INTERRUPTED", "等待被中断");
+            }
+            remaining -= chunk;
+        }
+        if (LeadRunContext.isCancelled()) {
+            throw new DouyinBrowserException("RUN_CANCELLED", "用户已停止任务");
         }
     }
 

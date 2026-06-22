@@ -156,7 +156,14 @@ public class EdgeWebSocketHandler extends TextWebSocketHandler implements SubPro
 
     private void onHeartbeat(WebSocketSession ws, EdgeMessage hb) throws Exception {
         if (!validSession(ws, hb)) return;
-        registry.heartbeat(hb.getSessionId());
+        // 常驻 bridge 在每次 heartbeat 上报 loopback 上是否真挂着扩展(extension_attached)。后端据此让
+        // UI 显示真实连接状态 —— bridge 的 WSS 活着 ≠ 扩展在场(删/禁用扩展后 bridge 仍持 session)。
+        // 非 bridge 会话(直连 / Claude Code)不带该字段 → null → 保持默认 true,行为不变。
+        Object ea = hb.getPayload() == null ? null : hb.getPayload().get("extension_attached");
+        Boolean extensionAttached = (ea instanceof Boolean b) ? b : null;
+        Object ev = hb.getPayload() == null ? null : hb.getPayload().get("extension_version");
+        String extensionVersion = (ev instanceof String s && !s.isBlank()) ? s : null;
+        registry.heartbeat(hb.getSessionId(), extensionAttached, extensionVersion);
         send(sessionWs(hb.getSessionId(), ws), reply(hb, EdgeMessageKind.HEARTBEAT_ACK, Map.of()));
     }
 
