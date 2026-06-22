@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
-import java.util.regex.Pattern;
+import vip.mate.auth.support.PhoneNumbers;
 
 /**
  * 认证服务（JWT）
@@ -38,7 +38,6 @@ import java.util.regex.Pattern;
 public class AuthService {
 
     private static final String FIXED_REGISTER_CODE = "888888";
-    private static final Pattern PHONE_PATTERN = Pattern.compile("^\\+?\\d{6,20}$");
 
     private final UserMapper userMapper;
     private final BCryptPasswordEncoder passwordEncoder;
@@ -75,8 +74,8 @@ public class AuthService {
      */
     @Transactional
     public LoginResponse register(RegisterRequest request) {
-        String phone = normalizePhone(request != null ? request.getPhone() : null);
-        if (!PHONE_PATTERN.matcher(phone).matches()) {
+        String phone = PhoneNumbers.normalize(request != null ? request.getPhone() : null);
+        if (!PhoneNumbers.isValid(phone)) {
             throw new MateClawException("err.auth.invalid_phone", 400, "手机号格式不正确");
         }
         if (!FIXED_REGISTER_CODE.equals(request.getCode())) {
@@ -316,10 +315,4 @@ public class AuthService {
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    private String normalizePhone(String phone) {
-        if (phone == null) {
-            return "";
-        }
-        return phone.trim().replaceAll("[\\s-]", "");
-    }
 }
