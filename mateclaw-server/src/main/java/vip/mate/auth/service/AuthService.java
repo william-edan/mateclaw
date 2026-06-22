@@ -16,6 +16,7 @@ import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.repository.UserMapper;
+import vip.mate.auth.support.PhoneNumbers;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
@@ -25,7 +26,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
-import vip.mate.auth.support.PhoneNumbers;
 
 /**
  * 认证服务（JWT）
