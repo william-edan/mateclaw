@@ -2799,7 +2799,7 @@ export default {
     registerFailed: 'Registration failed. Please check your phone and code.',
     getCode: 'Get code',
     resendIn: 'Retry in {n}s',
-    codeSent: 'Code sent',
+    phoneRequired: 'Enter your phone number first',
     sendCodeFailed: 'Failed to send code, please try again later',
   },
   enterprise: {

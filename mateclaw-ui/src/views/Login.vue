@@ -172,7 +172,7 @@ function startCodeCountdown(seconds: number) {
 
 async function handleSendCode() {
   if (!registerForm.phone) {
-    errorMsg.value = t('login.placeholders.phone')
+    errorMsg.value = t('login.phoneRequired')
     return
   }
   sendingCode.value = true
@@ -399,6 +399,15 @@ html.dark .login-page {
 .code-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.code-btn:hover:not(:disabled) {
+  border-color: var(--mc-primary);
+}
+
+.code-btn:focus-visible {
+  outline: 2px solid var(--mc-primary);
+  outline-offset: 2px;
 }
 
 .form-input {

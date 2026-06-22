@@ -2811,7 +2811,7 @@ export default {
     registerFailed: '注册失败，请检查手机号和验证码',
     getCode: '获取验证码',
     resendIn: '{n}s 后重试',
-    codeSent: '验证码已发送',
+    phoneRequired: '请先输入手机号',
     sendCodeFailed: '验证码发送失败，请稍后重试',
   },
   enterprise: {
