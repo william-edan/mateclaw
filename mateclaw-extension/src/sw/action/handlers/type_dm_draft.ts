@@ -1,7 +1,8 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
-import type { TypeDmDraftParams } from '../types'
+import type { ActionResult, TypeDmDraftParams } from '../types'
 import { SessionDetachedError, type DebuggerManager } from '../../debugger-manager'
-import { ensureRendered } from './activate-tab'
+import { activateTabForRender, ensureRendered } from './activate-tab'
+import { ensureVisibilityOverride } from './visibility-keepalive'
 
 export interface TypeDmDraftHandlerDeps {
   debugger: DebuggerManager
@@ -13,6 +14,30 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new ActionFailureError('CANCELLED', 'type_dm_draft aborted before injection', false)
   }
+}
+
+/**
+ * 跨组契约:草稿已写入(draftTyped=true)但发送未确认/失败时【不再 throw】。
+ * throw 会让 executePlan 的 Partial 丢掉该步 payload —— 后端只能看到 ok=false / message,
+ * 据此误判"连草稿都没写"而触发不必要的重发/兜底。改为结构化 ok:false 并携带
+ * {draftTyped, clicked, sent:false, reason},后端据这三个字段区分"草稿已写只是没确认发出"
+ * 与"连草稿都没写",并据 clicked 决定是否记入幂等 sentDmKeys(防重复发)。
+ *
+ * 注:wire 层仍保留 code/message/retryable(executor 对 ok:false 直接 {...result} 透传,
+ * 缺这几个字段会让 ActionResult.Failure 不合规);payload 经同一次 spread 一并送达,
+ * 后端从原始 JSON 树 root.path("payload") 读取,不依赖成功路径的 kind 判别。
+ * ActionFailure 类型本身不含 payload(types.ts 不在本组可改文件),故用受控构造透传该字段。
+ */
+function dmDraftNotSentResult(
+  payload: { draftTyped: true; clicked: boolean; sent: false; reason: string; target?: string; sendTarget?: string },
+): ActionResult {
+  return {
+    ok: false,
+    code: 'GROUNDING_AMBIGUOUS',
+    message: `dm draft typed but send not confirmed: ${payload.reason}`,
+    retryable: false,
+    payload,
+  } as unknown as ActionResult
 }
 
 // 发送确认轮询参数(P0#2):点击发送后不再固定 sleep(260) 单次判断,而是在 handler 收到的
@@ -50,6 +75,20 @@ export const typeDmDraftHandler = (
     if (!chromeApi?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
+    // 发送前台化(契约,用户已同意):真发(send=true)时,在【点发送按钮之前】把该 engagement tab
+    // 切到前台一次,让点击在前台 trusted 生效、不被 Chrome 后台渲染节流 + 抖音 visibilitychange 暂停
+    // 吞掉(根因:后台标签点击 no-op 但扩展仍自报 sent)。会闪一下,换可靠。键入草稿可仍后台,
+    // 但发送这一步必须前台。幂等:整条 handler 只激活一次;best-effort,激活失败不阻断后续。
+    let activatedForSend = false
+    const activateBeforeSend = async (): Promise<void> => {
+      if (activatedForSend) return
+      activatedForSend = true
+      await activateTabForRender(chromeApi, tabId)
+    }
+    // 后台保活(契约):幂等覆盖该 tab 的可见性 API、吞掉 visibilitychange,让后台标签下抖音 React
+    // 不因 hidden 暂停私信浮层/composer 渲染(根因之一:后台浮层根本没 mount,扩展点击全 no-op)。
+    // 与 douyin_search / douyin_open_video / douyin_ui 开头一致,best-effort、不阻断后续。
+    await ensureVisibilityOverride(chromeApi, tabId)
     // 取消优先:写草稿/发送都是不可逆副作用,任何注入前先看 signal,已取消则抛 CANCELLED 不注入。
     throwIfAborted(signal)
     // 慢机自适应兜底:私信浮层(#imSaasContainerId)在后台慢机可能迟迟不 mount → 下面一路
@@ -64,13 +103,20 @@ export const typeDmDraftHandler = (
     // ensureRendered 可能等待并激活 tab(数秒 await),跨过取消窗口——真正写入/发送前再查一次。
     throwIfAborted(signal)
     if (sendOnly) {
+      // 发送前台化:点发送前先切前台,确保点击 trusted 生效。
+      await activateBeforeSend()
       const sent = await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs)
       if (!sent.ok) {
-        throw new ActionFailureError(
-          'GROUNDING_AMBIGUOUS',
-          `dm send failed: ${sent.reason || 'send_button_not_found'}`,
-          false,
-        )
+        // 草稿本已存在(send-only 兜底),发送未确认/失败:不 throw,结构化返回让后端据
+        // draftTyped/clicked/sent 区分,并据 clicked 记入幂等(防重复发)。
+        return dmDraftNotSentResult({
+          draftTyped: true,
+          clicked: sent.clicked,
+          sent: false,
+          reason: sent.reason || 'send_button_not_found',
+          target: 'dm_existing_draft',
+          sendTarget: sent.target,
+        })
       }
       return {
         ok: true,
@@ -97,10 +143,21 @@ export const typeDmDraftHandler = (
       })
       const sp = sr?.[0]?.result as { ok?: boolean; draftTyped?: boolean; reason?: string; target?: string } | undefined
       if (sp?.ok === true) {
-        const sent = send ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs) : { ok: true, sent: false, target: undefined }
+        // 发送前台化:草稿已由 slate 写入,真发前先切前台再点发送。
+        if (send) await activateBeforeSend()
+        const sent = send
+          ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs)
+          : { ok: true, clicked: false, sent: false, target: undefined as string | undefined }
         if (!sent.ok) {
-          throw new ActionFailureError('GROUNDING_AMBIGUOUS',
-            `dm draft typed (slate) but send failed: ${sent.reason || 'send_button_not_found'}`, false)
+          // 草稿已写(slate)但发送未确认/失败:不 throw,结构化返回(契约)。
+          return dmDraftNotSentResult({
+            draftTyped: true,
+            clicked: sent.clicked,
+            sent: false,
+            reason: `slate:${sent.reason || 'send_button_not_found'}`,
+            target: sp.target || 'slate_editor',
+            sendTarget: sent.target,
+          })
         }
         return {
           ok: true,
@@ -114,6 +171,10 @@ export const typeDmDraftHandler = (
       slateReason = 'slate_threw:' + String((e as Error)?.message || e)
     }
 
+    // 发送前台化:ISOLATED in-page 把"写草稿 + 点发送"合在一次注入里完成(typeDouyinDmDraftInPage
+    // 的 send 分支会直接 clickDmSendButton)。故 send=true 时必须在【注入之前】先切前台,
+    // 让其中的发送点击在前台 trusted 生效、不被后台节流吞。
+    if (send) await activateBeforeSend()
     const results = await chromeApi.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: typeDouyinDmDraftInPage,
@@ -144,22 +205,35 @@ export const typeDmDraftHandler = (
           },
         }
       }
-      throw new ActionFailureError(
-        'GROUNDING_AMBIGUOUS',
-        `dm draft typed but send failed: ${payload.reason || 'dm_send_not_confirmed'}`,
-        false,
-      )
+      // 草稿已写但发送未确认/失败:不 throw,结构化返回(契约)。clicked 直接取 in-page 自报值
+      // (按钮已点中=true / 没找到按钮=false),后端据此区分并决定是否记入幂等。
+      return dmDraftNotSentResult({
+        draftTyped: true,
+        clicked: payload.clicked === true,
+        sent: false,
+        reason: payload.reason || 'dm_send_not_confirmed',
+        target: payload.target || 'dm_editable',
+        sendTarget: payload.sendTarget,
+      })
     }
     if (payload?.ok !== true || payload.draftTyped !== true) {
       const cdp = await typeDmDraftByCdp(deps.debugger, tabId, text)
       if (cdp.ok === true) {
-        const sent = send ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs) : { ok: true, sent: false, target: undefined }
+        // 发送前台化:草稿已由 CDP 写入,真发前先切前台再点发送。
+        if (send) await activateBeforeSend()
+        const sent = send
+          ? await clickDmSendWithRetry(chromeApi, tabId, text, remainingBudgetMs)
+          : { ok: true, clicked: false, sent: false, target: undefined as string | undefined }
         if (!sent.ok) {
-          throw new ActionFailureError(
-            'GROUNDING_AMBIGUOUS',
-            `dm draft typed but send failed: ${sent.reason || 'send_button_not_found'}`,
-            false,
-          )
+          // 草稿已写(cdp)但发送未确认/失败:不 throw,结构化返回(契约)。
+          return dmDraftNotSentResult({
+            draftTyped: true,
+            clicked: sent.clicked,
+            sent: false,
+            reason: `cdp:${sent.reason || 'send_button_not_found'}`,
+            target: cdp.target || 'dm_cdp_insert_text',
+            sendTarget: sent.target,
+          })
         }
         return {
           ok: true,
@@ -431,7 +505,7 @@ async function clickDmSendWithRetry(
   tabId: number,
   text: string,
   remainingBudgetMs: () => number,
-): Promise<{ ok: boolean; sent?: boolean; target?: string; reason?: string }> {
+): Promise<{ ok: boolean; clicked: boolean; sent?: boolean; target?: string; reason?: string }> {
   let last: { ok: boolean; clicked?: boolean; target?: string; reason?: string } = {
     ok: false,
     reason: 'send_not_attempted',
@@ -446,14 +520,16 @@ async function clickDmSendWithRetry(
     await sleep(Math.min(1200, Math.max(0, remainingBudgetMs() - DM_CONFIRM_FIRST_DELAY_MS)))
   }
   if (!(last.ok && last.clicked)) {
-    return { ok: false, sent: false, target: last.target, reason: last.reason }
+    // clicked=false:发送按钮始终没点中。上层据此可判定"连发送按钮都没点到"。
+    return { ok: false, clicked: false, sent: false, target: last.target, reason: last.reason }
   }
   // 已点中发送按钮 → 在剩余预算内轮询确认是否真发出(草稿清空 / 消息气泡出现任一强信号)。
   // 确认通过 sent=true(组B 幂等的可靠依据);未通过则 ok=false 让上层按未确认处理,但绝不重点。
+  // clicked=true 始终回传:即便未确认发出,上层也据 clicked 记入幂等 sentDmKeys(防重复发)。
   const confirmed = await confirmDmSentInBudget(chromeApi, tabId, text, remainingBudgetMs)
   return confirmed
-    ? { ok: true, sent: true, target: last.target }
-    : { ok: false, sent: false, target: last.target, reason: 'dm_send_not_confirmed_after_click' }
+    ? { ok: true, clicked: true, sent: true, target: last.target }
+    : { ok: false, clicked: true, sent: false, target: last.target, reason: 'dm_send_not_confirmed_after_click' }
 }
 
 /**
@@ -483,9 +559,12 @@ async function confirmDmSentInBudget(
 }
 
 /**
- * 单次确认检测(注入 page):返回是否检测到发送成功的强信号。
- * draftCleared:草稿输入框里不再包含我方文本(发送后被清空)。
- * bubbleSeen:我方文本出现在非输入框区域(会话气泡/消息条)——排除输入框自身,避免把草稿误当气泡。
+ * 单次确认检测(注入 page):返回是否检测到发送成功的强信号。Fix 5 收紧到本次 DM 浮层范围,
+ * 降低双向误判:
+ * draftCleared:【本次 DM 浮层(#imSaasContainerId / im-dialog)内】的输入框不再含我方文本
+ *   ——而非全文档级 editable(全文档级会被浮层外的空输入框/其它页面输入框误判成"已清空")。
+ * bubbleSeen:我方文本出现在【会话消息列表容器内】的非输入框文本节点(气泡/消息条)
+ *   ——而非全文档"任意 editable 之外的 div",后者会被预览/通知/草稿镜像等浮层外元素误命中。
  */
 async function dmSentSignalInPage(
   chromeApi: typeof globalThis.chrome,
@@ -500,30 +579,41 @@ async function dmSentSignalInPage(
         const wanted = clean(draft)
         if (!wanted) return false
         const editableSelector = 'textarea, input, [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [role="textbox"], [data-slate-editor="true"], .ProseMirror'
-        const editables = Array.from(document.querySelectorAll<HTMLElement>(editableSelector))
-        const editableText = editables
+        // 本次 DM 浮层根:私信是作者主页上的同页浮层,锚点 #imSaasContainerId / im-dialog 稳定。
+        // 浮层不在(理论上已关闭/未开)时,保守视作未确认,交上层继续轮询。
+        const dmPanel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]')
+        if (!dmPanel) return false
+        // 强信号①:本浮层内输入框已清空(发送后 React 清空 composer)。只看浮层内 editable,
+        // 不再全文档级——避免被浮层外其它空输入框误判为"已清空"。
+        const panelEditables = Array.from(dmPanel.querySelectorAll<HTMLElement>(editableSelector))
+        const panelEditableText = panelEditables
           .map(el => {
             if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value || ''
             return el.innerText || el.textContent || ''
           })
           .join('\n')
-        // 强信号①:草稿已清空(输入框里不再含我方文本)。
-        const draftCleared = !clean(editableText).includes(wanted)
-        if (draftCleared) return true
-        // 强信号②:我方文本出现在会话气泡/消息条(输入框之外)。遍历包含该文本的最深元素,
-        // 只要不在任何 editable 内,即认定已落到消息列表。
+        // 浮层内确有输入框且其文本已不含草稿 → 判定已清空。浮层内压根没找到输入框时不据此判定
+        // (可能是 DOM 结构异动),退到气泡信号。
+        if (panelEditables.length > 0 && !clean(panelEditableText).includes(wanted)) return true
+        // 强信号②:我方文本出现在会话消息列表容器内的气泡/消息条(输入框之外)。
+        // 先定位浮层内的消息列表容器,在其范围内找最深文本节点;不依赖全文档遍历。
+        const messageListSelector = '[class*="messageList"], [class*="MessageList"], [class*="message-list"], [class*="conversation"], [class*="Conversation"], [data-e2e*="message"], [role="log"], [role="list"]'
+        const messageRoots = Array.from(dmPanel.querySelectorAll<HTMLElement>(messageListSelector))
+        const scopeRoots: ParentNode[] = messageRoots.length > 0 ? messageRoots : [dmPanel]
         const inEditable = (node: Element | null): boolean => {
-          for (let cur = node; cur; cur = cur.parentElement) {
-            if (cur instanceof HTMLElement && editables.includes(cur)) return true
+          for (let cur = node; cur && cur !== dmPanel; cur = cur.parentElement) {
+            if (cur instanceof HTMLElement && panelEditables.includes(cur)) return true
             if (cur.matches?.(editableSelector)) return true
           }
           return false
         }
-        const candidates = Array.from(document.querySelectorAll<HTMLElement>('span, p, div'))
-        for (const el of candidates) {
-          if (el.children.length > 0) continue // 取最深的文本承载节点,避免父容器误命中
-          if (!clean(el.innerText || el.textContent || '').includes(wanted)) continue
-          if (!inEditable(el)) return true
+        for (const root of scopeRoots) {
+          const candidates = Array.from(root.querySelectorAll<HTMLElement>('span, p, div'))
+          for (const el of candidates) {
+            if (el.children.length > 0) continue // 取最深的文本承载节点,避免父容器误命中
+            if (!clean(el.innerText || el.textContent || '').includes(wanted)) continue
+            if (!inEditable(el)) return true
+          }
         }
         return false
       },
@@ -760,6 +850,20 @@ async function clickDmSendInPage(
       if (!clean(allEditableText()).includes(wanted) && !clean(editableText(editable)).includes(wanted)) {
         return { ok: false, reason: 'draft_not_visible_before_send' }
       }
+      // testid 短路(Fix 4):稳定发送 class 存在即优先点击,绕开下面按视口几何(rect.left/top)的过滤。
+      // 后台标签 rect 塌缩时几何会把按钮全过滤掉;这些 class 不依赖几何。命中后仍排除禁用/附件态。
+      const dmPanel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]')
+      const testIdRoot: ParentNode = dmPanel ?? document
+      for (const sel of ['.e2e-send-msg-btn', '.messageMsgInputpublishRedBtn']) {
+        const hit = Array.from(testIdRoot.querySelectorAll<HTMLElement>(sel))
+          .map(el => actionRoot(el))
+          .find(el => !isDisabled(el) && !isAttachmentControl(el, elementText(el)))
+        if (hit) {
+          hit.scrollIntoView({ block: 'center', inline: 'center' })
+          click(hit)
+          return { ok: true, clicked: true, target: `testid:${sel.slice(1)}` }
+        }
+      }
       const editableRect = editable.getBoundingClientRect()
       const viewportW = window.innerWidth || document.documentElement.clientWidth || 1
       const viewportH = window.innerHeight || document.documentElement.clientHeight || 1
@@ -826,6 +930,12 @@ function draftStillVisibleInEditable(text: string): boolean {
 }
 
 function findDmSendButton(editable: HTMLElement): HTMLElement | null {
+  // testid 短路(Fix 4):.e2e-send-msg-btn / .messageMsgInputpublishRedBtn 是抖音私信发送按钮的
+  // 稳定 class——存在即优先点击,绕开下面按视口几何(rect.left/top)做的过滤。后台标签 rect 塌缩
+  // 时几何会把按钮全过滤掉(命中 dm_send_button_not_found),而这些 class 不依赖几何。
+  // 仅当这些 testid 都不在(或被禁用)才退回几何启发式。
+  const byTestId = findDmSendButtonByTestId()
+  if (byTestId) return byTestId
   const editableRect = editable.getBoundingClientRect()
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 1
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 1
@@ -842,6 +952,23 @@ function findDmSendButton(editable: HTMLElement): HTMLElement | null {
   return safeItems
     .filter(item => isLikelySendButtonText(item.text) || isIconOnlySendButton(item.el, item.rect, editableRect, item.text, composer) || item.el === structuralSend)
     .sort((a, b) => scoreSendButton(b, editableRect, composer) - scoreSendButton(a, editableRect, composer) || a.index - b.index)[0]?.el ?? null
+}
+
+/**
+ * testid 短路(Fix 4):直接按抖音稳定发送 class 命中发送按钮,不经任何视口几何过滤。
+ * 命中优先级:.e2e-send-msg-btn(e2e 测试锚点,最稳)> .messageMsgInputpublishRedBtn(高亮可发态)。
+ * .messageMsgInputpublishBtn(未高亮/可能禁用态)不在此短路——避免在草稿尚不可发时误点;
+ * 这类退回下面几何启发式由 isDisabled / hasSendAccent 一起判定。命中后仍排除禁用态。
+ */
+function findDmSendButtonByTestId(): HTMLElement | null {
+  const dmPanel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]')
+  const root: ParentNode = dmPanel ?? document
+  for (const selector of ['.e2e-send-msg-btn', '.messageMsgInputpublishRedBtn']) {
+    const hit = Array.from(root.querySelectorAll<HTMLElement>(selector))
+      .find(el => !isDisabled(el) && !isAttachmentLikeControl(el, elementText(el)))
+    if (hit) return dmActionRoot(hit)
+  }
+  return null
 }
 
 function isLikelySendButtonText(text: string): boolean {

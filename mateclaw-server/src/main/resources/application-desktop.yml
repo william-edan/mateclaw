@@ -1,0 +1,48 @@
+# ============================================================================
+# desktop profile — 桌面端(Electron 打包 exe)生产态运行配置(契约1)
+#
+# 目标:复用 dev 的 H2 内嵌数据源与 Flyway(h2 迁移),但把运行态调成"生产":
+#   - 日志 INFO,关掉 vip.mate=DEBUG 与 *.mapper=DEBUG 的全量含参 SQL 打印;
+#   - 不写 mateclaw-debug.log(由 logback springProfile 决定:desktop 不匹配 default|dev,
+#     不挂 FILE_DEBUG appender;此处再用 logging.level 把 vip.mate 顶到 INFO 双保险);
+#   - 关闭 H2 console。
+# 绝不绑 MySQL:这里完全不出现任何 mysql 数据源/驱动/flyway mysql locations。
+#
+# 数据源 url 仅为【回退默认】:实际运行时由 Electron main.ts 通过
+#   --spring.datasource.url=jdbc:h2:file:<dataDir 正斜杠绝对路径>/data/huafanai;... 注入覆盖
+# (避免中文 cwd 下相对路径解析失败,见契约3)。这里保留相对路径,既能本地裸跑回退,
+# 也不与注入的绝对路径冲突。
+# ============================================================================
+spring:
+  # 数据源:与 dev(基座 application.yml)同款 H2 内嵌文件库。
+  # url 为回退默认,运行时被 main.ts 注入的绝对路径覆盖(见上方说明)。
+  datasource:
+    url: jdbc:h2:file:./data/huafanai;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  # Flyway:与 dev 完全一致,仍走 h2 迁移目录(绝不切 mysql)。
+  # baseline / placeholder 等其余项继承基座 application.yml,无需在此重复。
+  flyway:
+    locations:
+      - classpath:db/migration/h2
+
+  # 关闭 H2 console(桌面端生产态不暴露)。
+  h2:
+    console:
+      enabled: false
+
+# 日志:桌面端生产态降噪。把 vip.mate(及其子 logger,含 *.mapper)顶到 INFO,
+# 不在用户机器刷海量含参 SQL。logback springProfile 中 desktop 不匹配 default|dev,
+# 故不会挂 FILE_DEBUG;此处 logging.level 再覆盖一遍 logger 级别作双保险。
+logging:
+  level:
+    # MyBatis 通过 SLF4J 输出 SQL,logger 名为各 Mapper 接口的 FQN
+    # (形如 vip.mate.*.repository.XxxMapper),均是 vip.mate 的子 logger,
+    # 故 vip.mate=INFO 一并把全量含参 SQL 压到 INFO 之下(不再打印)。
+    vip.mate: INFO
+    org.springframework.ai: INFO
+
+# MyBatis Plus:沿用基座 Slf4jImpl(级别由上面 logging.level 控制为 INFO,即不输出 SQL)。
+# 桌面端无需调整,保留默认即可。

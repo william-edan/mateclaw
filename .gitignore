@@ -113,6 +113,13 @@ mateclaw-desktop/release/
 mateclaw-desktop/resources/runtime/
 mateclaw-desktop/resources/server/
 
+# Browser extension private key (NEVER commit) + packed artifacts
+mateclaw-extension/*.pem
+mateclaw-extension/*.crx
+
+# Packaged release artifacts (exe / zip) across all mateclaw-* modules
+mateclaw-*/release/
+
 # Local git worktrees
 .worktrees/
 

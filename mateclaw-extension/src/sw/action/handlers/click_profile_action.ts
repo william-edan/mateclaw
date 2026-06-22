@@ -1,6 +1,7 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { ClickProfileActionParams } from '../types'
 import { activateTabForRender } from './activate-tab'
+import { ensureVisibilityOverride } from './visibility-keepalive'
 
 export interface ClickProfileActionHandlerDeps {
   chrome?: typeof globalThis.chrome
@@ -27,6 +28,11 @@ export const clickProfileActionHandler = (
     if (!chromeApi?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
+    // 后台保活(契约):幂等覆盖该 tab 的可见性 API、吞掉 visibilitychange,让后台标签下抖音 React
+    // 不因 hidden 暂停作者主页关注/回关/私信按钮的异步渲染(根因之一:后台主页按钮没 mount,
+    // 单次注入扑空 → no_profile_action)。与 douyin_search / douyin_open_video / douyin_ui 开头一致,
+    // best-effort、不阻断后续。在第一次后台尝试之前注入,使首轮就有机会命中、少触发激活兜底。
+    await ensureVisibilityOverride(chromeApi, tabId)
 
     const runOnce = async () => {
       const results = await chromeApi.scripting.executeScript({

@@ -22,6 +22,9 @@ interface DouyinUiResult {
  *   - op='open_comments': click the comment icon ([data-e2e="feed-comment-icon"])
  *     to open the comment panel (replaces the foreground-only 'x' shortcut).
  *   - op='pause': pause all <video> elements.
+ *   - op='next_video': switch to the next feed video via synthetic ArrowDown
+ *     (DOM keydown), confirming the URL video id changed.
+ *     Returns {ok:changed, op, detail}; works off-screen, no CDP ArrowDown needed.
  * All via chrome.scripting.executeScript — works on a background / minimised tab.
  */
 export const douyinUiHandler = (deps: DouyinUiHandlerDeps): ActionHandler<DouyinUiParams> => {
@@ -118,6 +121,53 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
     }
     if (await waitForList(8)) return { ok: true, op, detail: 'opened_shortcut_x_dom' }
     return { ok: false, op, detail: 'clicked_but_no_list' }
+  }
+
+  if (op === 'next_video') {
+    // 后台可用、不依赖 CDP:页内合成 ArrowDown 切下一个视频,并以 url 视频 id 变化确认切换成功。
+    // 先记当前视频 id(modal_id 优先,否则 /video/ 后的数字),合成 ArrowDown keydown/keyup 到
+    // document/body/window,多轮重试,每轮后短轮询(带上限)看视频 id 是否变化,变了即返回 switched。
+    const videoId = (): string => {
+      try {
+        const u = new URL(location.href)
+        const m = u.searchParams.get('modal_id')
+        if (m) return m
+        const mm = u.pathname.match(/\/video\/(\d+)/)
+        if (mm && mm[1]) return mm[1]
+      } catch { /* ignore */ }
+      return ''
+    }
+    const before = videoId()
+    // 短轮询等 id 变化:步长 400ms,带总上限(tries 步)避免无限轮询。
+    const waitForChange = async (tries: number): Promise<string> => {
+      for (let t = 0; t < tries; t++) {
+        await sleep(400)
+        const cur = videoId()
+        if (cur && cur !== before) return cur
+      }
+      return ''
+    }
+    const sendArrowDown = () => {
+      const kev = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true } as KeyboardEventInit
+      for (const tgt of [document, document.body, window].filter(Boolean) as EventTarget[]) {
+        try { tgt.dispatchEvent(new KeyboardEvent('keydown', kev)); tgt.dispatchEvent(new KeyboardEvent('keyup', kev)) } catch { /* ignore */ }
+      }
+    }
+    // F12 实测:合成 ArrowDown 可靠切到下一个视频;wheel(deltaY)方向不可控、会切回上一个,
+    // 故只用 ArrowDown,多轮重试(后台首次合成事件可能被吞掉)。
+    // (a) 首轮上限 ~6s(15×400ms)
+    sendArrowDown()
+    let after = await waitForChange(15)
+    if (after) return { ok: true, op, detail: 'switched ' + before + '->' + after }
+    // (b) 再试一次(后台首次合成事件可能被吞掉),~6s
+    sendArrowDown()
+    after = await waitForChange(15)
+    if (after) return { ok: true, op, detail: 'switched ' + before + '->' + after }
+    // (c) 末轮,~4s
+    sendArrowDown()
+    after = await waitForChange(10)
+    if (after) return { ok: true, op, detail: 'switched ' + before + '->' + after }
+    return { ok: false, op, detail: 'no_change' }
   }
 
   if (op === 'sort') {

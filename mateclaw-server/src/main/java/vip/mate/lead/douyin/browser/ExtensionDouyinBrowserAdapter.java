@@ -611,8 +611,88 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 || summary.contains("total=0");
     }
 
+    /**
+     * 切到下一个视频(契约2,DOM 化)。
+     *
+     * 旧实现用 service_press_key("ArrowDown")(CDP 在后台标签是 no-op)再靠 observe 校验,
+     * 但后台 a11y 树为空 → videoObservationChanged 判不出变化 → 反复落到
+     * VIDEO_KEYBOARD_SWITCH_NOT_CONFIRMED 失败。现改为页内 DOM 切换:
+     *   调 service_douyin_ui_main("next_video","") —— 扩展端在页内点下一个视频并已自行
+     *   确认 url 的视频 id 变化,以 {ok:changed, op, detail} 回报(top-level ok=changed)。
+     * 后端据 ok/detail【信任】切换成功,不再依赖后台空树 observe 二次校验。
+     * 按慢系数重试(总上限 = 退避序列长度,绝不无限循环);成功后 tryOk(pause) 暂停自动播放,
+     * 再 observeMain 取一次观察(后台可能空,不影响判定),返回 VIDEO_TARGET 并标注
+     * switched_next_dom:index=N。DOM-only 关闭时(前台模式)保留原 CDP ArrowDown 作兜底。
+     */
     private BrowserObservation switchToNextVideoByKeyboard(BrowserObservation current, int zeroBasedIndex) {
         BrowserObservation before = closeCommentPanelBeforeVideoSwitch(current);
+
+        // 按慢系数把重试次数放大;每轮退避递增,带总上限避免无限循环。
+        int attempts = slowAttempts(3);
+        String lastDetail = "";
+        String lastSummary = "";
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            startCommentNetworkCapture();
+            JsonNode res;
+            try {
+                res = parse(browser.service_douyin_ui_main("next_video", ""));
+            } catch (RuntimeException e) {
+                lastSummary = "threw:" + e.getMessage();
+                log.info("[douyin.lead] douyin_ui next_video threw (attempt {}/{}): {}",
+                        attempt + 1, attempts, e.getMessage());
+                waitMs(slowMs(attempt == 0 ? 600L : 900L));
+                continue;
+            }
+            JsonNode payload = res.path("results").path(0).path("payload");
+            lastDetail = payload.path("detail").asText("");
+            if (ok(res)) {
+                // 扩展已确认 url 的视频 id 变化(ok=changed):信任切换成功,不做后台空树 observe 校验。
+                tryOk(browser.service_douyin_ui_main("pause", "")); // 暂停自动播放
+                waitMs(slowMs(800L));
+                BrowserObservation after = observeMain("all"); // 后台可能空,仅用于回带 url/title/tree
+                log.info("[douyin.lead] switched to next video via douyin_ui (DOM, trust ok): index={}, detail={}",
+                        zeroBasedIndex, lastDetail);
+                return new BrowserObservation(
+                        after.ok(),
+                        after.url(),
+                        after.title(),
+                        after.tree(),
+                        after.viewportWidth(),
+                        after.viewportHeight(),
+                        "VIDEO_TARGET",
+                        "switched_next_dom:index=" + zeroBasedIndex
+                                + (lastDetail.isBlank() ? "" : ",detail=" + lastDetail));
+            }
+            lastSummary = errorSummary(res);
+            log.info("[douyin.lead] douyin_ui next_video not ok (attempt {}/{}): {}",
+                    attempt + 1, attempts, lastSummary);
+            waitMs(slowMs(attempt == 0 ? 600L : 900L));
+        }
+
+        // 兜底(仅前台,DOM-only 关闭时):原 CDP ArrowDown + observe 校验路径。
+        // 后台标签 CDP 多半 no-op,DOM-only 模式下直接跳过,避免无谓重试后再抛假阴性。
+        if (!DOM_ONLY_DEBUG) {
+            BrowserObservation byKey = switchToNextVideoByCdpArrowDown(before, zeroBasedIndex);
+            if (byKey != null) {
+                return byKey;
+            }
+        }
+
+        throw new DouyinBrowserException("VIDEO_KEYBOARD_SWITCH_NOT_CONFIRMED",
+                "已尝试用 douyin_ui next_video 切换第 " + (zeroBasedIndex + 1)
+                        + " 个视频(共 " + attempts + " 次),但扩展未确认切换。lastDetail=" + lastDetail
+                        + ", lastError=" + lastSummary
+                        + ", url=" + before.url()
+                        + ", title=" + before.title()
+                        + ", tree=" + treeExcerpt(before.tree()));
+    }
+
+    /**
+     * 前台兜底:原 CDP ArrowDown + observe 确认切换(后台标签多为 no-op,仅 DOM-only 关闭时调用)。
+     * 确认切换返回观察;始终判不出变化则返回 null,交外层抛出明确错误(不静默吞)。
+     */
+    @Nullable
+    private BrowserObservation switchToNextVideoByCdpArrowDown(BrowserObservation before, int zeroBasedIndex) {
         for (int attempt = 0; attempt < 3; attempt++) {
             startCommentNetworkCapture();
             if (!tryOk(browser.service_press_key_main("ArrowDown"))) {
@@ -636,11 +716,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                         "keyboard_arrow_down:index=" + zeroBasedIndex);
             }
         }
-        throw new DouyinBrowserException("VIDEO_KEYBOARD_SWITCH_NOT_CONFIRMED",
-                "已尝试用下方向键打开第 " + (zeroBasedIndex + 1)
-                        + " 个视频，但没有确认视频切换。url=" + before.url()
-                        + ", title=" + before.title()
-                        + ", tree=" + treeExcerpt(before.tree()));
+        return null;
     }
 
     private BrowserObservation closeCommentPanelBeforeVideoSwitch(BrowserObservation current) {
@@ -1786,50 +1862,62 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         boolean typedByDmPrimitive = false;
         boolean typedByGenericFallback = false;
         boolean sentByDmPrimitive = false;
+        // 扩展自报"已点击发送"(clicked=true)——契约新增字段。注意:clicked 只代表点了发送按钮,
+        // 不代表真发出(后台节流可能 no-op);真发出由后端强制复核确认。clicked 仅用于幂等去重。
+        boolean clickedByDmPrimitive = false;
         // 私信幂等去重:为本条私信生成稳定 dmKey(作者标识 + 私信文本 的 hash),本次触达流程内
-        // 维护已确认发出的集合。重试循环 + send-only 兜底会对同一草稿带 sendDm=true 反复调用,
-        // 慢网络下"已发却报失败"会二次发送 —— 凡 sent=true(组C 确认轮询通过的真发出信号)即记入
-        // 集合并立即终止后续重发与兜底;已在集合中的 dmKey 直接跳过发送,确保"已发出绝不二次发送"。
+        // 维护"已点击发送过的集合"。重试循环 + send-only 兜底会对同一草稿带 sendDm=true 反复调用,
+        // 慢网络下"已点但确认失败"若按 sent=true 才记入,会被重复发送 —— 故凡 clicked=true(扩展
+        // 已点过发送按钮)即记入集合,已在集合中的 dmKey 不再二次点发送,确保"已点过绝不重复点发"。
         Set<String> sentDmKeys = new HashSet<>();
         String dmKey = sendDm ? dmKey(comment, dmDraft) : null;
         // 私信浮层(#imSaasContainerId)点开后异步渲染，输入框可能要等几秒才 mount——重试
         // service_type_dm_draft 直到输入成功或超时(~12s)，避免一次找不到输入框就 DM_INPUT_NOT_FOUND。
-        long dmTypeDeadlineMs = System.currentTimeMillis() + 12_000L;
+        // 慢环境:发送前台化后单次 handler 内部最坏预算(切前台+渲染+输入+点发送)更长,外层输入
+        // 重试窗口必须随慢系数放大,保证 >= 单次 handler 内部最坏预算,否则慢机会在 handler 还没
+        // 跑完就过期、提前回退到 generic fallback。
+        long dmTypeDeadlineMs = System.currentTimeMillis() + slowMs(12_000L);
         int dmAttempt = 0;
         while (true) {
             dmAttempt++;
-            // 已确认发出过该 dmKey:本条私信已落地,绝不再带 sendDm 二次调用,直接收口。
+            // 已点击发送过该 dmKey:本条私信已点过发送,绝不再带 sendDm 二次调用点发,直接收口。
+            // (是否真发出由循环后强制复核判定,这里只防"重复点发"。)
             if (dmKey != null && sentDmKeys.contains(dmKey)) {
-                sentByDmPrimitive = true;
+                clickedByDmPrimitive = true;
                 typedByDmPrimitive = true;
-                log.info("[douyin.lead] dm already confirmed sent (dmKey hit); skip resend: dmKey={}", dmKey);
+                log.info("[douyin.lead] dm already clicked-send (dmKey hit); skip resend: dmKey={}", dmKey);
                 break;
             }
             try {
                 dmDraftAction = parse(engagementTabId == null
                         ? browser.service_type_dm_draft_active(dmDraft, sendDm)
                         : browser.service_type_dm_draft_tab(engagementTabId, dmDraft, sendDm));
-                typedByDmPrimitive = ok(dmDraftAction);
+                // 契约:扩展在"草稿已写但发送未确认"时不再 throw,而是 return ok:false 且 payload 带
+                // {draftTyped, clicked, sent, reason}。故 typed 不能只看 ok——还要看 payload.draftTyped。
+                typedByDmPrimitive = ok(dmDraftAction) || actionPayloadBoolean(dmDraftAction, "draftTyped");
+                clickedByDmPrimitive = actionPayloadBoolean(dmDraftAction, "clicked");
                 sentByDmPrimitive = actionPayloadBoolean(dmDraftAction, "sent");
             } catch (RuntimeException e) {
                 log.warn("[douyin.lead] type_dm_draft attempt {} failed: {}", dmAttempt, e.getMessage());
                 typedByDmPrimitive = false;
             }
-            // late success:本次其实已发出(sent=true)即据信号回填 dmKey 并立刻终止循环,
-            // 即使本次 ok=false 也不再重发,避免"已发却报失败→再发一遍"。
-            if (sendDm && sentByDmPrimitive && dmKey != null) {
+            // 幂等:扩展已点击发送(clicked=true)即据信号回填 dmKey 并立刻终止循环,即使本次 ok=false
+            // 或 sent=false(发送未确认)也不再重试点发,避免"已点但确认失败→再点一遍"造成重复发送。
+            if (sendDm && clickedByDmPrimitive && dmKey != null) {
                 sentDmKeys.add(dmKey);
-                log.info("[douyin.lead] dm confirmed sent by primitive; record dmKey and stop: attempt={}, dmKey={}",
-                        dmAttempt, dmKey);
+                log.info("[douyin.lead] dm clicked-send by primitive; record dmKey and stop: attempt={}, sent={}, dmKey={}",
+                        dmAttempt, sentByDmPrimitive, dmKey);
                 break;
             }
             if (typedByDmPrimitive) {
-                log.info("[douyin.lead] dm draft typed by primitive: attempt={}, sent={}", dmAttempt, sentByDmPrimitive);
+                log.info("[douyin.lead] dm draft typed by primitive: attempt={}, clicked={}, sent={}",
+                        dmAttempt, clickedByDmPrimitive, sentByDmPrimitive);
                 break;
             }
-            String dmReason = dmDraftAction.path("message").asText(dmDraftAction.path("code").asText(""));
+            String dmReason = dmDraftAction.path("reason").asText(
+                    dmDraftAction.path("message").asText(dmDraftAction.path("code").asText("")));
             if (System.currentTimeMillis() >= dmTypeDeadlineMs) {
-                log.info("[douyin.lead] dm draft not typed after {} attempts (~12s); last reason={}; trying fallback",
+                log.info("[douyin.lead] dm draft not typed after {} attempts (~slow*12s); last reason={}; trying fallback",
                         dmAttempt, dmReason);
                 break;
             }
@@ -1839,8 +1927,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
         if (!typedByDmPrimitive) {
             BrowserObservation afterDraftAttempt = observeEngagementTab(engagementTabId, "all");
-            if (looksLikeDouyinDmPage(afterDraftAttempt)
-                    && (dmDraftVisibleInDmInputArea(afterDraftAttempt, dmDraft) || dmDraftVisibleInDmDom(afterDraftAttempt, dmDraft))) {
+            if (dmDraftVisibleOnEngagementTab(engagementTabId, afterDraftAttempt, dmDraft)) {
                 typedByDmPrimitive = true;
                 dmPage = afterDraftAttempt;
                 log.info("[douyin.lead] dm draft already visible after primitive failure; will continue to send-only path");
@@ -1862,39 +1949,58 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 typedByGenericFallback = true;
             }
         }
-        // 幂等:dmKey 已确认发出则跳过 send-only 兜底,绝不二次发送。
-        boolean dmKeyAlreadySent = dmKey != null && sentDmKeys.contains(dmKey);
-        if (sendDm && !sentByDmPrimitive && !dmKeyAlreadySent) {
-            BrowserObservation beforeSend = observeEngagementTab(engagementTabId, "all");
-            if (looksLikeDouyinDmPage(beforeSend)
-                    && (dmDraftVisibleInDmInputArea(beforeSend, dmDraft) || dmDraftVisibleInDmDom(beforeSend, dmDraft))) {
-                try {
-                    JsonNode sendAction = parse(engagementTabId == null
-                            ? browser.service_send_dm_active(dmDraft)
-                            : browser.service_send_dm_tab(engagementTabId, dmDraft));
-                    sentByDmPrimitive = ok(sendAction) && actionPayloadBoolean(sendAction, "sent");
-                    if (sentByDmPrimitive) {
-                        if (dmKey != null) {
-                            sentDmKeys.add(dmKey);
-                        }
-                        log.info("[douyin.lead] sent existing dm draft by send-only primitive; record dmKey={}", dmKey);
-                    }
-                } catch (RuntimeException e) {
-                    log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
-                }
+        // 核心:绝不盲信扩展自报 sent。后台标签的合成点击/键入可能 no-op(消息没真正发出),扩展却
+        // 仍回 sent:true。故凡扩展自报 sent=true,都【强制复核】——对 engagementTabId 走 *_tab observe
+        // (不是 *_active:后台活动标签 != engagement 标签),在 DM 会话里查找刚发出的草稿文本气泡;
+        // 复核到才认定真发出,否则置 sentConfirmed=false 并走 send-only 兜底。
+        boolean sentConfirmed = false;
+        if (sendDm && sentByDmPrimitive) {
+            sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "primitive");
+            if (!sentConfirmed) {
+                log.warn("[douyin.lead] extension self-reported sent but re-check found no draft bubble on engagement tab; "
+                        + "distrust sent and fall back to send-only: tabId={}, dmKey={}", engagementTabId, dmKey);
             }
-        } else if (sendDm && dmKeyAlreadySent) {
-            sentByDmPrimitive = true;
-            log.info("[douyin.lead] dm already confirmed sent (dmKey hit); skip send-only fallback: dmKey={}", dmKey);
+        }
+        // 幂等:dmKey 已点击发送过则跳过 send-only 兜底,绝不二次点发。
+        boolean dmKeyAlreadyClicked = dmKey != null && sentDmKeys.contains(dmKey);
+        // send-only 兜底前台化:不再用"后台 observe 空恒不成立"的可见性 guard 拦死兜底——后台路径直接
+        // 走 *_tab(扩展在点发送前会把该 tab 切到前台、注入 visibility override,使发送在前台 trusted
+        // 生效),发完再强制复核。仅当扩展未确认发出 / 复核未通过 / 该 dmKey 尚未点过发送时才兜底。
+        if (sendDm && !sentConfirmed && !dmKeyAlreadyClicked) {
+            try {
+                JsonNode sendAction = parse(engagementTabId == null
+                        ? browser.service_send_dm_active(dmDraft)
+                        : browser.service_send_dm_tab(engagementTabId, dmDraft));
+                boolean sendClicked = ok(sendAction) || actionPayloadBoolean(sendAction, "clicked")
+                        || actionPayloadBoolean(sendAction, "sent");
+                // 幂等:send-only 已点过发送即记入 dmKey,即便复核未过也不再二次点发。
+                if (sendClicked && dmKey != null) {
+                    sentDmKeys.add(dmKey);
+                }
+                // 后端是发出与否的唯一权威:只要点了发送(前台化后 trusted),就强制复核,不管扩展自报
+                // sent 是否为 false(前台化后可能已真发出,扩展的 sent=false 可能是假阴性)。
+                if (sendClicked) {
+                    sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "send-only");
+                }
+                log.info("[douyin.lead] send-only dm fallback: clicked={}, sentConfirmed={}, dmKey={}",
+                        sendClicked, sentConfirmed, dmKey);
+            } catch (RuntimeException e) {
+                log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
+            }
+        } else if (sendDm && dmKeyAlreadyClicked && !sentConfirmed) {
+            // 该 dmKey 已点过发送但本流程内尚未复核到——再做一次强制复核(气泡可能慢渲染),复核到则认定发出。
+            sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "dmKey-hit");
+            log.info("[douyin.lead] dm already clicked-send (dmKey hit); skip resend, re-check only: sentConfirmed={}, dmKey={}",
+                    sentConfirmed, dmKey);
         }
         waitMs(500);
         BrowserObservation verify = observeEngagementTab(engagementTabId, "all");
-        boolean draftTyped = sentByDmPrimitive
+        boolean draftTyped = sentConfirmed
                 || typedByDmPrimitive
                 || typedByGenericFallback
-                || (looksLikeDouyinDmPage(verify)
-                && (dmDraftVisibleInDmInputArea(verify, dmDraft) || dmDraftVisibleInDmDom(verify, dmDraft)));
-        boolean sent = sendDm && sentByDmPrimitive;
+                || dmDraftVisibleOnEngagementTab(engagementTabId, verify, dmDraft);
+        // sent 最终只认强制复核的结果(sentConfirmed),不再等于扩展自报 sent。
+        boolean sent = sendDm && sentConfirmed;
         // 后台 observe 空时 followConfirmed / dmPage.tree 读不到——用"关注点击已发出"(followClicked)
         // 或"已关注"(alreadyFollowed)作为触达判据，避免把后台读不到误报成 FOLLOW_NOT_CONFIRMED。
         boolean engaged = followConfirmed || followClicked || alreadyFollowed || dmPage.tree().contains("私信");
@@ -2282,16 +2388,31 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     }
 
     private boolean dmDraftVisibleInDmDom(BrowserObservation obs, String dmDraft) {
-        if (obs == null || dmDraft == null || dmDraft.isBlank() || !isDouyinPage(obs.url())) {
+        return dmDraftVisibleInDmDomTab(null, obs, dmDraft);
+    }
+
+    /**
+     * tab 感知的 DM DOM 草稿气泡检查:engagementTabId 非空时走 *_tab(后台活动标签 != engagement 标签,
+     * 必须显式指定 engagement 标签才能读到刚发出的草稿气泡),为空时退回 *_active。后台 observe 空导致
+     * obs.url() 读不到时仍尝试 region 提取(region 走扩展端 DOM,不依赖 a11y snapshot),不被空 url 拦死。
+     */
+    private boolean dmDraftVisibleInDmDomTab(@Nullable Long engagementTabId, BrowserObservation obs, String dmDraft) {
+        if (obs == null || dmDraft == null || dmDraft.isBlank()) {
             return false;
         }
         RegionInfo dmRegion = dmRegion(obs);
-        if (!tryOk(browser.service_register_region_active(
-                dmRegion.regionKey(), dmRegion.x(), dmRegion.y(), dmRegion.width(), dmRegion.height(), dmRegion.source()))) {
+        boolean registered = engagementTabId == null
+                ? tryOk(browser.service_register_region_active(
+                        dmRegion.regionKey(), dmRegion.x(), dmRegion.y(), dmRegion.width(), dmRegion.height(), dmRegion.source()))
+                : tryOk(browser.service_register_region_tab(engagementTabId,
+                        dmRegion.regionKey(), dmRegion.x(), dmRegion.y(), dmRegion.width(), dmRegion.height(), dmRegion.source()));
+        if (!registered) {
             return false;
         }
         try {
-            JsonNode root = parse(browser.service_extract_region_active(dmRegion.regionKey(), 20));
+            JsonNode root = parse(engagementTabId == null
+                    ? browser.service_extract_region_active(dmRegion.regionKey(), 20)
+                    : browser.service_extract_region_tab(engagementTabId, dmRegion.regionKey(), 20));
             if (!root.path("ok").asBoolean(false)) {
                 return false;
             }
@@ -2304,6 +2425,50 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    /**
+     * 在 engagement 标签上判断草稿文本是否可见(输入框区域 a11y 命中 或 DM DOM region 命中)。a11y 走传入的
+     * obs(已是 *_tab observe 结果),DOM 走 tab 感知的 region 提取。前台时两路都可能命中;后台 a11y 空但
+     * region(DOM)仍可能命中。用于"草稿已写入"的判定。
+     */
+    private boolean dmDraftVisibleOnEngagementTab(@Nullable Long engagementTabId, BrowserObservation obs, String dmDraft) {
+        if (obs == null || dmDraft == null || dmDraft.isBlank()) {
+            return false;
+        }
+        return dmDraftVisibleInDmInputArea(obs, dmDraft)
+                || dmDraftVisibleInDmDomTab(engagementTabId, obs, dmDraft);
+    }
+
+    /**
+     * 强制复核"私信是否真发出":绝不盲信扩展自报 sent。对 engagementTabId 走 *_tab observe + tab 感知的
+     * DM DOM region 提取,在会话里查找刚发出的草稿文本气泡(已发出的消息会作为气泡留在会话流里);复核到
+     * 才认定真发出。慢机/慢网下气泡渲染滞后,带慢系数的短轮询(总上限),命中即提前返回,不死等。
+     */
+    private boolean confirmDmSent(@Nullable Long engagementTabId, String dmDraft, String source) {
+        if (dmDraft == null || dmDraft.isBlank()) {
+            return false;
+        }
+        int attempts = slowAttempts(4);
+        long waitMs = slowMs(700L);
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            try {
+                BrowserObservation obs = observeEngagementTab(engagementTabId, "all");
+                if (dmDraftVisibleInDmDomTab(engagementTabId, obs, dmDraft)
+                        || dmDraftVisibleInDmInputArea(obs, dmDraft)) {
+                    log.info("[douyin.lead] dm send confirmed by re-check on engagement tab: source={}, attempt={}, tabId={}",
+                            source, i + 1, engagementTabId);
+                    return true;
+                }
+            } catch (RuntimeException e) {
+                log.warn("[douyin.lead] dm send re-check observe failed: source={}, attempt={}, error={}",
+                        source, i + 1, e.getMessage());
+            }
+            waitMs(waitMs);
+        }
+        log.warn("[douyin.lead] dm send NOT confirmed after re-check on engagement tab: source={}, attempts={}, tabId={}",
+                source, attempts, engagementTabId);
+        return false;
     }
 
     private RegionInfo dmRegion(BrowserObservation obs) {

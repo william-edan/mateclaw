@@ -11,3 +11,7 @@ contextBridge.exposeInMainWorld('mateclawDesktop', {
 ipcRenderer.on('startup-error', (_event, message: string) => {
   window.dispatchEvent(new CustomEvent('mateclaw-startup-error', { detail: message }))
 })
+
+ipcRenderer.on('startup-warning', (_event, message: string) => {
+  window.dispatchEvent(new CustomEvent('mateclaw-startup-warning', { detail: message }))
+})

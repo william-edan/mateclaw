@@ -59,11 +59,12 @@ function copyServerJar() {
 
 function copyBridgeBinary() {
   if (!fs.existsSync(bridgeArtifact)) {
-    console.warn(
-      `[desktop] bridge.exe not found at ${bridgeArtifact}; skipping. ` +
-        'Build it in mateclaw-browser-bridge first to bundle the native host.',
+    // 硬失败:bridge.exe 缺失曾被 console.warn 跳过,导致打出"无桥"的包,
+    // 用户安装后浏览器 Native Messaging 静默不可用。改为 throw,缺桥即停。
+    throw new Error(
+      `[desktop] bridge.exe not found at ${bridgeArtifact}. ` +
+        'Build it in mateclaw-browser-bridge first (pnpm build / build-exe.mjs) to bundle the native host.',
     )
-    return
   }
   fs.mkdirSync(bridgeResourceDir, { recursive: true })
   const dest = path.join(bridgeResourceDir, 'bridge.exe')
@@ -101,6 +102,7 @@ function createRuntime() {
     'jdk.crypto.ec',
     'jdk.httpserver',
     'jdk.jfr',
+    'jdk.localedata',
     'jdk.management',
     'jdk.unsupported',
     'jdk.zipfs',
@@ -111,6 +113,10 @@ function createRuntime() {
     [
       '--add-modules',
       modules,
+      // jdk.localedata 默认会被 jlink 裁掉 non-DEFAULT locale,导致干净机上
+      // 中文日期/数字/货币格式退化为 ROOT/英文。--include-locales 仅保留 zh/en,
+      // 既修复格式又控制 runtime 体积(全量 locale 会显著增大)。
+      '--include-locales=zh,en',
       '--strip-debug',
       '--no-header-files',
       '--no-man-pages',
@@ -123,6 +129,32 @@ function createRuntime() {
   console.log(`[desktop] created runtime: ${runtimeResourceDir}`)
 }
 
+function verifyResources() {
+  // 末尾硬校验:三大产物缺任一即 throw,避免 electron-builder 打出残缺安装包。
+  const javaw = path.join(runtimeResourceDir, 'bin', 'javaw.exe')
+  const bridge = path.join(bridgeResourceDir, 'bridge.exe')
+
+  const serverJars = fs.existsSync(serverResourceDir)
+    ? fs
+        .readdirSync(serverResourceDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.jar'))
+        .map((entry) => path.join(serverResourceDir, entry.name))
+    : []
+
+  const missing = []
+  if (!fs.existsSync(javaw)) missing.push(javaw)
+  if (!serverJars.length) missing.push(path.join(serverResourceDir, '*.jar'))
+  if (!fs.existsSync(bridge)) missing.push(bridge)
+
+  if (missing.length) {
+    throw new Error(
+      `[desktop] resource verification failed; missing required artifact(s):\n  - ${missing.join('\n  - ')}`,
+    )
+  }
+  console.log('[desktop] resource verification passed: runtime/bin/javaw.exe, server/*.jar, bridge/bridge.exe')
+}
+
 copyServerJar()
 copyBridgeBinary()
 createRuntime()
+verifyResources()

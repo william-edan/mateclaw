@@ -103,6 +103,9 @@ function injectExe() {
     ],
     { stdio: 'inherit' },
   )
+  // TODO: 分发前需用 signtool 对 bridge.exe 重签 —— postject 注入会移除
+  // 复制自 node.exe 的 Authenticode 签名,产物为未签名 exe。用户当前无代码签名证书,
+  // 暂略;一旦有证书,在此后追加 `signtool sign /fd SHA256 /tr <ts> ... bridge.exe`。
   log(`injected SEA blob → ${exePath}`)
 }
 
@@ -115,10 +118,14 @@ async function main() {
     return
   }
 
-  if (process.platform !== 'win32') {
-    log(
-      `warning: building on ${process.platform}; the produced exe targets the ` +
-        'host platform, not Windows x64. Run this on Windows x64 for bridge.exe.',
+  // 硬失败:SEA 从当前 node.exe 复制运行时,平台/架构由宿主决定。
+  // 在非 win32 或非 x64 上构建会把错平台/错架构的 bridge.exe 误打进 Windows x64 包,
+  // 安装后 Native Messaging host 无法启动。改为 throw,杜绝误打。
+  if (process.platform !== 'win32' || process.arch !== 'x64') {
+    throw new Error(
+      `bridge.exe must be built on Windows x64; detected ${process.platform}/${process.arch}. ` +
+        'SEA copies the host node runtime, so the host OS/arch becomes the artifact target. ' +
+        'Use --bundle-only to produce just the bundle on other platforms.',
     )
   }
   makeSeaBlob()

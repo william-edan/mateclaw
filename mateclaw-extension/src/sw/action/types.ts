@@ -124,7 +124,7 @@ export interface DouyinOpenVideoParams {
 }
 
 export interface DouyinUiParams {
-  op: 'sort' | 'open_comments' | 'pause'
+  op: 'sort' | 'open_comments' | 'pause' | 'next_video'
   label?: string
 }
 

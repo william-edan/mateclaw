@@ -487,6 +487,26 @@ reconnectByPairing().catch(e => {
 })
 
 // -----------------------------------------------------------------
+// Chrome 启动 / 扩展安装更新时主动唤醒 SW 发起连接。
+//
+// MV3 Service Worker 的顶层代码只在 install/update 时执行;Chrome 重启后 SW 不会
+// 自动重跑顶层,必须靠事件唤醒。缺了 onStartup 时,重启 Chrome 后要么等 keepalive
+// alarm(最多 ~30s)、要么等用户打开 localhost 页面触发 onMessageExternal 才连接
+// ——这正是"必须手动打开 /lead-acquisition 才连"的根因。onStartup 让 Chrome 一启动
+// 就立即在配对通道上自动连接;onInstalled 覆盖装好/更新后的首次连接。
+// -----------------------------------------------------------------
+chrome.runtime.onStartup.addListener(() => {
+  reconnectByPairing().catch(e => {
+    console.error('[mateclaw][sw] onStartup connect failed', e)
+  })
+})
+chrome.runtime.onInstalled.addListener(() => {
+  reconnectByPairing().catch(e => {
+    console.error('[mateclaw][sw] onInstalled connect failed', e)
+  })
+})
+
+// -----------------------------------------------------------------
 // MV3 keep-alive + auto-reconnect (native path).
 //
 // A service worker is torn down after ~30s idle, which closes the native port
