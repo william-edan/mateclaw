@@ -6,6 +6,7 @@ import com.aliyun.dysmsapi20170525.models.SendSmsResponse;
 import com.aliyun.dysmsapi20170525.models.SendSmsResponseBody;
 import com.aliyun.teaopenapi.models.Config;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -23,6 +24,7 @@ public class AliyunSmsCodeSender implements SmsCodeSender {
     private final SmsProperties props;
     private volatile Client client;
 
+    @Autowired
     public AliyunSmsCodeSender(SmsProperties props) {
         this.props = props;
     }
