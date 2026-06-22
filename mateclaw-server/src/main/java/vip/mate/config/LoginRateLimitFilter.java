@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import vip.mate.auth.support.ClientIp;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -26,7 +27,8 @@ public class LoginRateLimitFilter implements Filter {
     private static final int MAX_ATTEMPTS = 5;
     private static final Set<String> AUTH_PATHS = Set.of(
             "/api/v1/auth/login",
-            "/api/v1/auth/register"
+            "/api/v1/auth/register",
+            "/api/v1/auth/send-register-code"
     );
 
     /** IP → attempt count, auto-expires after 1 minute */
@@ -60,14 +62,6 @@ public class LoginRateLimitFilter implements Filter {
     }
 
     private static String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isEmpty()) {
-            return xff.split(",")[0].trim();
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (realIp != null && !realIp.isEmpty()) {
-            return realIp;
-        }
-        return request.getRemoteAddr();
+        return ClientIp.from(request);
     }
 }

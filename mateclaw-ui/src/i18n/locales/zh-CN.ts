@@ -2809,6 +2809,10 @@ export default {
     hint: '默认账号: <code>admin</code> / <code>admin123</code>',
     failed: '登录失败，请检查账号密码',
     registerFailed: '注册失败，请检查手机号和验证码',
+    getCode: '获取验证码',
+    resendIn: '{n}s 后重试',
+    phoneRequired: '请先输入手机号',
+    sendCodeFailed: '验证码发送失败，请稍后重试',
   },
   enterprise: {
     eyebrow: '企业场景',
