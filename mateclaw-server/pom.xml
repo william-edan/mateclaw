@@ -145,6 +145,16 @@
             <artifactId>hutool-all</artifactId>
         </dependency>
 
+        <!-- ===== Aliyun SMS (dysmsapi 国内短信) =====
+             Version pinned explicitly: this artifact is outside any managed BOM.
+             20170525 = domestic SendSms (dysmsapi.aliyuncs.com); 20180501 is
+             international-only. Pulls tea-openapi / tea-util / credentials-java. -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>dysmsapi20170525</artifactId>
+            <version>4.5.1</version>
+        </dependency>
+
         <!-- ===== DingTalk Stream SDK (WebSocket long connection, no public IP required) ===== -->
         <dependency>
             <groupId>com.dingtalk.open</groupId>
