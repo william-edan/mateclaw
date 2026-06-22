@@ -127,6 +127,22 @@ mateclaw:
   jwt:
     secret: ${JWT_SECRET:MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production}
     expiration: 86400000
+  sms:
+    mock: ${SMS_MOCK:false}                         # fail-safe；生产强制 false（启动校验）
+    universal-code: ${SMS_UNIVERSAL_CODE:888888}    # 仅 mock=true 生效
+    code-ttl-seconds: 300
+    resend-interval-seconds: 60
+    failure-cooldown-seconds: 10
+    max-verify-attempts: 5
+    daily-limit-per-phone: 10
+    daily-limit-per-ip: 30
+    global-limit-per-minute: 200
+    aliyun:
+      access-key-id: ${ALIYUN_SMS_AK:}              # 仅环境变量，禁止入库
+      access-key-secret: ${ALIYUN_SMS_SK:}          # 仅环境变量，禁止入库
+      endpoint: dysmsapi.aliyuncs.com
+      sign-name: 迪伍科技
+      template-code: SMS_508735089
   # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
   mcp:
