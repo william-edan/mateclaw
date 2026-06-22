@@ -5,6 +5,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AccountEntitlementService;
 import vip.mate.auth.service.AuthService;
+import vip.mate.auth.sms.VerificationCodeService;
 import vip.mate.exception.MateClawException;
 
 import java.time.LocalDateTime;
@@ -22,7 +23,7 @@ class AuthControllerAccountStatusTest {
     void meReturnsCurrentAccountStatus() {
         AuthService authService = mock(AuthService.class);
         AccountEntitlementService entitlementService = mock(AccountEntitlementService.class);
-        AuthController controller = new AuthController(authService, entitlementService);
+        AuthController controller = new AuthController(authService, entitlementService, mock(VerificationCodeService.class));
         LocalDateTime expiresAt = LocalDateTime.now().plusDays(3);
         UserEntity user = new UserEntity();
         user.setId(42L);
@@ -49,7 +50,7 @@ class AuthControllerAccountStatusTest {
     void meThrowsNotFoundWhenCurrentUserMissing() {
         AuthService authService = mock(AuthService.class);
         AccountEntitlementService entitlementService = mock(AccountEntitlementService.class);
-        AuthController controller = new AuthController(authService, entitlementService);
+        AuthController controller = new AuthController(authService, entitlementService, mock(VerificationCodeService.class));
         when(authService.findByUsername("missing")).thenReturn(null);
 
         MateClawException ex = assertThrows(MateClawException.class,

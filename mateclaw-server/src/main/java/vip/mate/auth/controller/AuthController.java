@@ -2,6 +2,7 @@ package vip.mate.auth.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -9,9 +10,13 @@ import vip.mate.auth.model.AccountStatusResponse;
 import vip.mate.auth.model.LoginRequest;
 import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
+import vip.mate.auth.model.SendCodeRequest;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AccountEntitlementService;
 import vip.mate.auth.service.AuthService;
+import vip.mate.auth.sms.VerificationCodeService;
+import vip.mate.auth.support.ClientIp;
+import vip.mate.auth.support.PhoneNumbers;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireGlobalAdmin;
@@ -31,6 +36,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final AccountEntitlementService accountEntitlementService;
+    private final VerificationCodeService verificationCodeService;
 
     @Operation(summary = "用户登录")
     @PostMapping("/login")
@@ -42,6 +48,20 @@ public class AuthController {
     @PostMapping("/register")
     public R<LoginResponse> register(@RequestBody RegisterRequest request) {
         return R.ok(authService.register(request));
+    }
+
+    @Operation(summary = "发送注册验证码")
+    @PostMapping("/send-register-code")
+    public R<Void> sendRegisterCode(@RequestBody SendCodeRequest request, HttpServletRequest httpRequest) {
+        String phone = PhoneNumbers.normalize(request != null ? request.getPhone() : null);
+        if (!PhoneNumbers.isValid(phone)) {
+            throw new MateClawException("err.auth.invalid_phone", 400, "手机号格式不正确");
+        }
+        if (authService.isPhoneRegistered(phone)) {
+            throw new MateClawException("err.auth.username_exists", 409, "该手机号已注册，请直接登录");
+        }
+        verificationCodeService.sendRegisterCode(phone, ClientIp.from(httpRequest));
+        return R.ok();
     }
 
     @Operation(summary = "获取当前账号状态")

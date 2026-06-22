@@ -55,8 +55,9 @@ public class ModelProviderService {
             "dashscope-default", "dashscope-compat-default", "deepseek-default");
 
     /**
-     * 新工作区注册时种子化的云端 provider 白名单（仅托管「默认版」）。本地 provider
-     * （is_local=TRUE）始终保留；其余所有云端 provider 一律不种子化给新用户。
+     * 新工作区注册时「默认启用」并注入平台 key 的云端 provider。其余 provider（含
+     * dashscope-compat-default、所有其它云端、本地）均会被种子化进新工作区并显示在
+     * 「添加提供商」目录里，但默认禁用——用户自行启用并填写自己的 key。
      */
     static final java.util.Set<String> REGISTRATION_CLOUD_PROVIDER_IDS = java.util.Set.of(
             "dashscope-default", "deepseek-default");
@@ -434,18 +435,13 @@ public class ModelProviderService {
                         .orderByDesc(ModelProviderEntity::getIsLocal)
                         .orderByAsc(ModelProviderEntity::getIsCustom)
                         .orderByAsc(ModelProviderEntity::getName));
-        java.util.Set<String> keptProviderIds = new java.util.LinkedHashSet<>();
+        // 全部 provider 都种子化（都会显示在「添加提供商」目录里）；启用策略见
+        // copyProviderForWorkspace/applyRegistrationDefaultProviderKey：只有两个托管默认版默认启用。
         for (ModelProviderEntity template : templates) {
-            if (!shouldSeedForRegistration(template)) {
-                continue;
-            }
-            ModelProviderEntity copy = copyProviderForWorkspace(template, workspaceId);
-            modelProviderMapper.insert(copy);
-            keptProviderIds.add(copy.getProviderId());
+            modelProviderMapper.insert(copyProviderForWorkspace(template, workspaceId));
         }
         providerTokenQuotaService.ensureDefaultQuotas(workspaceId);
-        modelConfigService.copyModelsToWorkspace(
-                ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId, keptProviderIds);
+        modelConfigService.copyModelsToWorkspace(ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId);
         // Hand the freshly-seeded (enabled + default-keyed) providers to ProviderInitProbe.
         // Without this they stay Liveness.UNPROBED ("检测中") until an app restart, because the
         // init probe only runs on ApplicationReadyEvent or this event. ProviderInitProbe listens
@@ -460,13 +456,6 @@ public class ModelProviderService {
             throw new MateClawException("err.llm.provider_not_found", "Provider 不存在: " + providerId);
         }
         return provider;
-    }
-
-    /** 注册种子白名单：本地 provider 全留；云端只留托管默认版。 */
-    private boolean shouldSeedForRegistration(ModelProviderEntity template) {
-        return Boolean.TRUE.equals(template.getIsLocal())
-                || (template.getProviderId() != null
-                    && REGISTRATION_CLOUD_PROVIDER_IDS.contains(template.getProviderId()));
     }
 
     private ModelProviderEntity copyProviderForWorkspace(ModelProviderEntity template, Long workspaceId) {
@@ -489,7 +478,6 @@ public class ModelProviderService {
         copy.setRequireApiKey(template.getRequireApiKey());
         copy.setAuthType(template.getAuthType());
         copy.setFallbackPriority(template.getFallbackPriority());
-        copy.setEnabled(template.getEnabled());
         applyRegistrationDefaultProviderKey(copy);
         return copy;
     }
@@ -519,17 +507,22 @@ public class ModelProviderService {
         }
     }
 
+    /**
+     * 注册种子化的启用策略：只有 {@link #REGISTRATION_CLOUD_PROVIDER_IDS} 里的两个托管默认版
+     * 云端 provider 默认启用并注入配置文件平台 key；其余 provider（含 dashscope-compat-default、
+     * 所有其它云端、本地）一律默认禁用，用户在「添加提供商」目录里自行启用并填写自己的 key。
+     */
     private void applyRegistrationDefaultProviderKey(ModelProviderEntity copy) {
-        String defaultKey = defaultProviderKey(copy.getProviderId());
-        if (!StringUtils.hasText(defaultKey)) {
-            return;
+        String key = copy.getProviderId() != null
+                && REGISTRATION_CLOUD_PROVIDER_IDS.contains(copy.getProviderId())
+                ? managedDefaultKeyFor(copy.getProviderId())
+                : null;
+        if (StringUtils.hasText(key)) {
+            copy.setApiKey(key.trim());
+            copy.setEnabled(true);
+        } else {
+            copy.setEnabled(false);
         }
-        copy.setApiKey(defaultKey.trim());
-        copy.setEnabled(true);
-    }
-
-    private String defaultProviderKey(String providerId) {
-        return managedDefaultKeyFor(providerId);
     }
 
     /**

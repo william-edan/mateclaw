@@ -294,16 +294,6 @@ public class ModelConfigService {
     }
 
     public void copyModelsToWorkspace(Long sourceWorkspaceId, Long targetWorkspaceId) {
-        copyModelsToWorkspace(sourceWorkspaceId, targetWorkspaceId, null);
-    }
-
-    /**
-     * 复制源工作区模型到目标工作区。{@code allowedProviderIds} 非空时只复制 provider
-     * 在该集合内的模型（用于注册种子化只保留白名单 provider 的模型，避免产生指向
-     * 未种子化 provider 的孤儿模型）；为 {@code null} 时复制全部（旧行为）。
-     */
-    public void copyModelsToWorkspace(Long sourceWorkspaceId, Long targetWorkspaceId,
-                                      java.util.Set<String> allowedProviderIds) {
         if (sourceWorkspaceId == null || targetWorkspaceId == null || sourceWorkspaceId.equals(targetWorkspaceId)) {
             return;
         }
@@ -319,9 +309,6 @@ public class ModelConfigService {
                 .orderByAsc(ModelConfigEntity::getProvider)
                 .orderByAsc(ModelConfigEntity::getName));
         for (ModelConfigEntity template : templates) {
-            if (allowedProviderIds != null && !allowedProviderIds.contains(template.getProvider())) {
-                continue;
-            }
             modelConfigMapper.insert(copyModelForWorkspace(template, targetWorkspaceId));
         }
     }

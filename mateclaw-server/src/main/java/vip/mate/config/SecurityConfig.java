@@ -57,6 +57,7 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/v1/auth/login",
                     "/api/v1/auth/register",
+                    "/api/v1/auth/send-register-code",
                     "/api/v1/agents/*/chat/stream",
                     "/api/v1/chat/stream",
                     "/api/v1/chat/*/stop",

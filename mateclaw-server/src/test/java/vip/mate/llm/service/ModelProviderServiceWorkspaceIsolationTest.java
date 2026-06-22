@@ -29,6 +29,7 @@ import vip.mate.llm.repository.ModelProviderMapper;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -111,48 +112,54 @@ class ModelProviderServiceWorkspaceIsolationTest {
     }
 
     @Test
-    void seedWorkspaceModelsFiltersToManagedDefaultsAndLocalProviders() {
-        // 新设计：注册种子化只保留本地 provider + 托管默认版（dashscope-default / deepseek-default）；
-        // 原版 dashscope、其它云端 openai 一律不种子化。
+    void seedWorkspaceModelsSeedsAllProvidersButEnablesOnlyManagedDefaults() {
+        // 新设计：全部 provider 都种子化进新工作区（都显示在「添加提供商」目录里）；
+        // 注册时只有 dashscope-default / deepseek-default 默认启用+注入平台 key，
+        // 其余（含 dashscope-compat-default、原版云端、其它云端、本地）一律默认禁用。
         when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of())
                 .thenReturn(List.of(
                         provider("dashscope-default", 1L, ""),
                         provider("deepseek-default", 1L, ""),
-                        provider("dashscope", 1L, ""),       // 原版云端 → 不种子
-                        providerLocal("ollama", 1L),         // 本地 → 保留
-                        provider("openai", 1L, ""),          // 其它云端 → 不种子
-                        provider("dashscope-compat-default", 1L, ""))); // 受管但注册不种子 → 应被过滤
+                        provider("dashscope", 1L, ""),                  // 原版云端 → 种子但禁用
+                        providerLocal("ollama", 1L),                    // 本地 → 种子但禁用
+                        provider("openai", 1L, ""),                     // 其它云端 → 种子但禁用
+                        provider("dashscope-compat-default", 1L, ""))); // 受管但注册不默认启用 → 种子但禁用
 
         service.seedWorkspaceModels(20L);
 
         @SuppressWarnings("unchecked")
         org.mockito.ArgumentCaptor<ModelProviderEntity> captor =
                 org.mockito.ArgumentCaptor.forClass(ModelProviderEntity.class);
-        verify(providerMapper, times(3)).insert(captor.capture());
+        verify(providerMapper, times(6)).insert(captor.capture());
         List<ModelProviderEntity> copies = captor.getAllValues();
 
-        assertEquals(java.util.Set.of("dashscope-default", "deepseek-default", "ollama"),
+        assertEquals(java.util.Set.of("dashscope-default", "deepseek-default", "dashscope",
+                        "ollama", "openai", "dashscope-compat-default"),
                 copies.stream().map(ModelProviderEntity::getProviderId)
                         .collect(java.util.stream.Collectors.toSet()),
-                "注册种子只保留本地 provider + 两个默认版云端");
+                "全部 provider 都应种子化进新工作区");
 
+        // 两个默认版：启用 + 注入平台 key
         ModelProviderEntity dashscopeDefault = copyByProvider(copies, "dashscope-default");
         assertEquals(20L, dashscopeDefault.getWorkspaceId());
         assertEquals("sk-test-dashscope-default", dashscopeDefault.getApiKey());
         assertTrue(dashscopeDefault.getEnabled());
 
         ModelProviderEntity deepseekDefault = copyByProvider(copies, "deepseek-default");
-        assertEquals(20L, deepseekDefault.getWorkspaceId());
         assertEquals("sk-test-deepseek-default", deepseekDefault.getApiKey());
         assertTrue(deepseekDefault.getEnabled());
 
-        // 模型复制按实际保留的 provider 集合过滤
+        // 其余全部默认禁用（含受管的 compat-default）
+        assertFalse(copyByProvider(copies, "dashscope-compat-default").getEnabled(),
+                "DashScope 兼容模式默认版应种子但默认禁用，不随两个默认版一起启用");
+        assertFalse(copyByProvider(copies, "dashscope").getEnabled());
+        assertFalse(copyByProvider(copies, "openai").getEnabled());
+        assertFalse(copyByProvider(copies, "ollama").getEnabled());
+
+        // 模型复制为全量（无 provider 过滤）
         verify(modelConfigService).copyModelsToWorkspace(
-                org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq(20L),
-                org.mockito.ArgumentMatchers.eq(
-                        java.util.Set.of("dashscope-default", "deepseek-default", "ollama")));
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(20L));
 
         verify(quotaService).ensureDefaultQuotas(20L);
     }

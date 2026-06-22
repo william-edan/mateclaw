@@ -16,6 +16,8 @@ import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.repository.UserMapper;
+import vip.mate.auth.sms.VerificationCodeService;
+import vip.mate.auth.support.PhoneNumbers;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
@@ -25,7 +27,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * 认证服务（JWT）
@@ -37,13 +38,11 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private static final String FIXED_REGISTER_CODE = "888888";
-    private static final Pattern PHONE_PATTERN = Pattern.compile("^\\+?\\d{6,20}$");
-
     private final UserMapper userMapper;
     private final BCryptPasswordEncoder passwordEncoder;
     private final WorkspaceService workspaceService;
     private final AccountEntitlementService accountEntitlementService;
+    private final VerificationCodeService verificationCodeService;
 
     @Value("${mateclaw.jwt.secret:MateClaw-Secret-Key-2024-Very-Long-String}")
     private String jwtSecret;
@@ -70,49 +69,61 @@ public class AuthService {
         return loginResponse(user, token, resolveCurrentWorkspaceId(user.getId()));
     }
 
-    /**
-     * 手机号注册。验证码临时固定为 888888，手机号作为 username 保存。
-     */
+    /** 手机号注册：发送的验证码经 VerificationCodeService 校验并一次性消费，手机号作为 username 保存。 */
     @Transactional
     public LoginResponse register(RegisterRequest request) {
-        String phone = normalizePhone(request != null ? request.getPhone() : null);
-        if (!PHONE_PATTERN.matcher(phone).matches()) {
+        String phone = PhoneNumbers.normalize(request != null ? request.getPhone() : null);
+        if (!PhoneNumbers.isValid(phone)) {
             throw new MateClawException("err.auth.invalid_phone", 400, "手机号格式不正确");
-        }
-        if (!FIXED_REGISTER_CODE.equals(request.getCode())) {
-            throw new MateClawException("err.auth.invalid_verification_code", 400, "验证码错误");
         }
         if (request.getPassword() == null || request.getPassword().isBlank()) {
             throw new MateClawException("err.auth.password_required", 400, "Password is required");
         }
 
+        // 重复手机号检查前移到验证码消费之前，避免为注定失败的注册白消耗验证码
         Long count = userMapper.selectCount(new LambdaQueryWrapper<UserEntity>()
                 .eq(UserEntity::getUsername, phone));
         if (count > 0) {
             throw new MateClawException("err.auth.username_exists", 409, "手机号已注册: " + phone);
         }
 
-        UserEntity user = new UserEntity();
-        user.setUsername(phone);
-        user.setPassword(passwordEncoder.encode(request.getPassword().trim()));
-        user.setNickname(request.getNickname() == null || request.getNickname().isBlank()
-                ? phone
-                : request.getNickname().trim());
-        user.setRole("user");
-        user.setEnabled(true);
-        user.setExpiresAt(LocalDateTime.now().plusDays(30));
+        // 校验并一次性消费验证码（命中即删除，防重放）
+        verificationCodeService.verifyAndConsume(phone, request.getCode());
+
         try {
-            userMapper.insert(user);
-        } catch (DuplicateKeyException e) {
-            throw new MateClawException("err.auth.username_exists", 409, "手机号已注册: " + phone);
+            UserEntity user = new UserEntity();
+            user.setUsername(phone);
+            user.setPassword(passwordEncoder.encode(request.getPassword().trim()));
+            user.setNickname(request.getNickname() == null || request.getNickname().isBlank()
+                    ? phone
+                    : request.getNickname().trim());
+            user.setRole("user");
+            user.setEnabled(true);
+            user.setExpiresAt(LocalDateTime.now().plusDays(30));
+            try {
+                userMapper.insert(user);
+            } catch (DuplicateKeyException e) {
+                throw new MateClawException("err.auth.username_exists", 409, "手机号已注册: " + phone);
+            }
+
+            WorkspaceEntity workspace = new WorkspaceEntity();
+            workspace.setName(user.getNickname() + " Workspace");
+            WorkspaceEntity createdWorkspace = workspaceService.create(workspace, user.getId());
+
+            String token = generateToken(user);
+            return loginResponse(user, token, createdWorkspace != null ? createdWorkspace.getId() : null);
+        } catch (RuntimeException e) {
+            // 验证码已消费但注册业务失败：释放重发锁，允许用户立即重新获取验证码
+            verificationCodeService.releaseSendLock(phone);
+            throw e;
         }
+    }
 
-        WorkspaceEntity workspace = new WorkspaceEntity();
-        workspace.setName(user.getNickname() + " Workspace");
-        WorkspaceEntity createdWorkspace = workspaceService.create(workspace, user.getId());
-
-        String token = generateToken(user);
-        return loginResponse(user, token, createdWorkspace != null ? createdWorkspace.getId() : null);
+    /** 手机号是否已注册（username 即手机号）。 */
+    public boolean isPhoneRegistered(String phone) {
+        Long count = userMapper.selectCount(new LambdaQueryWrapper<UserEntity>()
+                .eq(UserEntity::getUsername, phone));
+        return count != null && count > 0;
     }
 
     private LoginResponse loginResponse(UserEntity user, String token, Long currentWorkspaceId) {
@@ -316,10 +327,4 @@ public class AuthService {
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    private String normalizePhone(String phone) {
-        if (phone == null) {
-            return "";
-        }
-        return phone.trim().replaceAll("[\\s-]", "");
-    }
 }
