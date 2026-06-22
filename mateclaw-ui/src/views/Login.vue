@@ -55,17 +55,27 @@
             />
           </div>
 
-          <div class="input-wrap">
+          <div class="input-wrap code-wrap">
             <input
               v-model="registerForm.code"
               type="text"
               inputmode="numeric"
+              maxlength="6"
               class="form-input"
               :placeholder="t('login.placeholders.code')"
               :aria-label="t('login.fields.code')"
               autocomplete="one-time-code"
               required
+              @input="onCodeInput"
             />
+            <button
+              type="button"
+              class="code-btn"
+              :disabled="codeCountdown > 0 || sendingCode"
+              @click="handleSendCode"
+            >
+              {{ codeCountdown > 0 ? t('login.resendIn', { n: codeCountdown }) : t('login.getCode') }}
+            </button>
           </div>
 
           <div class="input-wrap">
@@ -118,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { authApi } from '@/api/index'
@@ -135,7 +145,51 @@ const showPassword = ref(false)
 const errorMsg = ref('')
 const mode = ref<'login' | 'register'>('login')
 const form = reactive({ username: '', password: '' })
-const registerForm = reactive({ phone: '', code: '888888', password: '', nickname: '' })
+const registerForm = reactive({ phone: '', code: '', password: '', nickname: '' })
+
+const sendingCode = ref(false)
+const codeCountdown = ref(0)
+let codeTimer: ReturnType<typeof setInterval> | undefined
+
+function onCodeInput(e: Event) {
+  const el = e.target as HTMLInputElement
+  const digits = el.value.replace(/\D/g, '').slice(0, 6)
+  registerForm.code = digits
+  el.value = digits
+}
+
+function startCodeCountdown(seconds: number) {
+  codeCountdown.value = seconds
+  if (codeTimer) clearInterval(codeTimer)
+  codeTimer = setInterval(() => {
+    codeCountdown.value -= 1
+    if (codeCountdown.value <= 0 && codeTimer) {
+      clearInterval(codeTimer)
+      codeTimer = undefined
+    }
+  }, 1000)
+}
+
+async function handleSendCode() {
+  if (!registerForm.phone) {
+    errorMsg.value = t('login.placeholders.phone')
+    return
+  }
+  sendingCode.value = true
+  errorMsg.value = ''
+  try {
+    await authApi.sendRegisterCode({ phone: registerForm.phone })
+    startCodeCountdown(60)
+  } catch (e: any) {
+    errorMsg.value = e?.message || t('login.sendCodeFailed')
+  } finally {
+    sendingCode.value = false
+  }
+}
+
+onBeforeUnmount(() => {
+  if (codeTimer) clearInterval(codeTimer)
+})
 
 const activePassword = computed({
   get: () => mode.value === 'login' ? form.password : registerForm.password,
@@ -317,6 +371,34 @@ html.dark .login-page {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+.code-wrap {
+  gap: 8px;
+}
+
+.code-wrap .form-input {
+  flex: 1;
+}
+
+.code-btn {
+  flex: 0 0 auto;
+  height: 48px;
+  padding: 0 14px;
+  border: 1.5px solid var(--mc-border);
+  border-radius: 12px;
+  background: var(--mc-bg-elevated);
+  color: var(--mc-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s, border-color 0.2s;
+}
+
+.code-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .form-input {

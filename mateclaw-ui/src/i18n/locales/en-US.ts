@@ -2797,6 +2797,10 @@ export default {
     hint: 'Default: <code>admin</code> / <code>admin123</code>',
     failed: 'Login failed. Please check your credentials.',
     registerFailed: 'Registration failed. Please check your phone and code.',
+    getCode: 'Get code',
+    resendIn: 'Retry in {n}s',
+    codeSent: 'Code sent',
+    sendCodeFailed: 'Failed to send code, please try again later',
   },
   enterprise: {
     eyebrow: 'Enterprise',
