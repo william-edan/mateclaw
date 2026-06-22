@@ -262,9 +262,10 @@ function onOpenCase(id: string) {
   line-height: 1.6;
 }
 .business-qr {
+  display: block;
   width: 180px;
   height: 180px;
   object-fit: contain;
-  margin-top: 12px;
+  margin: 12px auto 0;
 }
 </style>
