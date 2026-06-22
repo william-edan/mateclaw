@@ -85,4 +85,12 @@ class InMemoryVerificationCodeStoreTest {
         store.decrementWindow("k", Duration.ofMinutes(1));
         assertEquals(2, store.incrementWindow("k", Duration.ofMinutes(1)));
     }
+
+    @Test
+    void putCodeOverwritesPreviousCode() {
+        store.putCode("p", "111111", Duration.ofSeconds(300));
+        store.putCode("p", "222222", Duration.ofSeconds(300));
+        assertEquals(VerifyOutcome.MISMATCH, store.verifyAndConsume("p", "111111", 5));
+        assertEquals(VerifyOutcome.OK, store.verifyAndConsume("p", "222222", 5));
+    }
 }

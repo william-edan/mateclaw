@@ -1,5 +1,6 @@
 package vip.mate.auth.sms;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * @author MateClaw Team
  */
+@Slf4j
 @Component
 public class InMemoryVerificationCodeStore implements VerificationCodeStore {
 
@@ -20,7 +22,7 @@ public class InMemoryVerificationCodeStore implements VerificationCodeStore {
 
     private static final class CodeEntry {
         final String code;
-        int attempts;
+        int attempts; // 仅在 codes.compute 内读写（CHM 提供 happens-before），勿在 compute 外访问
         final long expiresAtMs;
 
         CodeEntry(String code, long expiresAtMs) {
@@ -32,7 +34,7 @@ public class InMemoryVerificationCodeStore implements VerificationCodeStore {
 
     private static final class Window {
         final long startMs;
-        int count;
+        int count; // 仅在 windows.compute 内读写，勿在 compute 外访问
 
         Window(long startMs) {
             this.startMs = startMs;
@@ -150,8 +152,14 @@ public class InMemoryVerificationCodeStore implements VerificationCodeStore {
     @Scheduled(fixedDelay = 300_000L)
     void sweepExpired() {
         long now = clock.millis();
+        int before = codes.size() + locks.size() + windows.size();
         codes.entrySet().removeIf(en -> en.getValue().expiresAtMs <= now);
         locks.entrySet().removeIf(en -> en.getValue() <= now);
         windows.entrySet().removeIf(en -> now - en.getValue().startMs >= WINDOW_SWEEP_MAX_AGE_MS);
+        int removed = before - (codes.size() + locks.size() + windows.size());
+        if (removed > 0) {
+            log.debug("[SMS-Store] swept {} expired entries (codes={} locks={} windows={})",
+                    removed, codes.size(), locks.size(), windows.size());
+        }
     }
 }
