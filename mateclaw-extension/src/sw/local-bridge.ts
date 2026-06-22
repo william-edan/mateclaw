@@ -22,8 +22,11 @@
 // What is KEPT:
 //   - The same public surface (connect/send/onMessage/onDisconnect/
 //     onStateChange/disconnect + `connected`) so index.ts stays transport-agnostic.
-//   - The MV3 keep-alive tick (the loopback socket lives in the offscreen doc, so
-//     this is belt-and-braces; harmless and consistent with the other transports).
+//   - The MV3 keep-alive tick — now LOAD-BEARING (SW-direct: the socket lives in
+//     the SW, not an offscreen doc). It starts the moment we begin connecting
+//     (not just after OPEN) and runs across reconnect gaps, resetting the ~30s SW
+//     idle timer so the tight reconnect below survives long enough to reach a
+//     bridge that starts AFTER the extension (the "装完扩展再开服务" cold-start).
 //   - Auto-reconnect on unexpected close, but with TIGHTER backoff (100ms → 2s):
 //     the bridge is local and (when resident) effectively always up, so we
 //     reconnect aggressively rather than the WSS 1s→30s curve.
@@ -68,9 +71,11 @@ const BACKOFF_BASE_MS = 100
 const BACKOFF_CAP_MS = 2_000
 
 /**
- * MV3 keep-alive cadence — identical to the other transports. The loopback
- * socket actually lives in the offscreen document (not the SW), so this tick is
- * belt-and-braces; kept for consistency and so a direct-in-SW use never regresses.
+ * MV3 keep-alive cadence. The loopback socket is held DIRECTLY by the SW (no
+ * offscreen), so this tick is load-bearing: started at connect time and kept
+ * running across reconnect gaps, it resets the ~30s SW idle timer every 20s so
+ * the fast reconnect survives long enough to catch a bridge that comes up after
+ * the extension. 20s < 30s idle on purpose.
  */
 const KEEPALIVE_INTERVAL_MS = 20_000
 
@@ -168,6 +173,12 @@ export class LocalBridgeClient {
     // connection, 契约5.)
     this.upstreamConnected = false
     this.emitState('connecting')
+    // 关键(冷启时序):连接/重连阶段就开始 keepalive,维持 SW 存活,让 100ms→2s 快速重连
+    // 能一直跑到 bridge 出现。SW-direct 下 socket 在 SW 里,SW 被回收=重连定时器消失;若只在
+    // onopen 才 keepalive,bridge 比扩展晚起时 SW 会先被回收,只能等 30s alarm(="先装扩展
+    // 再开服务要等一会儿")。openSocket 每次重连都会到此,startKeepAlive 自带去重(先 stop
+    // 再起),不会叠定时器。
+    this.startKeepAlive()
 
     // No subprotocols / no bearer: loopback auth is by Origin (契约2).
     const ws = new this.WebSocketImpl(this.serverUrl)
@@ -234,15 +245,20 @@ export class LocalBridgeClient {
   }
 
   private handleClose(): void {
-    this.stopKeepAlive()
     this.ws = null
     // Local segment down ⇒ we no longer know the backend's health from here.
     this.upstreamConnected = false
     this.emitState('closed')
     this.disconnectCbs.forEach(cb => cb())
-    if (!this.intentionalClose) {
-      this.scheduleReconnect()
+    if (this.intentionalClose) {
+      // 主动断开:停掉 keepalive,放 SW 回收(disconnect() 已 clearTimers,这里兜底)。
+      this.stopKeepAlive()
+      return
     }
+    // 自动重连:【不】停 keepalive —— 连接中/重连阶段也要维持 SW 存活,否则 SW 会在
+    // bridge 起来前被回收,100ms→2s 快速重连随之消失,只能等 30s keepalive alarm
+    // (就是"先装扩展、再开服务要等一会儿/必须 reload 才连上"的根因)。
+    this.scheduleReconnect()
   }
 
   private scheduleReconnect(): void {

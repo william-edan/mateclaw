@@ -287,6 +287,12 @@ async function connectDirect(serverUrl: string, pat: string): Promise<void> {
  * SW-direct.
  */
 function connectResidentLocal(): void {
+  // 幂等(去 30s keepalive-alarm 抖动):活着的 SW 上若已持有 LocalBridgeClient,它自带
+  // 100ms→2s 自重连 + keepalive 维持 SW 存活——绝不能在每次 alarm 唤醒(30s)时把一条健康
+  // 的本地连接 disconnect 掉重建(会瞬断、丢在途 action 帧,甚至打断正在跑的任务)。SW 被
+  // 回收后重生时,顶层模块会把 activeBridge 置回 null,那时才需要重建一个新的。
+  if (activeBridge instanceof LocalBridgeClient) return
+
   bridgeUnsub?.()
   bridgeUnsub = null
   if (activeBridge && 'disconnect' in activeBridge) {
