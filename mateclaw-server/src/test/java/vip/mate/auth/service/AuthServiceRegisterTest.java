@@ -228,6 +228,7 @@ class AuthServiceRegisterTest {
 
         assertEquals("err.auth.username_exists", ex.getMsgKey());
         verifyNoInteractions(workspaceService);
+        verify(verificationCodeService).releaseSendLock("13800138000");
     }
 
     @Test
@@ -280,7 +281,7 @@ class AuthServiceRegisterTest {
     private RegisterRequest validRequest() {
         RegisterRequest request = new RegisterRequest();
         request.setPhone("13800138000");
-        request.setCode("888888");
+        request.setCode("888888"); // 值无意义：verifyAndConsume 在单测里是 no-op mock
         request.setPassword("pass1234");
         return request;
     }
