@@ -22,5 +22,7 @@ class SmsPropertiesTest {
         assertEquals("dysmsapi.aliyuncs.com", p.getAliyun().getEndpoint());
         assertEquals("迪伍科技", p.getAliyun().getSignName());
         assertEquals("SMS_508735089", p.getAliyun().getTemplateCode());
+        assertEquals("", p.getAliyun().getAccessKeyId());
+        assertEquals("", p.getAliyun().getAccessKeySecret());
     }
 }

@@ -141,8 +141,8 @@ mateclaw:
       access-key-id: ${ALIYUN_SMS_AK:}              # 仅环境变量，禁止入库
       access-key-secret: ${ALIYUN_SMS_SK:}          # 仅环境变量，禁止入库
       endpoint: dysmsapi.aliyuncs.com
-      sign-name: 迪伍科技
-      template-code: SMS_508735089
+      sign-name: ${ALIYUN_SMS_SIGN_NAME:迪伍科技}
+      template-code: ${ALIYUN_SMS_TEMPLATE_CODE:SMS_508735089}
   # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
   mcp:

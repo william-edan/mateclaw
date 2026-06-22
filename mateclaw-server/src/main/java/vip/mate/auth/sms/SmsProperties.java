@@ -39,7 +39,7 @@ public class SmsProperties {
     /** 全平台滚动 60s 发送上限（账单熔断）。 */
     private int globalLimitPerMinute = 200;
 
-    private final Aliyun aliyun = new Aliyun();
+    private Aliyun aliyun = new Aliyun();
 
     @Data
     public static class Aliyun {
