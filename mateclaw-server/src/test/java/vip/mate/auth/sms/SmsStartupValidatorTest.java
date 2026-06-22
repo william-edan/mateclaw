@@ -47,4 +47,11 @@ class SmsStartupValidatorTest {
         SmsStartupValidator v = new SmsStartupValidator(p, env("dev"));
         assertDoesNotThrow(v::afterPropertiesSet);
     }
+
+    @Test
+    void mockFalseWithEmptyKeysFailsFastOnNonProd() {
+        SmsProperties p = new SmsProperties();
+        SmsStartupValidator v = new SmsStartupValidator(p, env("dev"));
+        assertThrows(IllegalStateException.class, v::afterPropertiesSet);
+    }
 }
