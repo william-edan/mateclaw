@@ -39,6 +39,22 @@ const NATIVE_HOST_REGISTRY_BRANCHES = [
 // already-listening server on the target port is actually our backend before reusing it.
 const IDENTITY_PROBE_PATH = '/api/v1/setup/status'
 
+// 契约 4(常驻 bridge feature-flag,默认 OFF / 保底回退)。
+// 仅当 MATECLAW_RESIDENT_BRIDGE 显式为 '1' / 'true'(大小写不敏感)时,桌面壳才会:
+//   - 在后端就绪后常驻拉起 bridge.exe(`run --resident`),由它在本地 loopback(组1:
+//     ws://127.0.0.1:18077)上服务扩展,根除 Chrome 经 Native Messaging 旁路拉起 bridge;
+//   - 跳过 / 清除 Native Messaging host 注册(否则 Chrome 仍会按 manifest 自行拉起一个
+//     竞争的 bridge 实例)。
+// flag OFF(默认)时本文件行为与今天【完全一致】:不拉常驻 bridge、照常
+// ensureNativeHostRegistered() 注册原生桥、走现有 direct/native 路径。纯增量、零回归。
+const RESIDENT_BRIDGE_ENV = 'MATECLAW_RESIDENT_BRIDGE'
+function isResidentBridgeEnabled(): boolean {
+  // 默认 ON(根治:桌面常驻 bridge 锚)。仅当显式设 MATECLAW_RESIDENT_BRIDGE=0/false/no/off
+  // 时才回退到旧 native 路(出问题的应急开关);未设/空=ON。
+  const raw = (process.env[RESIDENT_BRIDGE_ENV] ?? '').trim().toLowerCase()
+  return !(raw === '0' || raw === 'false' || raw === 'no' || raw === 'off')
+}
+
 // serverOwnedByDesktop: true only while we own a backend child we spawned ourselves.
 // intentionalShutdown: set in before-quit so the child 'exit' handler can distinguish a
 // user-initiated quit from a crash (the latter triggers auto-restart with backoff).
@@ -49,6 +65,15 @@ let serverOwnedByDesktop = false
 let intentionalShutdown = false
 let backendRestartAttempts = 0
 const MAX_BACKEND_RESTART_ATTEMPTS = 5
+
+// 常驻 bridge 子进程状态(仅在 feature-flag ON 时使用),与后端进程对称。
+// bridgeOwnedByDesktop:仅当我们自己拉起的常驻 bridge 仍在运行时为 true。
+// intentionalShutdown 标志在 bridge 与 backend 之间【复用】——before-quit 一次置位即可
+// 让两个 exit 处理器都把随后的退出识别为"用户主动退出"而非崩溃。
+let bridgeProcess: ChildProcess | null = null
+let bridgeOwnedByDesktop = false
+let bridgeRestartAttempts = 0
+const MAX_BRIDGE_RESTART_ATTEMPTS = 5
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -492,6 +517,138 @@ function bridgeExecutablePath(): string {
 }
 
 /**
+ * 常驻拉起 bridge.exe(契约 4,仅 feature-flag ON 时调用)。镜像 startBackend 的进程骨架:
+ *   - `run --resident`:显式 run 子命令(bridge decideMode 第 2 优先级,稳定走 run 路径),
+ *     --resident 让 bridge 在本地 loopback(组1:ws://127.0.0.1:18077)开 WS server 长驻,
+ *     而不是当一次性 Native Messaging host(组1 负责识别该 flag;桌面侧只负责按约定传参)。
+ *   - stdio: ['ignore', out, err]:【命脉】stdin=ignore。常驻模式下扩展不再经 stdin 喂帧,
+ *     bridge 改从 loopback 收发;若给 stdin 接管道反而会让 Runner 的 stdin 读到 EOF 而误判收尾。
+ *   - cwd + 日志:落到 userData/logs/bridge.{out,err}.log,与后端日志同目录,便于 Doctor 排障。
+ *   - windowsHide: true:不弹黑窗。
+ *
+ * 时序:由调用方(boot)保证在 ensureBackend 成功(且 bridge.yaml 已由 DesktopBridgeProvisioner
+ * 写出)之后才调用,避免 bridge 进 NO_TOKEN 空轮询。即便 bridge.yaml 略有延迟,bridge 自带
+ * waitForToken 有界轮询(60s)兜底,不会立即自杀。
+ */
+function startBridge(): void {
+  const exe = bridgeExecutablePath()
+  if (!fs.existsSync(exe)) {
+    // 常驻模式下 bridge.exe 缺失 = 扩展彻底连不上。非致命(后端/界面仍可用),走非阻断警告。
+    reportStartupWarning(
+      '常驻浏览器桥(bridge.exe)缺失,可能被杀毒软件拦截或安装不完整。' +
+        '浏览器自动配对将无法工作,请将 化帆AI 安装目录加入杀软白名单后重新安装。',
+    )
+    return
+  }
+
+  const dataDir = userDataDir()
+  const logsDir = path.join(dataDir, 'logs')
+  fs.mkdirSync(logsDir, { recursive: true })
+
+  const out = fs.openSync(path.join(logsDir, 'bridge.out.log'), 'a')
+  const err = fs.openSync(path.join(logsDir, 'bridge.err.log'), 'a')
+
+  const child = spawn(exe, ['run', '--resident'], {
+    cwd: dataDir,
+    env: {
+      ...process.env,
+      MATECLAW_DESKTOP: 'true',
+    },
+    // 命脉:stdin=ignore。常驻 bridge 不经 stdin 收帧(改走 loopback),给管道会触发误 EOF 收尾。
+    stdio: ['ignore', out, err],
+    windowsHide: true,
+  })
+  bridgeProcess = child
+  bridgeOwnedByDesktop = true
+
+  // spawn 失败(ENOENT / 被杀软删)要可见,但属非致命:不调 reportFatalStartupError(那会弹拦截式
+  // 错误框、误导用户以为整个应用挂了)。常驻桥失败只影响扩展自动配对,走非阻断 startup-warning。
+  child.once('error', (spawnError) => {
+    const message =
+      `无法启动常驻浏览器桥:${spawnError instanceof Error ? spawnError.message : String(spawnError)}。` +
+      '浏览器自动配对将不可用,请确认安装完整(可尝试重新安装)。'
+    if (bridgeProcess === child) {
+      bridgeProcess = null
+      bridgeOwnedByDesktop = false
+    }
+    reportStartupWarning(message)
+  })
+
+  child.once('exit', (code, signal) => {
+    const wasOwned = bridgeOwnedByDesktop
+    bridgeProcess = null
+    bridgeOwnedByDesktop = false
+    // 复用 intentionalShutdown:用户主动退出时不重启;只有我们拥有的常驻 bridge 意外退出才补救。
+    if (!intentionalShutdown && wasOwned) {
+      console.warn(`[mateclaw] resident bridge exited unexpectedly (code=${code}, signal=${signal}); scheduling restart`)
+      void restartBridgeWithBackoff()
+    }
+  })
+}
+
+/**
+ * 强杀仍在运行的、由我们启动的常驻 bridge(用于退出 / 重启前清理)。先把 bridgeProcess
+ * 置空再杀,避免触发 exit 处理器的崩溃-重启逻辑(与 killStaleBackend 同构)。
+ */
+function killStaleBridge(): void {
+  const stale = bridgeProcess
+  bridgeProcess = null
+  bridgeOwnedByDesktop = false
+  if (stale && !stale.killed && stale.pid) {
+    if (os.platform() === 'win32') {
+      spawn('taskkill', ['/pid', String(stale.pid), '/T', '/F'], { windowsHide: true })
+    } else {
+      stale.kill('SIGTERM')
+    }
+  }
+}
+
+/**
+ * 常驻 bridge 崩溃守护(契约 4 / 5)。常驻 bridge 意外退出时按指数退避重启,最多
+ * {@link MAX_BRIDGE_RESTART_ATTEMPTS} 次。
+ *
+ * 关键边界(契约 5 — 生命周期硬隔离):此处只重启【桌面壳↔常驻 bridge 进程】这一层。
+ * "扩展↔loopback"的断开由 bridge 内部消化、绝不冒泡到这里;"bridge↔后端 WSS"的健康/重连
+ * 也完全在 bridge 进程内自洽。桌面壳只在【整个 bridge 进程】真的死掉时才补一个新进程,
+ * 不会因为某条 socket 抖动而误杀/误拉,从而不会向后端重发 HELLO、不触发 4409 单活替换。
+ *
+ * bridge 没有 HTTP 健康端点(它服务的是 WS loopback),无法像后端那样 waitForServer 探活;
+ * 因此这里以"重启后进程仍存活一小段时间"作为成功判据:若新进程在 STABLE_MS 内没有再次退出,
+ * 即视为恢复并清零预算。若进程一拉起就秒退(error/exit 把 bridgeProcess 清空),则进入下一次退避。
+ */
+async function restartBridgeWithBackoff(): Promise<void> {
+  const STABLE_MS = 5_000 // 新进程存活满 5s 视为稳定恢复
+  while (bridgeRestartAttempts < MAX_BRIDGE_RESTART_ATTEMPTS) {
+    if (intentionalShutdown) return // 应用退出中,放弃重启
+    bridgeRestartAttempts += 1
+    const attempt = bridgeRestartAttempts
+    const delayMs = Math.min(30_000, 1000 * 2 ** (attempt - 1)) // 1s,2s,4s,8s,16s(封顶 30s)
+    console.warn(`[mateclaw] resident bridge restart attempt ${attempt}/${MAX_BRIDGE_RESTART_ATTEMPTS} in ${delayMs}ms`)
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    if (intentionalShutdown) return
+    // 防御性清理:若上一实例诡异残留(理论上 exit 已置空 bridgeProcess),先杀掉再拉新的,
+    // 保证全局只有一个常驻 bridge 占用 loopback 18077(契约 4 单实例)。
+    killStaleBridge()
+    startBridge()
+    // 等一小段时间看新进程是否站得住(startBridge 的 error/exit 会把 bridgeProcess 清空)。
+    await new Promise((resolve) => setTimeout(resolve, STABLE_MS))
+    if (intentionalShutdown) return
+    if (bridgeProcess && bridgeOwnedByDesktop) {
+      console.log(`[mateclaw] resident bridge restart attempt ${attempt} succeeded`)
+      bridgeRestartAttempts = 0 // 恢复,重置下一次崩溃的预算
+      return
+    }
+    console.warn(`[mateclaw] resident bridge restart attempt ${attempt} did not stay alive`)
+    // 循环继续下一次退避。
+  }
+  // 多次仍拉不起常驻桥:非致命(后端/界面可用),走非阻断警告,不弹拦截式错误框。
+  reportStartupWarning(
+    `常驻浏览器桥连续 ${MAX_BRIDGE_RESTART_ATTEMPTS} 次启动失败,已停止自动重启。` +
+      '浏览器自动配对暂不可用,请查看 bridge 日志后重启应用。',
+  )
+}
+
+/**
  * Registers the Chrome Native Messaging host so the bundled bridge.exe is reachable
  * the moment the desktop app is installed. Idempotent: rewrites the manifest and the
  * HKCU registry value on every boot, which is safe to repeat.
@@ -573,6 +730,51 @@ function ensureNativeHostRegistered(): void {
   }
 }
 
+/**
+ * 清除 Native Messaging host 注册(契约 4,仅 feature-flag ON 时调用)。
+ *
+ * 常驻 bridge 模式下,扩展改走桌面壳常驻的 loopback WS;若仍保留 HKCU\...\NativeMessagingHosts
+ * 注册项,Chrome 会在扩展 connectNative 时按 manifest【旁路再拉起一个】竞争的 bridge 实例,
+ * 与常驻实例抢后端 WSS(4409 单活替换、session 更替)。因此 ON 时把每个 Chromium 分支下的
+ * host 注册项删掉,根除 Chrome 旁路拉起。
+ *
+ * 与 ensureNativeHostRegistered 对称:Windows-only、每分支独立(reg delete 失败/键不存在
+ * 互不影响)、全程 best-effort 不阻断启动。保留磁盘上的 manifest 文件不动——它本身不会触发
+ * 拉起(触发拉起的是注册表项),且 flag 关回 off 时 ensureNativeHostRegistered 会重写它。
+ */
+function clearNativeHostRegistration(): void {
+  try {
+    if (process.platform !== 'win32') {
+      return
+    }
+    for (const branch of NATIVE_HOST_REGISTRY_BRANCHES) {
+      try {
+        const cmdLine = `reg delete "${branch.key}" /f`
+        const reg = spawn('cmd', ['/c', cmdLine], { windowsHide: true, windowsVerbatimArguments: true })
+        reg.on('error', (error) => {
+          console.warn(
+            `[native-host] ${branch.label} reg delete failed to launch: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+          )
+        })
+        reg.on('exit', (code) => {
+          // code 0 = 删除成功;非 0 多为"键本就不存在"(该浏览器未注册过),属正常。
+          if (code === 0) {
+            console.log(`[native-host] cleared ${branch.label} ${NATIVE_HOST_NAME} (resident bridge mode)`)
+          }
+        })
+      } catch (error) {
+        console.warn(
+          `[native-host] ${branch.label} clear error: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
+  } catch (error) {
+    console.warn(`[native-host] clear error: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function installMenu(port: number): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
@@ -628,7 +830,17 @@ async function boot(): Promise<void> {
   await app.whenReady()
   const port = resolvePort()
   installMenu(port)
-  ensureNativeHostRegistered()
+  // 契约 4(feature-flag,默认 OFF):
+  //   OFF → 照旧注册 Native Messaging host(保留现有 native/direct 回退路径,行为零变化)。
+  //   ON  → 不注册、且清除已有 host 注册项,根除 Chrome 经 Native Messaging 旁路拉起 bridge,
+  //         改由后端就绪后 startBridge 常驻一个 bridge 实例独占后端 WSS。
+  const residentBridge = isResidentBridgeEnabled()
+  if (residentBridge) {
+    console.log(`[mateclaw] resident bridge mode ENABLED (${RESIDENT_BRIDGE_ENV}); skipping native host registration`)
+    clearNativeHostRegistration()
+  } else {
+    ensureNativeHostRegistered()
+  }
   if (!app.isPackaged) {
     installMenu(port)
   } else if (process.platform !== 'darwin') {
@@ -638,6 +850,12 @@ async function boot(): Promise<void> {
 
   try {
     await ensureBackend(port)
+    // 契约 4 时序:仅在后端就绪(且 DesktopBridgeProvisioner 已能写出 bridge.yaml)之后,
+    // 且 feature-flag ON 时,才常驻拉起 bridge,避免它进 NO_TOKEN 空轮询。flag OFF 时此步
+    // 完全跳过,行为与今天一致。startBridge 自身失败仅发非阻断警告,不影响主界面加载。
+    if (residentBridge) {
+      startBridge()
+    }
     mainWindow = createMainWindow(port)
     await mainWindow.loadURL(localServerUrl(port))
   } catch (error) {
@@ -657,14 +875,24 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // Mark this as a deliberate shutdown so the child 'exit' handler does NOT treat the
-  // ensuing termination as a crash and try to auto-restart the backend.
+  // Mark this as a deliberate shutdown so the child 'exit' handlers (backend AND resident
+  // bridge) do NOT treat the ensuing termination as a crash and try to auto-restart.
+  // intentionalShutdown 是两者共用的同一个标志,这里一次置位即可同时压制两条重启路径。
   intentionalShutdown = true
   if (serverOwnedByDesktop && serverProcess && !serverProcess.killed) {
     if (os.platform() === 'win32') {
       spawn('taskkill', ['/pid', String(serverProcess.pid), '/T', '/F'], { windowsHide: true })
     } else {
       serverProcess.kill('SIGTERM')
+    }
+  }
+  // 追加杀常驻 bridge(仅 flag ON 时它才存在;OFF 时 bridgeOwnedByDesktop 恒为 false,
+  // 此分支整段不进入,行为与今天一致)。与后端同构:taskkill /T /F 连同子进程一起清。
+  if (bridgeOwnedByDesktop && bridgeProcess && !bridgeProcess.killed) {
+    if (os.platform() === 'win32') {
+      spawn('taskkill', ['/pid', String(bridgeProcess.pid), '/T', '/F'], { windowsHide: true })
+    } else {
+      bridgeProcess.kill('SIGTERM')
     }
   }
 })

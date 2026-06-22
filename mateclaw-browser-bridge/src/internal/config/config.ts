@@ -37,6 +37,39 @@ const DEFAULTS: Config = {
   heartbeatIntervalMs: 10000,
 }
 
+// ── 常驻 bridge loopback IPC 常量(连接根治:1 bridge 常驻 + loopback WS server)──────
+//
+// 跨组契约1:常驻模式下 bridge 在 ws://127.0.0.1:<LOOPBACK_PORT><LOOPBACK_PATH> 开一个
+// 本地 WS server,扩展的 offscreen/LocalBridgeClient(组3)连同一地址。帧格式复用现有
+// EdgeMessage JSON(与 direct-WSS 同),不发明新格式。
+//
+// 端口取 18077:与后端 18088 区隔但同段,便于记忆;固定常量(非可配),两端硬编码对齐。
+//
+// 仅监听 127.0.0.1(回环),外部网络无法访问;再叠加握手 Origin 校验(契约2)做双重收口。
+
+/** 常驻 bridge 的本地 loopback WS server 端口(契约1,组1定义,组3连同一端口)。 */
+export const LOOPBACK_PORT = 18077
+
+/** loopback WS server 的监听主机:仅回环,杜绝外部网络访问。 */
+export const LOOPBACK_HOST = '127.0.0.1'
+
+/** loopback WS server 的路径。扩展连 ws://127.0.0.1:18077/bridge。 */
+export const LOOPBACK_PATH = '/bridge'
+
+/**
+ * 允许连接 loopback server 的固定扩展 Origin(契约2)。
+ *
+ * Chrome 扩展发起 WS 连接时浏览器会自动带上 Origin: chrome-extension://<id>;
+ * bridge 在握手阶段校验该 Origin 严格等于此常量,非此一律 4403 拒绝。扩展无需额外传 secret。
+ * 该 id 与 desktop/main.ts EXTENSION_ID、manifest、native host allowed_origins 完全一致。
+ */
+export const LOOPBACK_ALLOWED_ORIGIN = 'chrome-extension://bjdhmojdiahokgfcaahphcjgcnffbonf'
+
+/** 拼出 loopback WS server 的完整地址(诊断日志用;扩展侧自行拼同样地址)。 */
+export function loopbackUrl(): string {
+  return `ws://${LOOPBACK_HOST}:${LOOPBACK_PORT}${LOOPBACK_PATH}`
+}
+
 /** Resolves the MateClaw home directory (env or ~/.mateclaw). */
 function resolveHome(): string {
   const envHome = process.env['MATECLAW_HOME']

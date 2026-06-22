@@ -34,7 +34,8 @@ import { createRequire } from 'node:module'
 import { PassThrough, type Readable, type Writable } from 'node:stream'
 import { tryLoadConfig, type Config } from '../internal/config/config.js'
 import { Client } from '../internal/edge/client.js'
-import { Runner } from '../internal/runner/runner.js'
+import { Runner, MsgQueue } from '../internal/runner/runner.js'
+import { LoopbackServer } from '../internal/ipc/loopback-server.js'
 import {
   writeJsonFrame,
   readFrame,
@@ -67,7 +68,20 @@ export const NO_TOKEN_POLL_TIMEOUT_MS = 60_000
 export const NO_TOKEN_POLL_INTERVAL_MS = 1_000
 
 /** Resolved invocation mode for the bridge process. */
-export type Mode = 'version' | 'run' | 'usage'
+export type Mode = 'version' | 'run' | 'resident' | 'usage'
+
+/**
+ * True when launched in【常驻 bridge 锚】模式(连接根治:1 bridge 常驻 + loopback WS server)。
+ *
+ * 桌面壳(组2,feature-flag MATECLAW_RESIDENT_BRIDGE 默认 off)在开启时以
+ * `bridge.exe run --resident` 常驻拉起本进程。此模式下 bridge 不再用 process.stdin 作为帧
+ * 来源,改为开 loopback WS server 给扩展连(契约1),并自己直连后端 WSS 长跑。
+ *
+ * 默认 off:桌面不传 --resident → 走原有 NM 路径,全系统行为与今天完全一致。
+ */
+export function isResidentArgv(argv: readonly string[]): boolean {
+  return argv.includes('--resident')
+}
 
 /**
  * True when the process was launched by a browser as a Native Messaging host.
@@ -95,6 +109,12 @@ export function isNativeMessagingArgv(argv: readonly string[]): boolean {
 export function decideMode(argv: readonly string[], isStdinTTY: boolean): Mode {
   if (argv.includes('--version') || argv.includes('-version')) {
     return 'version'
+  }
+  // 常驻模式优先于普通 run:`run --resident` / 任意带 --resident 的显式调用都走常驻。
+  // 它仅由桌面壳(feature-flag 开启时)显式传入,Chrome 拉起原生 host 时绝不会带这个 flag,
+  // 因此 NM 路径不受影响(契约4:默认 off 行为不变)。
+  if (isResidentArgv(argv)) {
+    return 'resident'
   }
   if (argv[0] === 'run') {
     return 'run'
@@ -191,6 +211,103 @@ export async function runBridge(): Promise<number> {
   } finally {
     process.off('SIGINT', handleSignal)
     process.off('SIGTERM', handleSignal)
+  }
+}
+
+/**
+ * 用给定 cfg + authToken 构造一个 Client。bridge.ts 拥有 cfg(controlPlaneUrl 等),
+ * 故 token 长跑重读(契约5)的 Client 重建由这里提供给 Runner.rebuildClient。
+ */
+function makeClient(cfg: Config, authToken: string): Client {
+  return new Client({
+    url: cfg.controlPlaneUrl,
+    authToken,
+    agentVersion: cfg.agentVersion,
+    heartbeatIntervalMs: cfg.heartbeatIntervalMs,
+  })
+}
+
+/**
+ * 常驻模式入口(连接根治:1 bridge 常驻 + loopback WS server + 去 stdin-EOF=死)。
+ *
+ * 与 {@link runBridge}(NM 模式)的根本区别:
+ *   - 帧来源不是 process.stdin,而是 loopback WS server 收到的扩展帧(契约1)。
+ *   - 扩展⇄loopback 断开只 detach 该 IPC 连接,绝不触发后端段重连(契约5)。
+ *   - bridge↔后端 WSS 由 Runner 独立长跑(forever-reconnect 不变)。
+ *   - 后端段健康度经 loopback 持续上报扩展(契约3)。
+ *   - 每次重连后端前重读最新 token、遇 401 用新 token 重建 Client(契约5)。
+ *
+ * 单实例锁:loopback listen 命中 EADDRINUSE 即判定"已有常驻实例",干净退出(返回 0)。
+ *
+ * 仅在桌面壳(feature-flag MATECLAW_RESIDENT_BRIDGE 开启)以 `run --resident` 拉起时进入。
+ */
+export async function runResident(): Promise<number> {
+  // 与 NM 模式一致:无 token 时有界轮询等桌面壳写出 bridge.yaml(契约2),不立即自杀。
+  const cfg = await waitForToken()
+  if (!cfg) {
+    process.stderr.write(
+      'bridge run --resident: auth token not available after waiting; exiting. ' +
+        '(set MATECLAW_BRIDGE_AUTH_TOKEN or bridge.yaml auth_token)\n',
+    )
+    return 1
+  }
+
+  // 扩展帧来源队列 —— Runner 与 LoopbackServer 共享同一实例(契约2)。
+  const inboundQueue = new MsgQueue()
+
+  const loopback = new LoopbackServer({ inboundQueue })
+
+  // 先抢端口(单实例锁)。EADDRINUSE → 已有常驻实例在跑,本进程让位、干净退出。
+  const started = await loopback.start()
+  if (!started.ok) {
+    if (started.reason === 'EADDRINUSE') {
+      process.stderr.write(
+        'bridge run --resident: loopback port already in use — another resident bridge owns it; exiting cleanly.\n',
+      )
+      return 0 // 不是错误:既有实例已在服务扩展,本进程退出即可。
+    }
+    process.stderr.write(`bridge run --resident: failed to start loopback server — ${String(started.error)}\n`)
+    return 1
+  }
+
+  // 初始 Client(用当前 token);后续 token 轮换由 Runner 经 rebuildClient 重建。
+  const client = makeClient(cfg, cfg.authToken)
+
+  const runner = new Runner({
+    client,
+    // IPC 模式:帧来源/汇全部走 loopback,process.stdin/stdout 完全不参与(去 stdin-EOF=死)。
+    ipc: {
+      inboundQueue,
+      onInbound: loopback.onInbound,
+      onUpstreamState: loopback.onUpstreamState,
+    },
+    initialAuthToken: cfg.authToken,
+    // token 长跑重读(契约5):每次(重)连后端前重读 bridge.yaml 的最新 auth_token。
+    reloadAuthToken: async () => {
+      const res = await tryLoadConfig()
+      return res.status === 'ready' && res.config ? res.config.authToken : null
+    },
+    // 用新 token 重建 Client。复用当前 cfg 的 url/version/心跳;仅换凭据。
+    rebuildClient: (authToken: string) => makeClient(cfg, authToken),
+  })
+
+  const ac = new AbortController()
+  const handleSignal = (): void => {
+    if (!ac.signal.aborted) ac.abort()
+  }
+  process.once('SIGINT', handleSignal)
+  process.once('SIGTERM', handleSignal)
+
+  try {
+    await runner.run(ac.signal)
+    return 0
+  } catch (err) {
+    process.stderr.write(`bridge run --resident: fatal — ${String(err)}\n`)
+    return 1
+  } finally {
+    process.off('SIGINT', handleSignal)
+    process.off('SIGTERM', handleSignal)
+    await loopback.close().catch(() => {})
   }
 }
 
@@ -316,11 +433,13 @@ export async function main(
     case 'version':
       process.stdout.write(`mateclaw-browser-bridge ${VERSION}\n`)
       return 0
+    case 'resident':
+      return runResident()
     case 'run':
       return runBridge()
     case 'usage':
       process.stderr.write(
-        'bridge: no command (try --version or run)\n',
+        'bridge: no command (try --version, run, or run --resident)\n',
       )
       return 1
   }

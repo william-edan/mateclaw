@@ -67,6 +67,9 @@ describe('OffscreenBridgeProxy', () => {
       deviceId: 'dev-1',
       deviceName: 'Test Box',
       agentVersion: '0.1.5',
+      // Default transport is now stamped on every CONNECT (跨组契约). Absent ⇒
+      // 'direct' on the wire for back-compat, but the proxy stamps it explicitly.
+      transport: 'direct',
     })
   })
 

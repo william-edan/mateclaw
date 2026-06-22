@@ -89,6 +89,27 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private static final long AUTHOR_PROFILE_CONFIRM_WAIT_MS = 750L;
     private static final long AUTHOR_PROFILE_RETRY_CONFIRM_WAIT_MS = 1_000L;
 
+    /**
+     * 【私信复核去后台误判 feature-flag,默认 off,旧行为零变化】
+     *
+     * 根因(后台恒假误判):后台/最小化 tab 的复核完全依赖空信号——a11y observe 必返空树
+     * (Chrome 对非活动 tab 的硬限制),而 DM DOM region 提取又用 dmRegion(obs) 按 obs 视口
+     * 几何注册,后台 obs 视口塌缩为 0 → 区域坍缩、提取 items=0。两路在后台【恒为空】,导致
+     * confirmDmSent 在后台【恒返回 false】。于是即便扩展已用 slate/CDP 真把私信发出去
+     * (sentByDmPrimitive=true),复核也判 false → distrust sent → 触发 send-only 二次点发,
+     * 既造成"明明发了却判失败",又有重复发送风险。
+     *
+     * 修复方向(flag=on 时):
+     *  1) 扩展自报 sentByDmPrimitive=true 直接视为 sentConfirmed —— 扩展端是经 slate/CDP 真发出
+     *     的第一手强信号,不再用"后台恒空"的复核去推翻它;
+     *  2) 复核降级为"扩展未自报 sent 时的二次确认",且区分三态:命中=CONFIRMED、确凿未见=NOT_FOUND、
+     *     全程观测为空(后台/blank)=INCONCLUSIVE。INCONCLUSIVE 绝不据空信号判 false、绝不触发 send-only。
+     *
+     * flag=off 时:reviewDmSent 不参与,完全走原 confirmDmSent 布尔路径,逐字保留旧逻辑。
+     * 默认 ON(根治私信后台 observe 空误判);改为 false 即应急回退旧布尔复核路径。
+     */
+    private static final boolean DM_REVIEW_TRUST_PRIMITIVE_SENT = true;
+
     // ===== 慢环境(3G/慢机)适配:时间驱动 → 状态/事件驱动 =====
     // 慢网/慢机下,搜索结果与视频列表懒加载迟迟不就绪。整条主流程旧逻辑在"上一步动作发出"后
     // 用固定等待/固定轮询次数就进入下一步,还没加载完就判失败(搜索✓→排序✓→点视频❌:
@@ -2142,45 +2163,93 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         // (不是 *_active:后台活动标签 != engagement 标签),在 DM 会话里查找刚发出的草稿文本气泡;
         // 复核到才认定真发出,否则置 sentConfirmed=false 并走 send-only 兜底。
         boolean sentConfirmed = false;
-        if (sendDm && sentByDmPrimitive) {
-            sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "primitive");
-            if (!sentConfirmed) {
-                log.warn("[douyin.lead] extension self-reported sent but re-check found no draft bubble on engagement tab; "
-                        + "distrust sent and fall back to send-only: tabId={}, dmKey={}", engagementTabId, dmKey);
+        if (DM_REVIEW_TRUST_PRIMITIVE_SENT) {
+            // ===== flag=on:去后台误判路径 =====
+            // (1) 扩展自报 sentByDmPrimitive=true 直接视为发出(扩展端经 slate/CDP 真发的第一手强信号),
+            //     不再用"后台恒空"的复核去推翻它。
+            if (sendDm && sentByDmPrimitive) {
+                sentConfirmed = true;
+                log.info("[douyin.lead] dm trusted as sent by extension primitive (sentByDmPrimitive=true); "
+                        + "skip distrust/send-only: tabId={}, dmKey={}", engagementTabId, dmKey);
             }
-        }
-        // 幂等:dmKey 已点击发送过则跳过 send-only 兜底,绝不二次点发。
-        boolean dmKeyAlreadyClicked = dmKey != null && sentDmKeys.contains(dmKey);
-        // send-only 兜底前台化:不再用"后台 observe 空恒不成立"的可见性 guard 拦死兜底——后台路径直接
-        // 走 *_tab(扩展在点发送前会把该 tab 切到前台、注入 visibility override,使发送在前台 trusted
-        // 生效),发完再强制复核。仅当扩展未确认发出 / 复核未通过 / 该 dmKey 尚未点过发送时才兜底。
-        if (sendDm && !sentConfirmed && !dmKeyAlreadyClicked) {
-            try {
-                JsonNode sendAction = parse(engagementTabId == null
-                        ? browser.service_send_dm_active(dmDraft)
-                        : browser.service_send_dm_tab(engagementTabId, dmDraft));
-                boolean sendClicked = ok(sendAction) || actionPayloadBoolean(sendAction, "clicked")
-                        || actionPayloadBoolean(sendAction, "sent");
-                // 幂等:send-only 已点过发送即记入 dmKey,即便复核未过也不再二次点发。
-                if (sendClicked && dmKey != null) {
-                    sentDmKeys.add(dmKey);
-                    recordClickedDmKey(dmKey); // 断连续跑幂等:跨重跑也记住"已点过发送",重跑不重发
+            // (2) 复核降级为"扩展未自报 sent 时的二次确认",且区分三态:仅在确凿可观测却未见草稿(NOT_FOUND)
+            //     时才走 send-only;后台/blank 的 INCONCLUSIVE 不据空判 false、不触发 send-only(防误判+防重发)。
+            boolean dmKeyAlreadyClicked = dmKey != null && sentDmKeys.contains(dmKey);
+            if (sendDm && !sentConfirmed) {
+                DmSentReview review = reviewDmSent(engagementTabId, dmDraft, "secondary");
+                if (review == DmSentReview.CONFIRMED) {
+                    sentConfirmed = true;
+                } else if (review == DmSentReview.NOT_FOUND && !dmKeyAlreadyClicked) {
+                    // 确凿可观测却未见草稿,且该 dmKey 尚未点过发送 → 才允许 send-only 二次确认。
+                    try {
+                        JsonNode sendAction = parse(engagementTabId == null
+                                ? browser.service_send_dm_active(dmDraft)
+                                : browser.service_send_dm_tab(engagementTabId, dmDraft));
+                        boolean sendClicked = ok(sendAction) || actionPayloadBoolean(sendAction, "clicked")
+                                || actionPayloadBoolean(sendAction, "sent");
+                        // 幂等:send-only 已点过发送即记入 dmKey,即便复核未过也绝不二次点发。
+                        if (sendClicked && dmKey != null) {
+                            sentDmKeys.add(dmKey);
+                            recordClickedDmKey(dmKey);
+                        }
+                        if (sendClicked) {
+                            // 二次确认同样用三态:CONFIRMED 才算发出;INCONCLUSIVE/NOT_FOUND 都不再继续点发。
+                            sentConfirmed = reviewDmSent(engagementTabId, dmDraft, "send-only") == DmSentReview.CONFIRMED;
+                        }
+                        log.info("[douyin.lead] send-only dm fallback (NOT_FOUND path): clicked={}, sentConfirmed={}, dmKey={}",
+                                sendClicked, sentConfirmed, dmKey);
+                    } catch (RuntimeException e) {
+                        log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
+                    }
+                } else {
+                    // INCONCLUSIVE(后台 blank)或已点过发送:不据空判 false、绝不二次点发。
+                    log.info("[douyin.lead] dm review inconclusive or dmKey already clicked; "
+                            + "neither distrust nor resend: review={}, dmKeyAlreadyClicked={}, tabId={}, dmKey={}",
+                            review, dmKeyAlreadyClicked, engagementTabId, dmKey);
                 }
-                // 后端是发出与否的唯一权威:只要点了发送(前台化后 trusted),就强制复核,不管扩展自报
-                // sent 是否为 false(前台化后可能已真发出,扩展的 sent=false 可能是假阴性)。
-                if (sendClicked) {
-                    sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "send-only");
-                }
-                log.info("[douyin.lead] send-only dm fallback: clicked={}, sentConfirmed={}, dmKey={}",
-                        sendClicked, sentConfirmed, dmKey);
-            } catch (RuntimeException e) {
-                log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
             }
-        } else if (sendDm && dmKeyAlreadyClicked && !sentConfirmed) {
-            // 该 dmKey 已点过发送但本流程内尚未复核到——再做一次强制复核(气泡可能慢渲染),复核到则认定发出。
-            sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "dmKey-hit");
-            log.info("[douyin.lead] dm already clicked-send (dmKey hit); skip resend, re-check only: sentConfirmed={}, dmKey={}",
-                    sentConfirmed, dmKey);
+        } else {
+            // ===== flag=off(默认):逐字保留旧布尔路径,旧行为零变化 =====
+            if (sendDm && sentByDmPrimitive) {
+                sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "primitive");
+                if (!sentConfirmed) {
+                    log.warn("[douyin.lead] extension self-reported sent but re-check found no draft bubble on engagement tab; "
+                            + "distrust sent and fall back to send-only: tabId={}, dmKey={}", engagementTabId, dmKey);
+                }
+            }
+            // 幂等:dmKey 已点击发送过则跳过 send-only 兜底,绝不二次点发。
+            boolean dmKeyAlreadyClicked = dmKey != null && sentDmKeys.contains(dmKey);
+            // send-only 兜底前台化:不再用"后台 observe 空恒不成立"的可见性 guard 拦死兜底——后台路径直接
+            // 走 *_tab(扩展在点发送前会把该 tab 切到前台、注入 visibility override,使发送在前台 trusted
+            // 生效),发完再强制复核。仅当扩展未确认发出 / 复核未通过 / 该 dmKey 尚未点过发送时才兜底。
+            if (sendDm && !sentConfirmed && !dmKeyAlreadyClicked) {
+                try {
+                    JsonNode sendAction = parse(engagementTabId == null
+                            ? browser.service_send_dm_active(dmDraft)
+                            : browser.service_send_dm_tab(engagementTabId, dmDraft));
+                    boolean sendClicked = ok(sendAction) || actionPayloadBoolean(sendAction, "clicked")
+                            || actionPayloadBoolean(sendAction, "sent");
+                    // 幂等:send-only 已点过发送即记入 dmKey,即便复核未过也不再二次点发。
+                    if (sendClicked && dmKey != null) {
+                        sentDmKeys.add(dmKey);
+                        recordClickedDmKey(dmKey); // 断连续跑幂等:跨重跑也记住"已点过发送",重跑不重发
+                    }
+                    // 后端是发出与否的唯一权威:只要点了发送(前台化后 trusted),就强制复核,不管扩展自报
+                    // sent 是否为 false(前台化后可能已真发出,扩展的 sent=false 可能是假阴性)。
+                    if (sendClicked) {
+                        sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "send-only");
+                    }
+                    log.info("[douyin.lead] send-only dm fallback: clicked={}, sentConfirmed={}, dmKey={}",
+                            sendClicked, sentConfirmed, dmKey);
+                } catch (RuntimeException e) {
+                    log.warn("[douyin.lead] send-only dm primitive failed: {}", e.getMessage());
+                }
+            } else if (sendDm && dmKeyAlreadyClicked && !sentConfirmed) {
+                // 该 dmKey 已点过发送但本流程内尚未复核到——再做一次强制复核(气泡可能慢渲染),复核到则认定发出。
+                sentConfirmed = confirmDmSent(engagementTabId, dmDraft, "dmKey-hit");
+                log.info("[douyin.lead] dm already clicked-send (dmKey hit); skip resend, re-check only: sentConfirmed={}, dmKey={}",
+                        sentConfirmed, dmKey);
+            }
         }
         waitMs(500);
         BrowserObservation verify = observeEngagementTab(engagementTabId, "all");
@@ -2658,6 +2727,69 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         log.warn("[douyin.lead] dm send NOT confirmed after re-check on engagement tab: source={}, attempts={}, tabId={}",
                 source, attempts, engagementTabId);
         return false;
+    }
+
+    /**
+     * 私信复核三态结果(仅 {@link #DM_REVIEW_TRUST_PRIMITIVE_SENT}=on 路径使用):
+     * <ul>
+     *   <li>{@code CONFIRMED} —— 在会话流/输入区命中草稿文本,确凿已发出;</li>
+     *   <li>{@code NOT_FOUND} —— 复核窗口内至少有一次【非空观测】(前台 obs 可用)却始终未命中草稿,
+     *       才算"确凿未见";此时可保守走 send-only 二次确认;</li>
+     *   <li>{@code INCONCLUSIVE} —— 整个复核窗口的观测全部为 blank(后台/最小化 tab,a11y 空树 +
+     *       DOM region 几何坍缩),信息不足,【不得据此判 false、不得触发 send-only】。</li>
+     * </ul>
+     */
+    private enum DmSentReview {
+        CONFIRMED,
+        NOT_FOUND,
+        INCONCLUSIVE
+    }
+
+    /**
+     * 三态复核版(P0 去后台误判):与 {@link #confirmDmSent} 同源逻辑,但把"全程观测为空(后台)"
+     * 与"确凿未见草稿(前台可观测却没命中)"区分开。核心:只有在复核窗口里【至少出现过一次非空观测】
+     * 后仍未命中,才返回 {@link DmSentReview#NOT_FOUND};若每次观测都 blank(后台 tab 的 a11y 必空 +
+     * region 几何坍缩 items=0),返回 {@link DmSentReview#INCONCLUSIVE},交由调用方按"信任扩展自报/
+     * 不据空判 false"处理,绝不据此触发 send-only 二次点发。
+     *
+     * <p>仅 {@link #DM_REVIEW_TRUST_PRIMITIVE_SENT}=on 时调用;off 时本方法不参与,旧布尔路径不变。
+     */
+    private DmSentReview reviewDmSent(@Nullable Long engagementTabId, String dmDraft, String source) {
+        if (dmDraft == null || dmDraft.isBlank()) {
+            // 没有可比对的草稿文本:无法做出任何判断,视作信息不足(而非"未见")。
+            return DmSentReview.INCONCLUSIVE;
+        }
+        int attempts = slowAttempts(4);
+        long waitMs = slowMs(700L);
+        boolean sawNonBlankObservation = false;
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            try {
+                BrowserObservation obs = observeEngagementTab(engagementTabId, "all");
+                boolean blank = isBlankObservation(obs);
+                if (!blank) {
+                    sawNonBlankObservation = true;
+                }
+                if (dmDraftVisibleInDmDomTab(engagementTabId, obs, dmDraft)
+                        || dmDraftVisibleInDmInputArea(obs, dmDraft)) {
+                    log.info("[douyin.lead] dm send confirmed by re-check on engagement tab: source={}, attempt={}, tabId={}",
+                            source, i + 1, engagementTabId);
+                    return DmSentReview.CONFIRMED;
+                }
+            } catch (RuntimeException e) {
+                log.warn("[douyin.lead] dm send re-check observe failed: source={}, attempt={}, error={}",
+                        source, i + 1, e.getMessage());
+            }
+            waitMs(waitMs);
+        }
+        if (!sawNonBlankObservation) {
+            // 后台 tab:整窗观测全空,a11y/region 在后台恒空 —— 信息不足,不据此判 false。
+            log.info("[douyin.lead] dm send re-check INCONCLUSIVE (all observations blank/background): "
+                    + "source={}, attempts={}, tabId={}", source, attempts, engagementTabId);
+            return DmSentReview.INCONCLUSIVE;
+        }
+        log.warn("[douyin.lead] dm send NOT confirmed after re-check on engagement tab (observable but draft not seen): "
+                + "source={}, attempts={}, tabId={}", source, attempts, engagementTabId);
+        return DmSentReview.NOT_FOUND;
     }
 
     private RegionInfo dmRegion(BrowserObservation obs) {

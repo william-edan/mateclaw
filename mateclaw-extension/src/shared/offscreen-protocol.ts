@@ -34,6 +34,22 @@ export const OFFSCREEN_INBOUND = 'mateclaw.offscreen.inbound' as const
 export const OFFSCREEN_STATE = 'mateclaw.offscreen.state' as const
 /** OFF → SW: the socket closed (mirrors DirectBridgeClient.onDisconnect). */
 export const OFFSCREEN_DISCONNECTED = 'mateclaw.offscreen.disconnected' as const
+/**
+ * OFF → SW: the LOCAL (resident-bridge) transport's view of BACKEND (upstream)
+ * health changed (跨组契约3). Only the local transport emits this — the bridge
+ * pushes {kind:'upstream', state:'up'|'down'} over the loopback, the offscreen
+ * host's LocalBridgeClient surfaces it, and this relay carries it to the SW so
+ * end-to-end `connected` = local IPC OPEN ∧ upstream up. Direct/native paths
+ * never emit it.
+ */
+export const OFFSCREEN_UPSTREAM_STATE = 'mateclaw.offscreen.upstream_state' as const
+
+/**
+ * Which transport the offscreen host should run for a given socket (跨组契约).
+ *   - 'direct' — DirectBridgeClient → backend WSS (HELLO/session/heartbeat). Default.
+ *   - 'local'  — LocalBridgeClient  → resident bridge loopback ws://127.0.0.1:18077.
+ */
+export type OffscreenTransport = 'direct' | 'local'
 
 /** SW → OFF control envelopes. */
 export type OffscreenControlMsg =
@@ -44,6 +60,12 @@ export type OffscreenControlMsg =
       deviceId: string
       deviceName?: string
       agentVersion: string
+      /**
+       * Transport selector (契约). Absent ⇒ 'direct', so an old SW build talking
+       * to a new offscreen host keeps the existing direct-WSS behaviour
+       * (向后兼容 · feature-flag 默认 off 时旧行为零变化).
+       */
+      transport?: OffscreenTransport
     }
   | { type: typeof OFFSCREEN_SEND; message: EdgeMessage }
   | { type: typeof OFFSCREEN_DISCONNECT }
@@ -53,6 +75,7 @@ export type OffscreenRelayMsg =
   | { type: typeof OFFSCREEN_INBOUND; message: EdgeMessage }
   | { type: typeof OFFSCREEN_STATE; state: BridgeState; connected: boolean }
   | { type: typeof OFFSCREEN_DISCONNECTED }
+  | { type: typeof OFFSCREEN_UPSTREAM_STATE; upstreamConnected: boolean }
 
 /** Type guard for any envelope this protocol defines (control or relay). */
 export function isOffscreenMsg(v: unknown): v is OffscreenControlMsg | OffscreenRelayMsg {
@@ -64,6 +87,7 @@ export function isOffscreenMsg(v: unknown): v is OffscreenControlMsg | Offscreen
     t === OFFSCREEN_DISCONNECT ||
     t === OFFSCREEN_INBOUND ||
     t === OFFSCREEN_STATE ||
-    t === OFFSCREEN_DISCONNECTED
+    t === OFFSCREEN_DISCONNECTED ||
+    t === OFFSCREEN_UPSTREAM_STATE
   )
 }

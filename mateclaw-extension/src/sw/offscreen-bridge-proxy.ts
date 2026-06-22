@@ -28,7 +28,9 @@ import {
   OFFSCREEN_DISCONNECTED,
   OFFSCREEN_SEND,
   OFFSCREEN_STATE,
+  OFFSCREEN_UPSTREAM_STATE,
   type OffscreenRelayMsg,
+  type OffscreenTransport,
 } from '../shared/offscreen-protocol'
 
 /** Path of the offscreen document (must match the manifest/build output). */
@@ -51,7 +53,27 @@ export class OffscreenBridgeProxy {
   private readonly agentVersion: string
   private readonly chromeApi: typeof globalThis.chrome
 
+  /**
+   * Connection state as relayed via OFFSCREEN_STATE.connected. For the DIRECT
+   * transport this already means socket-OPEN + session-bound (end-to-end). For
+   * the LOCAL transport it means only the loopback IPC socket is OPEN — the
+   * end-to-end gate ALSO requires {@link _upstreamConnected} (契约3).
+   */
   private _connected = false
+
+  /**
+   * Transport this proxy handle is driving. 'direct' (default) keeps the old
+   * single-flag `connected`; 'local' switches `connected` to the end-to-end
+   * gate (IPC OPEN ∧ upstream up). Set by {@link connect}.
+   */
+  private transport: OffscreenTransport = 'direct'
+
+  /**
+   * Last BACKEND (upstream) health relayed via OFFSCREEN_UPSTREAM_STATE (契约3).
+   * Only meaningful for the local transport. Starts false so a fresh local
+   * connection never reports connected:true on a bare loopback OPEN.
+   */
+  private _upstreamConnected = false
 
   private readonly messageCbs = new Set<(m: EdgeMessage) => void>()
   private readonly disconnectCbs = new Set<() => void>()
@@ -64,8 +86,17 @@ export class OffscreenBridgeProxy {
     this.chromeApi = deps.chrome ?? globalThis.chrome
   }
 
-  /** True once the offscreen socket reports an OPEN + session-bound connection. */
+  /**
+   * END-TO-END connected.
+   *   - direct transport: the relayed OPEN + session-bound flag.
+   *   - local transport (契约3): loopback IPC OPEN *AND* the bridge reports its
+   *     upstream (backend) link up. Reading only the IPC flag would be a false
+   *     positive (假阳性) while the bridge is detached from the backend.
+   */
   get connected(): boolean {
+    if (this.transport === 'local') {
+      return this._connected && this._upstreamConnected
+    }
     return this._connected
   }
 
@@ -73,10 +104,18 @@ export class OffscreenBridgeProxy {
    * Ensure the offscreen document exists then (idempotently) ask it to connect.
    * Sync surface (matches DirectBridgeClient): the async ensure runs
    * fire-and-forget with error logging. The offscreen host treats a CONNECT
-   * with the SAME creds while already connected as a no-op + state re-announce,
-   * so re-running this on every SW wake does NOT churn the socket.
+   * with the SAME transport+creds while already connected as a no-op + state
+   * re-announce, so re-running this on every SW wake does NOT churn the socket.
+   *
+   * @param serverUrl backend WSS (direct) or loopback URL (local; '' ⇒ the
+   *   bridge default ws://127.0.0.1:18077).
+   * @param pat backend PAT (direct). Ignored by the local transport, which
+   *   authenticates by Origin (契约2) — pass '' there.
+   * @param transport 'direct' (default, 向后兼容) or 'local'.
    */
-  connect(serverUrl: string, pat: string): void {
+  connect(serverUrl: string, pat: string, transport: OffscreenTransport = 'direct'): void {
+    this.transport = transport
+    if (transport === 'local') this._upstreamConnected = false
     this.ensureDocument()
       .then(() => {
         this.post({
@@ -86,11 +125,13 @@ export class OffscreenBridgeProxy {
           deviceId: this.deviceId,
           deviceName: this.deviceName,
           agentVersion: this.agentVersion,
+          transport,
         })
       })
       .catch(err => {
         console.error('[mateclaw][sw] offscreen ensure/connect failed', err)
         this._connected = false
+        this._upstreamConnected = false
         this.stateCbs.forEach(cb => cb('closed'))
       })
   }
@@ -122,14 +163,15 @@ export class OffscreenBridgeProxy {
   disconnect(): void {
     this.post({ type: OFFSCREEN_DISCONNECT })
     this._connected = false
+    this._upstreamConnected = false
     this.stateCbs.forEach(cb => cb('closed'))
   }
 
   /**
-   * Feed a connection-state relay (OFFSCREEN_STATE / OFFSCREEN_DISCONNECTED)
-   * received by index.ts's top-level listener. INBOUND frames are NOT routed
-   * here — index.ts dispatches them straight to the handlers. Other message
-   * shapes are ignored.
+   * Feed a connection-state relay (OFFSCREEN_STATE / OFFSCREEN_DISCONNECTED /
+   * OFFSCREEN_UPSTREAM_STATE) received by index.ts's top-level listener. INBOUND
+   * frames are NOT routed here — index.ts dispatches them straight to the
+   * handlers. Other message shapes are ignored.
    */
   ingestRelay(raw: OffscreenRelayMsg): void {
     switch (raw.type) {
@@ -137,8 +179,17 @@ export class OffscreenBridgeProxy {
         this._connected = raw.connected
         this.stateCbs.forEach(cb => cb(raw.state))
         break
+      case OFFSCREEN_UPSTREAM_STATE:
+        // 契约3: BACKEND health update for the local transport. Re-emit a state
+        // event so a consumer reading `connected` after the flip gets nudged —
+        // 'open' when end-to-end up, 'closed' when the upstream went down even
+        // though the local IPC socket is still alive.
+        this._upstreamConnected = raw.upstreamConnected
+        this.stateCbs.forEach(cb => cb(this.connected ? 'open' : 'closed'))
+        break
       case OFFSCREEN_DISCONNECTED:
         this._connected = false
+        this._upstreamConnected = false
         this.disconnectCbs.forEach(cb => cb())
         break
       default:

@@ -15,7 +15,7 @@ class LlmCommentAiClassifierTest {
     private final LlmCommentAiClassifier classifier = new LlmCommentAiClassifier(null, null, new ObjectMapper());
 
     @Test
-    void planBatchesUsesLargeButBoundedBatchesForShortComments() {
+    void planBatchesKeepsBatchesWithinTokenSafeSize() {
         List<CommentMatchResult> candidates = new ArrayList<>();
         for (int i = 0; i < 170; i++) {
             candidates.add(candidate(i, "想了解替代方案 " + i));
@@ -23,11 +23,14 @@ class LlmCommentAiClassifierTest {
 
         List<List<CommentMatchResult>> batches = classifier.planBatches(candidates);
 
-        assertThat(batches).hasSize(3);
+        // 批次大小必须 <= MAX_BATCH_SIZE(35):单批输出 JSON 不能超模型 max_tokens,否则被截断成
+        // 不完整 JSON → 整批失败二分重试。同时所有候选都要进某批次(不丢评论)。
+        // 用不变量断言而非硬编码批次数,这样后续调整批次常量不会再误伤本测试。
+        assertThat(batches).isNotEmpty();
         assertThat(batches)
                 .extracting(List::size)
-                .allSatisfy(size -> assertThat(size).isLessThanOrEqualTo(100))
-                .containsExactly(80, 80, 10);
+                .allSatisfy(size -> assertThat(size).isBetween(1, 35));
+        assertThat(batches.stream().mapToInt(List::size).sum()).isEqualTo(170);
     }
 
     @Test

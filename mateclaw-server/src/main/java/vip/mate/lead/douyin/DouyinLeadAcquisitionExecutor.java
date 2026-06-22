@@ -283,10 +283,18 @@ public class DouyinLeadAcquisitionExecutor {
             return;
         }
 
+        events.publish(new RunEvent(runId, null, "lead.comment.matching", "info", payload(
+                "videoIndex", video.index,
+                "commentsToMatch", collection.comments().size()), null));
         List<CommentMatchResult> matches = step(runId,
                 video.stepKey("match_comment_text"),
                 "comment.match.batch",
-                () -> matcher.matched(collection.comments(), matchRules));
+                () -> matcher.matched(collection.comments(), matchRules,
+                        (processed, total) -> events.publish(new RunEvent(runId, null,
+                                "lead.comment.match_progress", "info", payload(
+                                        "videoIndex", video.index,
+                                        "matchedProcessed", processed,
+                                        "matchTotal", total), null))));
         video.matches = matches;
         persistence.markMatches(taskId, matches);
         events.publish(new RunEvent(runId, null, "lead.comment.matched", "info", payload(

@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 @Component
 public class CommentMatcher {
@@ -29,6 +30,12 @@ public class CommentMatcher {
     }
 
     public List<CommentMatchResult> match(List<DouyinCommentItem> comments, List<CommentMatchRule> rules) {
+        return match(comments, rules, null);
+    }
+
+    public List<CommentMatchResult> match(List<DouyinCommentItem> comments,
+                                          List<CommentMatchRule> rules,
+                                          BiConsumer<Integer, Integer> progress) {
         List<CommentMatchRule> normalizedRules = CommentMatchRule.normalize(rules);
         if (comments == null || comments.isEmpty()) {
             return List.of();
@@ -37,7 +44,7 @@ public class CommentMatcher {
         for (DouyinCommentItem comment : comments) {
             results.add(scoreKeywordRules(comment, normalizedRules));
         }
-        results = applySemanticRules(results, normalizedRules);
+        results = applySemanticRules(results, normalizedRules, progress);
         results.sort(Comparator
                 .comparing(CommentMatchResult::matched, Comparator.reverseOrder())
                 .thenComparing(CommentMatchResult::score, Comparator.reverseOrder()));
@@ -45,7 +52,13 @@ public class CommentMatcher {
     }
 
     public List<CommentMatchResult> matched(List<DouyinCommentItem> comments, List<CommentMatchRule> rules) {
-        return match(comments, rules).stream()
+        return matched(comments, rules, null);
+    }
+
+    public List<CommentMatchResult> matched(List<DouyinCommentItem> comments,
+                                            List<CommentMatchRule> rules,
+                                            BiConsumer<Integer, Integer> progress) {
+        return match(comments, rules, progress).stream()
                 .filter(CommentMatchResult::matched)
                 .toList();
     }
@@ -88,6 +101,12 @@ public class CommentMatcher {
     }
 
     List<CommentMatchResult> applySemanticRules(List<CommentMatchResult> results, List<CommentMatchRule> rules) {
+        return applySemanticRules(results, rules, null);
+    }
+
+    List<CommentMatchResult> applySemanticRules(List<CommentMatchResult> results,
+                                                List<CommentMatchRule> rules,
+                                                BiConsumer<Integer, Integer> progress) {
         if (aiClassifier == null || results.isEmpty()) {
             return results;
         }
@@ -104,7 +123,7 @@ public class CommentMatcher {
         if (candidates.isEmpty()) {
             return results;
         }
-        List<CommentMatchResult> semanticResults = aiClassifier.classify(semanticRules, candidates);
+        List<CommentMatchResult> semanticResults = aiClassifier.classify(semanticRules, candidates, progress);
         if (semanticResults == null || semanticResults.isEmpty()) {
             return results;
         }

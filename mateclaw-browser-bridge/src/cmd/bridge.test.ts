@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import {
   decideMode,
   isNativeMessagingArgv,
+  isResidentArgv,
   waitForToken,
   pumpStdinWithPingFilter,
 } from './bridge.js'
@@ -66,6 +67,38 @@ describe('decideMode', () => {
 
   it('shows usage for a bare interactive terminal invocation', () => {
     expect(decideMode([], true)).toBe('usage')
+  })
+
+  // ── 常驻模式(连接根治 / feature-flag 默认 off)──────────────────────────────
+
+  it('resolves resident on `run --resident`', () => {
+    expect(decideMode(['run', '--resident'], false)).toBe('resident')
+  })
+
+  it('resident wins even with a Chrome-style origin arg present', () => {
+    // 桌面壳显式拉常驻时仍可能带其它参数;--resident 始终优先于 NM 检测。
+    expect(decideMode([EXT, '--resident'], false)).toBe('resident')
+  })
+
+  it('--version still wins over --resident', () => {
+    expect(decideMode(['run', '--resident', '--version'], false)).toBe('version')
+  })
+
+  it('without --resident a Chrome launch is still NM run (feature-flag off = 旧行为)', () => {
+    // 契约4:桌面不传 --resident → Chrome 拉起原生 host 走原 NM 路径,行为与今天一致。
+    expect(decideMode([EXT, '--parent-window=1'], false)).toBe('run')
+  })
+})
+
+describe('isResidentArgv', () => {
+  it('detects --resident anywhere in argv', () => {
+    expect(isResidentArgv(['run', '--resident'])).toBe(true)
+    expect(isResidentArgv(['--resident'])).toBe(true)
+  })
+  it('is false without --resident (default off)', () => {
+    expect(isResidentArgv([])).toBe(false)
+    expect(isResidentArgv(['run'])).toBe(false)
+    expect(isResidentArgv([EXT, '--parent-window=1'])).toBe(false)
   })
 })
 

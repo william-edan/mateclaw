@@ -24,15 +24,26 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class LlmCommentAiClassifier implements CommentAiClassifier {
 
-    private static final int TARGET_BATCH_SIZE = 80;
-    private static final int MAX_BATCH_SIZE = 100;
-    private static final int MAX_BATCH_CHARS = 14_000;
+    // 批次必须让单次输出 JSON 装得进模型 max_tokens(默认 4096);80~100 条会让 deepseek 等
+    // 输出被截断成不完整 JSON → 整批失败 → 二分重试,反而跑 3 次。每条输出约 60~80 tokens,
+    // 30 条 ≈ 2000 tokens,安全留足余量。
+    private static final int TARGET_BATCH_SIZE = 30;
+    private static final int MAX_BATCH_SIZE = 35;
+    private static final int MAX_BATCH_CHARS = 5_000;
+    // 多批并发上限(LLM 调用 IO 密集),避免 provider 限流的同时让总耗时≈最慢单批而非累加。
+    private static final int MAX_CONCURRENT_BATCHES = 4;
     private static final int MAX_COMMENT_TEXT_CHARS = 300;
     private static final int MIN_SPLIT_BATCH_SIZE = 10;
     private static final int COMMENT_JSON_OVERHEAD_CHARS = 80;
@@ -45,6 +56,13 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
 
     @Override
     public List<CommentMatchResult> classify(List<CommentMatchRule> rules, List<CommentMatchResult> candidates) {
+        return classify(rules, candidates, null);
+    }
+
+    @Override
+    public List<CommentMatchResult> classify(List<CommentMatchRule> rules,
+                                             List<CommentMatchResult> candidates,
+                                             BiConsumer<Integer, Integer> onProgress) {
         List<CommentMatchRule> semanticRules = CommentMatchRule.normalize(rules).stream()
                 .filter(CommentMatchRule::semantic)
                 .toList();
@@ -60,11 +78,57 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
             return List.of();
         }
 
-        List<CommentMatchResult> out = new ArrayList<>();
-        for (List<CommentMatchResult> batch : planBatches(candidates)) {
-            out.addAll(classifyBatchWithFallback(chatModel, semanticRules, batch));
+        List<List<CommentMatchResult>> batches = planBatches(candidates);
+        if (batches.isEmpty()) {
+            return List.of();
         }
-        return out;
+        int total = candidates.size();
+        // 多批可能并发跑,onProgress 会被多线程并发调用;用 AtomicInteger 累加已处理候选数。
+        AtomicInteger processed = new AtomicInteger(0);
+        if (batches.size() == 1) {
+            List<CommentMatchResult> out = classifyBatchWithFallback(chatModel, semanticRules, batches.get(0));
+            reportProgress(onProgress, processed, batches.get(0).size(), total);
+            return out;
+        }
+        // 多批并发跑:批次串行时 N 批 × 单批耗时(deepseek 单批 ~25s)会线性累加;并发后
+        // 总耗时≈最慢单批。限并发 MAX_CONCURRENT_BATCHES 防 provider 限流。
+        Semaphore limit = new Semaphore(MAX_CONCURRENT_BATCHES);
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<List<CommentMatchResult>>> futures = new ArrayList<>();
+            for (List<CommentMatchResult> batch : batches) {
+                futures.add(executor.submit(() -> {
+                    limit.acquire();
+                    try {
+                        return classifyBatchWithFallback(chatModel, semanticRules, batch);
+                    } finally {
+                        limit.release();
+                        // 每个批次完成后即上报进度(无论成功失败),让 UI 看到推进而非黑盒。
+                        reportProgress(onProgress, processed, batch.size(), total);
+                    }
+                }));
+            }
+            List<CommentMatchResult> out = new ArrayList<>();
+            for (Future<List<CommentMatchResult>> future : futures) {
+                try {
+                    out.addAll(future.get());
+                } catch (Exception e) {
+                    log.info("[douyin.lead] AI comment classifier batch failed in parallel pool, keep rule results: {}",
+                            e.getMessage());
+                }
+            }
+            return out;
+        }
+    }
+
+    private void reportProgress(BiConsumer<Integer, Integer> onProgress,
+                                AtomicInteger processed,
+                                int delta,
+                                int total) {
+        if (onProgress == null) {
+            return;
+        }
+        int done = Math.min(total, processed.addAndGet(delta));
+        onProgress.accept(done, total);
     }
 
     private List<CommentMatchResult> classifyBatchWithFallback(ChatModel chatModel,

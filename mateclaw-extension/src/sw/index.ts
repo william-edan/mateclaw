@@ -17,12 +17,14 @@
 import { EdgeMessageKind, makeEdgeMessage, type EdgeMessage } from '../shared/edge-protocol'
 import { NativeBridge } from './native-bridge'
 import { DirectBridgeClient } from './direct-bridge'
+import { LocalBridgeClient, LOCAL_BRIDGE_URL } from './local-bridge'
 import { OffscreenBridgeProxy } from './offscreen-bridge-proxy'
 import {
   OFFSCREEN_DISCONNECTED,
   OFFSCREEN_INBOUND,
   OFFSCREEN_SEND,
   OFFSCREEN_STATE,
+  OFFSCREEN_UPSTREAM_STATE,
   isOffscreenMsg,
 } from '../shared/offscreen-protocol'
 import { ConfigStore } from './config-store'
@@ -60,6 +62,40 @@ import { parseRegionClearMessage, parseRegionRegistrationMessage } from '../runt
 /** Canonical NM host name — must match com.mateclaw.browser_bridge manifest. */
 const HOST = 'com.mateclaw.browser_bridge'
 
+// LOCAL_BRIDGE_URL(含 `/bridge` 路径)从 ./local-bridge 单点导入 —— 不再在此复制字面量,
+// 杜绝两份漂移(曾因裸根 `ws://127.0.0.1:18077` 缺 `/bridge` 被 loopback 拒握手,连接从未建立)。
+
+/**
+ * chrome.storage.local key for the resident-local feature flag (跨组契约4). When
+ * truthy, {@link reconnectByPairing} prefers the resident bridge loopback over
+ * the native "装好即连" host (but still after a direct pairing). DEFAULT OFF:
+ * absent/false ⇒ the existing direct/native routing — 全系统行为与今天完全一致.
+ *
+ * Read directly from storage here (rather than via ConfigStore) so this group's
+ * change stays inside its allowed files; the value is a simple boolean flag with
+ * no other consumers.
+ */
+const PREFER_LOCAL_BRIDGE_KEY = 'preferLocalBridge'
+
+/**
+ * Resolve the {@link PREFER_LOCAL_BRIDGE_KEY} flag (跨组契约4). Fail-safe to
+ * false (default off) on any storage error so a read failure can never flip
+ * traffic onto the resident bridge.
+ */
+async function preferLocalBridge(): Promise<boolean> {
+  try {
+    const got = (await chrome.storage.local.get([PREFER_LOCAL_BRIDGE_KEY])) as Record<
+      string,
+      unknown
+    >
+    // 默认 ON(根治:优先走常驻 bridge 本地 IPC)。仅当显式 set preferLocalBridge=false
+    // 才回退到 direct/native(应急开关);未设/读失败=ON。
+    return got[PREFER_LOCAL_BRIDGE_KEY] !== false
+  } catch {
+    return true
+  }
+}
+
 /**
  * Phase 2 hardcoded subject. Phase 4 will derive this from the
  * authenticated user (sidepanel auth flow). For now everything routes
@@ -88,7 +124,7 @@ const ALLOWED_EXTERNAL_ORIGINS = new Set<string>([
 // handler wiring below never needs to know which transport is live.
 // -----------------------------------------------------------------
 
-type Bridge = DirectBridgeClient | OffscreenBridgeProxy | NativeBridge
+type Bridge = DirectBridgeClient | OffscreenBridgeProxy | NativeBridge | LocalBridgeClient
 
 const configStore = new ConfigStore()
 let activeBridge: Bridge | null = null
@@ -105,19 +141,25 @@ const usingOffscreen = typeof chrome.offscreen?.createDocument === 'function'
 const sendUp = (msg: EdgeMessage): void => {
   try {
     // Route to the offscreen document ONLY when an offscreen-hosted transport
-    // actually owns the socket: either the active bridge IS the offscreen proxy,
-    // or this is a cold SW wake before startup rebuilt the proxy (activeBridge
-    // still null) on an offscreen-capable runtime — there the offscreen doc may
-    // hold the socket and the reply must not wait for reconnection (stateless on
-    // purpose). The in-SW transports — NativeBridge on the desktop path, or the
-    // fallback in-SW DirectBridgeClient — own their socket inside the worker, so
-    // they send directly.
+    // actually owns the socket: either the active bridge IS the offscreen proxy
+    // (the direct-WSS / Claude-Code offscreen path), or this is a cold SW wake
+    // before startup rebuilt the proxy (activeBridge still null) on an
+    // offscreen-capable runtime — there the offscreen doc may hold the socket and
+    // the reply must not wait for reconnection (stateless on purpose). The in-SW
+    // transports own their socket inside the worker, so they send directly:
+    //   - NativeBridge       — the desktop native "装好即连" host;
+    //   - LocalBridgeClient  — the RESIDENT-LOCAL loopback transport, now held
+    //     directly by the SW (no offscreen middle layer) so action.result rides
+    //     the SAME proven path as native — see {@link connectResidentLocal};
+    //   - the fallback in-SW DirectBridgeClient.
     //
     // Keying this on `usingOffscreen` alone (the old code) silently dropped EVERY
     // outbound frame on the native path: usingOffscreen is true on chrome116+, but
     // connectNative never creates an offscreen document, so action.result/snapshot/
     // heartbeat/HELLO were all posted into the void and swallowed by .catch() —
-    // the desktop "connected but no round-trips" failure.
+    // the desktop "connected but no round-trips" failure. The same trap would bite
+    // the resident-local path if we routed it through offscreen, so it is now an
+    // in-SW transport that hits the `else` (direct send) branch below.
     if (activeBridge instanceof OffscreenBridgeProxy || (!activeBridge && usingOffscreen)) {
       chrome.runtime.sendMessage({ type: OFFSCREEN_SEND, message: msg }).catch(() => {})
     } else {
@@ -142,7 +184,15 @@ if (usingOffscreen) {
     if (!isOffscreenMsg(raw)) return
     if (raw.type === OFFSCREEN_INBOUND) {
       dispatchInbound(raw.message)
-    } else if (raw.type === OFFSCREEN_STATE || raw.type === OFFSCREEN_DISCONNECTED) {
+    } else if (
+      raw.type === OFFSCREEN_STATE ||
+      raw.type === OFFSCREEN_DISCONNECTED ||
+      // 契约3: BACKEND (upstream) health relay for the resident-local transport.
+      // Must be dispatched from this SYNC top-level listener (same as STATE) so a
+      // cold-woken SW reliably receives it and the end-to-end `connected` gate
+      // (local IPC OPEN ∧ upstream up) stays accurate.
+      raw.type === OFFSCREEN_UPSTREAM_STATE
+    ) {
       // Connection-state relays drive the sidepanel pill + isConnected().
       if (activeBridge instanceof OffscreenBridgeProxy) activeBridge.ingestRelay(raw)
     }
@@ -207,12 +257,70 @@ async function connectDirect(serverUrl: string, pat: string): Promise<void> {
 }
 
 /**
- * Pairing-aware (re)connect used by startup + the keepalive alarm. Picks the
- * channel from the stored pairing state — the same rule as the external
- * `reconnect` handler: serverUrl+pat ⇒ direct WSS, otherwise the native
- * "装好即连" host. This replaces the old unconditional connectNative(), which
- * would tear a paired direct/offscreen socket and re-handshake natively on
- * every wake.
+ * (Re)connect over the RESIDENT-LOCAL transport (跨组契约1/3/4): the SW holds a
+ * {@link LocalBridgeClient} to the resident bridge loopback DIRECTLY — no
+ * offscreen middle layer.
+ *
+ * <p>WHY SW-DIRECT (根治 action 卡住). Connection stability is already owned by
+ * the resident bridge holding the backend session at the PROCESS level (a SW
+ * recycle drops only the loopback segment, never the bridge↔backend session), so
+ * offscreen is not needed here to survive SW suspension. Routing the resident
+ * path through offscreen meant inbound action.execute had to relay
+ * offscreen→SW and the action.result relay SW→offscreen→loopback — extra hops
+ * that left the first "open browser" step waiting on a round-trip that never
+ * completed. Holding the socket in the SW puts inbound + outbound on the EXACT
+ * SAME path as the proven NativeBridge: loopback frame → {@link LocalBridgeClient}
+ * .onMessage → {@link dispatchInbound} → ActionRouter → handler, and the
+ * action.result → {@link sendUp} → activeBridge.send → loopback. A SW recycle
+ * drops the loopback socket; the LocalBridgeClient's own 100ms→2s reconnect (and
+ * the keepalive alarm's reconnectByPairing) re-opens it in milliseconds while the
+ * bridge's backend session stays put (契约5 生命周期硬隔离).
+ *
+ * <p>契约3 (端到端 isConnected) is preserved IN THE SW: LocalBridgeClient.connected
+ * is (loopback IPC OPEN ∧ upstream up), where `upstream up` comes from the
+ * bridge's {kind:'upstream'} control frame consumed here — never a bare local
+ * socket OPEN, so no 假阳性.
+ *
+ * <p>The offscreen/direct path is untouched and still used by the Claude-Code /
+ * direct-WSS pairing flow (connectDirect / reconnectByPairing's serverUrl+pat
+ * branch). Only the resident-local channel changed from offscreen-hosted to
+ * SW-direct.
+ */
+function connectResidentLocal(): void {
+  bridgeUnsub?.()
+  bridgeUnsub = null
+  if (activeBridge && 'disconnect' in activeBridge) {
+    try {
+      activeBridge.disconnect()
+    } catch {
+      // ignore
+    }
+  }
+  const client = new LocalBridgeClient()
+  // Same inbound wiring as NativeBridge: every loopback frame → dispatchInbound,
+  // which routes action.execute → ActionRouter → handlers and snapshots/visuals.
+  bridgeUnsub = client.onMessage(dispatchInbound)
+  activeBridge = client
+  // No PAT on loopback — the bridge authenticates by Origin (契约2). The
+  // `connected` getter gates on (IPC OPEN ∧ upstream up) from the bridge's
+  // {kind:'upstream'} frame (契约3), so isConnected() stays end-to-end accurate.
+  client.connect(LOCAL_BRIDGE_URL)
+}
+
+/**
+ * Pairing-aware (re)connect used by startup + the keepalive alarm. Channel
+ * priority (跨组契约4): direct 配对 (serverUrl+pat) > resident-local (when the
+ * preferLocalBridge flag is on, default ON) > native "装好即连". With the flag
+ * explicitly off the resident-local branch is skipped, so this resolves to
+ * serverUrl+pat ⇒ direct, else ⇒ native routing. This replaces the old
+ * unconditional connectNative(), which would tear a paired direct/offscreen
+ * socket and re-handshake natively on every wake.
+ *
+ * <p>The resident-local channel is now SW-DIRECT (a LocalBridgeClient held by
+ * the SW, no offscreen) — see {@link connectResidentLocal} for why. A wake-driven
+ * reconnect there rebuilds the LocalBridgeClient (the suspended SW already lost
+ * its loopback socket); the bridge's backend session is untouched (契约5), so
+ * this is a millisecond loopback re-open, not a backend re-handshake.
  *
  * <p>OFFSCREEN ROUND-TRIP: when the socket lives in the offscreen document it
  * survives SW suspension, so a wake-driven reconnect must NOT blindly tear it
@@ -247,6 +355,15 @@ async function reconnectByPairing(): Promise<void> {
     await connectDirect(cfg.serverUrl, cfg.pat)
     return
   }
+  // 跨组契约4: prefer the resident bridge loopback (SW-direct LocalBridgeClient)
+  // unless the flag is explicitly disabled. No offscreen requirement — the
+  // resident transport is now held directly by the SW (see connectResidentLocal),
+  // so it works on any runtime; flag off ⇒ fall through to native "装好即连",
+  // preserving the legacy behaviour exactly.
+  if (await preferLocalBridge()) {
+    connectResidentLocal()
+    return
+  }
   connectNative()
 }
 
@@ -263,16 +380,20 @@ function disconnectActive(): void {
 }
 
 /**
- * True iff the active transport is connected. Recognises all three transports —
- * the in-SW DirectBridgeClient, the offscreen-hosted proxy, and the
- * Native-Messaging bridge — since the desktop path connects via NativeBridge on
- * startup and the sidepanel pill / external `ping` read this.
+ * True iff the active transport is connected. Recognises all transports — the
+ * in-SW DirectBridgeClient, the offscreen-hosted proxy, the Native-Messaging
+ * bridge, and the SW-direct resident-local LocalBridgeClient — since the desktop
+ * path connects via NativeBridge / LocalBridgeClient on startup and the sidepanel
+ * pill / external `ping` read this. For LocalBridgeClient `connected` is the
+ * end-to-end gate (loopback IPC OPEN ∧ bridge upstream up, 契约3), so a bare
+ * loopback OPEN with the bridge detached from the backend never reads true.
  */
 function isConnected(): boolean {
   return (
     (activeBridge instanceof DirectBridgeClient ||
       activeBridge instanceof OffscreenBridgeProxy ||
-      activeBridge instanceof NativeBridge) &&
+      activeBridge instanceof NativeBridge ||
+      activeBridge instanceof LocalBridgeClient) &&
     activeBridge.connected
   )
 }

@@ -180,6 +180,8 @@ const sseEventNames = [
   'lead.comments.collecting',
   'lead.comments.progress',
   'lead.comments.collected',
+  'lead.comment.matching',
+  'lead.comment.match_progress',
   'lead.comment.matched',
   'lead.comment.match_skipped',
   'lead.engagement.started',
@@ -365,7 +367,7 @@ const progressGroups = computed(() => {
     { key: 'search', title: '搜索与排序', types: ['lead.search.started', 'lead.search.completed', 'lead.sort.started', 'lead.sort.completed'] },
     { key: 'video', title: '视频处理', types: ['lead.video.started', 'lead.video.opened', 'lead.video.completed', 'lead.video.failed'] },
     { key: 'comments', title: '评论采集', types: ['lead.comments.opened', 'lead.comments.region_detected', 'lead.comments.collecting', 'lead.comments.progress', 'lead.comments.collected'] },
-    { key: 'match', title: '评论匹配', types: ['lead.comment.matched', 'lead.comment.match_skipped'] },
+    { key: 'match', title: '评论匹配', types: ['lead.comment.matching', 'lead.comment.match_progress', 'lead.comment.matched', 'lead.comment.match_skipped'] },
     { key: 'engagement', title: '线索触达', types: ['lead.engagement.started', 'lead.engagement.completed', 'lead.engagement.failed', 'lead.engagement.skipped'] },
     { key: 'summary', title: '任务收尾', types: ['lead.run.summary', 'lead.run.failed', 'run_snapshot', 'done'] },
   ]
@@ -813,6 +815,8 @@ function maxVideoNumberFromEvents(): number | null {
       'lead.comments.collecting',
       'lead.comments.progress',
       'lead.comments.collected',
+      'lead.comment.matching',
+      'lead.comment.match_progress',
       'lead.comment.matched',
       'lead.engagement.started',
       'lead.engagement.completed',
@@ -926,7 +930,7 @@ function eventTone(event: DouyinLeadTimelineEvent): 'success' | 'danger' | 'warn
   if (severity === 'error' || event.type.endsWith('.failed') || event.type === 'lead.run.failed') return 'danger'
   if (severity === 'warn' || severity === 'warning') return 'warning'
   if (event.type.endsWith('.completed') || event.type === 'lead.run.summary') return 'success'
-  if (event.type.endsWith('.started') || event.type === 'run_started' || event.type === 'lead.comments.collecting' || event.type === 'lead.comments.progress') return 'running'
+  if (event.type.endsWith('.started') || event.type === 'run_started' || event.type === 'lead.comments.collecting' || event.type === 'lead.comments.progress' || event.type === 'lead.comment.matching' || event.type === 'lead.comment.match_progress') return 'running'
   return 'neutral'
 }
 
@@ -946,6 +950,8 @@ function businessTitle(type: string): string {
     'lead.comments.collecting': '正在采集评论',
     'lead.comments.progress': '评论采集中',
     'lead.comments.collected': '评论采集完成',
+    'lead.comment.matching': '正在匹配评论',
+    'lead.comment.match_progress': '评论匹配中',
     'lead.comment.matched': '命中匹配评论',
     'lead.comment.match_skipped': '跳过评论匹配',
     'lead.engagement.started': '开始触达线索',
@@ -974,6 +980,16 @@ function eventSummary(type: string, payload: JsonRecord): string {
     if (pages != null) parts.push(`已观察 ${countLabel(pages)} 页网络响应`)
     if (payload.networkHasMoreFalseObserved === true) parts.push('已收到无更多响应')
     return parts.join('，')
+  }
+  if (type === 'lead.comment.matching') {
+    const total = firstNumber(payload.commentsToMatch)
+    return total != null ? `开始匹配 ${countLabel(total)} 条评论` : '开始匹配评论'
+  }
+  if (type === 'lead.comment.match_progress') {
+    const processed = firstNumber(payload.matchedProcessed)
+    const total = firstNumber(payload.matchTotal)
+    if (processed != null && total != null) return `评论匹配中 ${countLabel(processed)}/${countLabel(total)}`
+    return '评论匹配中'
   }
   if (type === 'lead.comment.matched') {
     const author = stringValue(payload.authorName) || stringValue(payload.author)
