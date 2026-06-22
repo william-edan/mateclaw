@@ -114,6 +114,13 @@ public class AuthService {
         return loginResponse(user, token, createdWorkspace != null ? createdWorkspace.getId() : null);
     }
 
+    /** 手机号是否已注册（username 即手机号）。 */
+    public boolean isPhoneRegistered(String phone) {
+        Long count = userMapper.selectCount(new LambdaQueryWrapper<UserEntity>()
+                .eq(UserEntity::getUsername, phone));
+        return count != null && count > 0;
+    }
+
     private LoginResponse loginResponse(UserEntity user, String token, Long currentWorkspaceId) {
         return new LoginResponse(
                 user.getId(),
