@@ -42,53 +42,17 @@
           />
         </div>
 
-        <template v-else>
-          <div class="input-wrap">
-            <input
-              v-model="registerForm.phone"
-              type="tel"
-              class="form-input"
-              :placeholder="t('login.placeholders.phone')"
-              :aria-label="t('login.fields.phone')"
-              autocomplete="tel"
-              required
-            />
-          </div>
-
-          <div class="input-wrap code-wrap">
-            <input
-              v-model="registerForm.code"
-              type="text"
-              inputmode="numeric"
-              maxlength="6"
-              class="form-input"
-              :placeholder="t('login.placeholders.code')"
-              :aria-label="t('login.fields.code')"
-              autocomplete="one-time-code"
-              required
-              @input="onCodeInput"
-            />
-            <button
-              type="button"
-              class="code-btn"
-              :disabled="codeCountdown > 0 || sendingCode"
-              @click="handleSendCode"
-            >
-              {{ codeCountdown > 0 ? t('login.resendIn', { n: codeCountdown }) : t('login.getCode') }}
-            </button>
-          </div>
-
-          <div class="input-wrap">
-            <input
-              v-model="registerForm.nickname"
-              type="text"
-              class="form-input"
-              :placeholder="t('login.placeholders.nickname')"
-              :aria-label="t('login.fields.nickname')"
-              autocomplete="nickname"
-            />
-          </div>
-        </template>
+        <div v-else class="input-wrap">
+          <input
+            v-model="registerForm.phone"
+            type="tel"
+            class="form-input"
+            :placeholder="t('login.placeholders.phone')"
+            :aria-label="t('login.fields.phone')"
+            autocomplete="tel"
+            required
+          />
+        </div>
 
         <div class="input-wrap">
           <input
@@ -112,6 +76,30 @@
           </button>
         </div>
 
+        <template v-if="mode === 'register'">
+          <div class="input-wrap">
+            <input
+              v-model="registerForm.confirmPassword"
+              :type="showPassword ? 'text' : 'password'"
+              class="form-input"
+              :placeholder="t('login.placeholders.confirmPassword')"
+              :aria-label="t('login.fields.confirmPassword')"
+              autocomplete="new-password"
+              required
+            />
+          </div>
+          <div class="input-wrap">
+            <input
+              v-model="registerForm.nickname"
+              type="text"
+              class="form-input"
+              :placeholder="t('login.placeholders.nickname')"
+              :aria-label="t('login.fields.nickname')"
+              autocomplete="nickname"
+            />
+          </div>
+        </template>
+
         <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
 
         <button type="submit" class="login-btn" :disabled="loading">
@@ -128,7 +116,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { authApi } from '@/api/index'
@@ -145,51 +133,7 @@ const showPassword = ref(false)
 const errorMsg = ref('')
 const mode = ref<'login' | 'register'>('login')
 const form = reactive({ username: '', password: '' })
-const registerForm = reactive({ phone: '', code: '', password: '', nickname: '' })
-
-const sendingCode = ref(false)
-const codeCountdown = ref(0)
-let codeTimer: ReturnType<typeof setInterval> | undefined
-
-function onCodeInput(e: Event) {
-  const el = e.target as HTMLInputElement
-  const digits = el.value.replace(/\D/g, '').slice(0, 6)
-  registerForm.code = digits
-  el.value = digits
-}
-
-function startCodeCountdown(seconds: number) {
-  codeCountdown.value = seconds
-  if (codeTimer) clearInterval(codeTimer)
-  codeTimer = setInterval(() => {
-    codeCountdown.value -= 1
-    if (codeCountdown.value <= 0 && codeTimer) {
-      clearInterval(codeTimer)
-      codeTimer = undefined
-    }
-  }, 1000)
-}
-
-async function handleSendCode() {
-  if (!registerForm.phone) {
-    errorMsg.value = t('login.phoneRequired')
-    return
-  }
-  sendingCode.value = true
-  errorMsg.value = ''
-  try {
-    await authApi.sendRegisterCode({ phone: registerForm.phone })
-    startCodeCountdown(60)
-  } catch (e: any) {
-    errorMsg.value = e?.message || t('login.sendCodeFailed')
-  } finally {
-    sendingCode.value = false
-  }
-}
-
-onBeforeUnmount(() => {
-  if (codeTimer) clearInterval(codeTimer)
-})
+const registerForm = reactive({ phone: '', password: '', confirmPassword: '', nickname: '' })
 
 const activePassword = computed({
   get: () => mode.value === 'login' ? form.password : registerForm.password,
@@ -253,13 +197,20 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
-  if (!registerForm.phone || !registerForm.code || !registerForm.password) return
+  if (!registerForm.phone || !registerForm.password || !registerForm.confirmPassword) return
+  if (registerForm.password.length < 6) {
+    errorMsg.value = t('login.passwordTooShort')
+    return
+  }
+  if (registerForm.password !== registerForm.confirmPassword) {
+    errorMsg.value = t('login.passwordMismatch')
+    return
+  }
   loading.value = true
   errorMsg.value = ''
   try {
     const payload = {
       phone: registerForm.phone,
-      code: registerForm.code,
       password: registerForm.password,
       nickname: registerForm.nickname || undefined,
     }
@@ -371,43 +322,6 @@ html.dark .login-page {
   position: relative;
   display: flex;
   align-items: center;
-}
-
-.code-wrap {
-  gap: 8px;
-}
-
-.code-wrap .form-input {
-  flex: 1;
-}
-
-.code-btn {
-  flex: 0 0 auto;
-  height: 48px;
-  padding: 0 14px;
-  border: 1.5px solid var(--mc-border);
-  border-radius: 12px;
-  background: var(--mc-bg-elevated);
-  color: var(--mc-primary);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: opacity 0.15s, border-color 0.2s;
-}
-
-.code-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.code-btn:hover:not(:disabled) {
-  border-color: var(--mc-primary);
-}
-
-.code-btn:focus-visible {
-  outline: 2px solid var(--mc-primary);
-  outline-offset: 2px;
 }
 
 .form-input {
