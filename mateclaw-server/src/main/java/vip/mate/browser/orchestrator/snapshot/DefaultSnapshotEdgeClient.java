@@ -99,7 +99,10 @@ public class DefaultSnapshotEdgeClient implements SnapshotEdgeClient {
                             "tab_ref", mapper.convertValue(tabRef, Object.class),
                             "filter", filter == null ? "interactive" : filter,
                             "depth", DEFAULT_DEPTH,
-                            "max_chars", DEFAULT_MAX_CHARS))
+                            "max_chars", DEFAULT_MAX_CHARS,
+                            // 获客流程置位(SnapshotPreferenceContext):让扩展跳过 CDP a11y、走 DOM 走树器,
+                            // 不触发"已开始调试此浏览器"横幅(页面不变形)。通用 agent 不置位→false→CDP-first 不变。
+                            "prefer_dom", SnapshotPreferenceContext.preferDom()))
                     .build();
             session.getWs().sendMessage(new TextMessage(mapper.writeValueAsString(envelope)));
         } catch (Exception e) {

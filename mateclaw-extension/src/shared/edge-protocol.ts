@@ -22,6 +22,8 @@ export const EdgeMessageKind = {
   Ping: 'ping',
   Pong: 'pong',
   Error: 'error',
+  // Connection control — CP → Ext:后端请求扩展断开(桌面"断开连接"经 session 下行到此)。
+  ConnectionDisconnect: 'connection.disconnect',
   // v1.1 — atomic browser actions (Phase 2 P1)
   ActionExecute: 'action.execute',
   ActionResult: 'action.result',

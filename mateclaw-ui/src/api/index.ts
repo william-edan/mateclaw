@@ -1743,4 +1743,13 @@ export const browserPairingApi = {
    *  extension to render its real connection state. */
   listSessions: () =>
     http.get<BrowserSessionView[]>('/browser/sessions'),
+
+  /** 桌面端"断开连接"(开关式):后端把 live 会话置 disabled → UI 未连接、获客不路由动作,但扩展保持
+   *  连着、可逆。桌面 SPA 在 Electron 内够不到 Chrome 扩展,故走后端开关(不再靠扩展直发,杜绝卡死)。 */
+  disconnectSessions: () =>
+    http.post<{ disconnected: number }>('/browser/sessions/disconnect', {}),
+
+  /** 桌面端"连接"(开关式):后端解禁 live 会话(disabled=false)→ 恢复连接。与 disconnectSessions 互逆。 */
+  connectSessions: () =>
+    http.post<{ connected: number }>('/browser/sessions/connect', {}),
 }

@@ -23,13 +23,13 @@ class LlmCommentAiClassifierTest {
 
         List<List<CommentMatchResult>> batches = classifier.planBatches(candidates);
 
-        // 批次大小必须 <= MAX_BATCH_SIZE(35):单批输出 JSON 不能超模型 max_tokens,否则被截断成
+        // 批次大小必须 <= MAX_BATCH_SIZE(120):单批输出 JSON 不能超模型 max_tokens,否则被截断成
         // 不完整 JSON → 整批失败二分重试。同时所有候选都要进某批次(不丢评论)。
         // 用不变量断言而非硬编码批次数,这样后续调整批次常量不会再误伤本测试。
         assertThat(batches).isNotEmpty();
         assertThat(batches)
                 .extracting(List::size)
-                .allSatisfy(size -> assertThat(size).isBetween(1, 35));
+                .allSatisfy(size -> assertThat(size).isBetween(1, 120));
         assertThat(batches.stream().mapToInt(List::size).sum()).isEqualTo(170);
     }
 

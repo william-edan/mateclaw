@@ -137,7 +137,15 @@ async function douyinOpenVideoInPage(index: number): Promise<DouyinOpenVideoResu
     if (cs.cursor === 'pointer' || cur.getAttribute('role') === 'button' || cur.tagName === 'A') { el = cur; break }
   }
 
-  try { el.scrollIntoView({ block: 'center', inline: 'center' }) } catch { /* ignore */ }
+  // 仅当封面卡不在视口内才滚动,且用 'nearest'(最小位移)。原先无条件 {block:'center'} 会把
+  // 整个精选页滚动去居中卡片=用户看到的"整页上移/变形",而搜索后卡片通常已可见,根本不需要滚。
+  try {
+    const vr = el.getBoundingClientRect()
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0
+    const fullyVisible = vr.top >= 0 && vr.left >= 0 && vr.bottom <= vh && vr.right <= vw
+    if (!fullyVisible) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  } catch { /* ignore */ }
   const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
   const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0 }
   const ptr = Object.assign({}, base, { pointerId: 1, pointerType: 'mouse', isPrimary: true })

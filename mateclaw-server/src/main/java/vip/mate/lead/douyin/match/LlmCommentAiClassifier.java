@@ -38,10 +38,12 @@ public class LlmCommentAiClassifier implements CommentAiClassifier {
 
     // 批次必须让单次输出 JSON 装得进模型 max_tokens(默认 4096);80~100 条会让 deepseek 等
     // 输出被截断成不完整 JSON → 整批失败 → 二分重试,反而跑 3 次。每条输出约 60~80 tokens,
-    // 30 条 ≈ 2000 tokens,安全留足余量。
-    private static final int TARGET_BATCH_SIZE = 30;
-    private static final int MAX_BATCH_SIZE = 35;
-    private static final int MAX_BATCH_CHARS = 5_000;
+    // 80 条 ≈ 5000~6000 输出 tokens,绝大多数模型 max_tokens 扛得住;偶尔超限被截断由
+    // classifyBatchWithFallback 对半拆批自愈(不丢数据)。相较 30 条批数大幅减少 → 更快、更省模型调用。
+    // 注意:再调大务必确认所用模型的 max output tokens 够大(单批输出 JSON 不能超,否则被截断成不完整 JSON)。
+    private static final int TARGET_BATCH_SIZE = 80;
+    private static final int MAX_BATCH_SIZE = 120;
+    private static final int MAX_BATCH_CHARS = 12_000;
     // 多批并发上限(LLM 调用 IO 密集),避免 provider 限流的同时让总耗时≈最慢单批而非累加。
     private static final int MAX_CONCURRENT_BATCHES = 4;
     private static final int MAX_COMMENT_TEXT_CHARS = 300;

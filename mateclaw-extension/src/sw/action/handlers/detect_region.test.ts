@@ -6,7 +6,7 @@ function chromeWithDomExecution() {
   return {
     scripting: {
       executeScript: vi.fn(async ({ func, args }) => [{
-        result: func(...args),
+        result: await func(...args),
       }]),
     },
   } as unknown as typeof chrome

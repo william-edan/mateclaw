@@ -147,7 +147,10 @@ export class ScreenshotCaptureHandler {
           },
         }))
       } finally {
-        await this.deps.debuggerManager.detach(tabId)
+        // 不立即 detach:否则 CDP 调试横幅每次截图都"出现→消失",页面被顶下再弹回、连续截图时整页
+        // 反复上下跳动(用户看到的"页面变形")。连续截图复用同一会话;空闲后由防抖延迟 detach 释放、
+        // 横幅消失。tab 关闭时 Chrome 自动 detach,无泄漏。
+        this.deps.debuggerManager.scheduleIdleDetach(tabId)
       }
     } catch (err) {
       this.respondError(

@@ -104,14 +104,17 @@ async function preferLocalBridge(): Promise<boolean> {
  */
 const USER_DISCONNECTED_KEY = 'userDisconnected'
 
-/** 是否处于"用户主动断开"态。读失败 → false(失败开放:绝不因读错而长期连不上)。 */
+/**
+ * 是否处于"用户主动断开"态。
+ *
+ * 【已弃用为恒 false】桌面端断开改走【后端开关式】(后端禁用该会话,扩展始终连着、可逆)——因为
+ * 桌面 SPA 在 Electron 内够不到 Chrome 扩展,旧的"扩展置持久闩+断 loopback+不再重连"在桌面无法被
+ * 清除,导致断开后永远"未检测到扩展"(单向陷阱)。这里恒返回 false:① 让扩展始终自动重连,杜绝陷阱;
+ * ② 老 install 里残留的 userDisconnected 存量值被忽略,reload 新扩展即自动恢复连接。断开/连接的真正
+ * 控制权移到后端({@code /browser/sessions/disconnect|connect} → BrowserSession.disabled)。
+ */
 async function isUserDisconnected(): Promise<boolean> {
-  try {
-    const got = (await chrome.storage.local.get([USER_DISCONNECTED_KEY])) as Record<string, unknown>
-    return got[USER_DISCONNECTED_KEY] === true
-  } catch {
-    return false
-  }
+  return false
 }
 
 /** 置/清"用户主动断开"闩。 */
@@ -590,6 +593,13 @@ function autoShowIndicators(inbound: EdgeMessage): void {
 }
 
 function dispatchInbound(m: EdgeMessage): void {
+  // 后端中转的"断开连接"(桌面 SPA 够不到 Chrome 扩展,只能经 session 下行此指令):
+  // 置"用户已断开"闩 + 断开 loopback,且不再自动重连(reconnectByPairing 见闩即跳过)。
+  if (m.kind === EdgeMessageKind.ConnectionDisconnect) {
+    void setUserDisconnected(true).then(() => disconnectActive())
+    return
+  }
+
   // Auto-show indicators on any inbound work envelope so the user sees the
   // glow + phantom cursor + Stop button whenever the agent is acting on
   // their browser — matches the official "Claude in Chrome" experience.

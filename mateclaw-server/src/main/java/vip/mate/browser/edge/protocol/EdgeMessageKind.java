@@ -79,6 +79,13 @@ public enum EdgeMessageKind {
     EVENT_PAGE_NAVIGATED("event.page.navigated"),
     EVENT_TAB_CLOSED("event.tab.closed"),
 
+    // -----------------------------------------------------------------
+    // Connection control — CP → NH/bridge → Ext:后端主动请求扩展断开(用户在桌面点"断开连接")。
+    // 桌面 SPA 在 Electron 内够不到 Chrome 扩展,无法 chrome.runtime 直发 unpair,故经此 session
+    // 下行;扩展收到后置"用户已断开"闩 + 断开 loopback,且不再自动重连。
+    // -----------------------------------------------------------------
+    CONNECTION_DISCONNECT("connection.disconnect"),
+
     /** Unknown wire kind. Forward-compat: receivers warn-and-drop, do not close. */
     UNKNOWN("__unknown__");
 

@@ -138,6 +138,12 @@ interface SnapshotRequestPayload {
   frame_id?: number
   /** Optional DOM-settle timing overrides; defaults applied by settleArgs(). */
   settle?: SettleOptions
+  /**
+   * 后端(抖音获客流程)置 true:跳过 CDP a11y、直接用注入 JS 的 DOM 走树器取快照,避免触发 Chrome
+   * "已开始调试此浏览器"横幅(横幅占视口顶部、频繁 attach/detach 致页面上下跳=变形)。缺省/false:
+   * 保持 CDP-first(通用 agent 行为不变)。
+   */
+  prefer_dom?: boolean
 }
 
 interface SnapshotResult {
@@ -243,7 +249,8 @@ export class SnapshotRequestHandler {
     // CDP extraction is top-frame only (getFullAXTree is whole-page). For an
     // explicit child-frame request, or with no DebuggerManager wired, go
     // straight to the JS walker which handles per-frame extraction.
-    if (manager && req.frame_id === undefined) {
+    // prefer_dom(获客置位):跳过 CDP a11y、直接走 DOM 走树器 → 不 attach chrome.debugger、无横幅、不变形。
+    if (manager && req.frame_id === undefined && !req.prefer_dom) {
       try {
         const cdp = await this.captureSnapshotViaCdp(manager, tabId, req)
         if (cdpTreeUsable(cdp.tree)) {
@@ -288,12 +295,11 @@ export class SnapshotRequestHandler {
       const tree = await extractAxTreeViaCdp(manager, tabId, req.filter, req.max_chars)
       return { tree, viewport: meta.viewport, url: meta.url, title: meta.title }
     } finally {
-      // A snapshot is a read-only operation. Do not keep CDP attached after it:
-      // if the MV3 service worker is suspended between observe and the next
-      // action, Chrome can otherwise retain a debugger binding that the fresh
-      // worker no longer has in memory, causing "Another debugger is already
-      // attached" on the following click/hover/type.
-      await manager.detach(tabId)
+      // 不立即 detach:否则 CDP 调试横幅每次 observe 都"出现→消失",页面上下跳动(变形)。改为防抖
+      // 延迟 detach,连续 observe/截图复用同一会话、横幅稳定不闪。原先立即 detach 是为避免 SW 被挂起
+      // 后残留 "Another debugger is already attached";现由 attach() 的 already-attached 恢复路径
+      // (forceDetach + 重 attach)兜底,故延迟释放安全。tab 关闭时 Chrome 自动 detach。
+      manager.scheduleIdleDetach(tabId)
     }
   }
 

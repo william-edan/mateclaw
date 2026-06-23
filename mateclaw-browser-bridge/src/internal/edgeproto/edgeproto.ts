@@ -19,6 +19,9 @@ export const Kind = {
   Ping: 'ping',
   Pong: 'pong',
   Error: 'error',
+  // Connection control — CP → bridge → Ext:后端请求扩展断开(桌面"断开连接"经此下行)。
+  // bridge 只透传;此处登记 kind 是为了让 parse() 不把它降级成 __unknown__、丢失给扩展的语义。
+  ConnectionDisconnect: 'connection.disconnect',
   // v1.1 — atomic browser actions
   ActionExecute: 'action.execute',
   ActionResult: 'action.result',

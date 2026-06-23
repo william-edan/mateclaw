@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "化帆AI 浏览器助手",
-  "version": "0.1.16",
+  "version": "0.1.25",
   "description": "MateClaw Browser Agent — Phase 1 connectivity",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp4q3+BGtN22LCnOitTNwvBCcE0BhDxDETgpC5Yf7+t5itm283o2Oum7UFth6+PtPyVmp+t4weXc+MJmfsUlzy+R/+7AsPHkBBdR9dQRVtq/O7ZlPHIh4LH63A4q8a5heFM1deK5mBF6hj5hBeTtuTneUdVTEHZ2cX9bKRjplRAk/2EtWWhQSXIFG7jFOxtAREU2WE1OcFZfpY69RZCNTNh2iYJ12IaP8rmSyz2C0Hf5IedZFHLWSDU9qEIAd/TYlaU1pfcF30QU1ILqtmTp5P2pyMSsZqqLVW79MmV6UHCdtTCdsDNvZIWb+S+tPI/o79Hu3+s3uhiB8s4dqPIPNhQIDAQAB",

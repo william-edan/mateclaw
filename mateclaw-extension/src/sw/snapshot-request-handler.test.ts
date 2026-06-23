@@ -420,7 +420,7 @@ function fakeDebuggerManager(fake: CdpFake) {
   })
   const attach = vi.fn(async () => {})
   return {
-    manager: { attach, send, detach: vi.fn(async () => {}), isAttached: () => true } as unknown as
+    manager: { attach, send, detach: vi.fn(async () => {}), scheduleIdleDetach: vi.fn(), isAttached: () => true } as unknown as
       import('./debugger-manager').DebuggerManager,
     send,
     attach,

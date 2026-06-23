@@ -40,6 +40,8 @@ export class DebuggerManager {
   private readonly sessions = new Map<number, AttachedSession>()
   private readonly detachedReasons = new Map<number, DetachReason>()
   private readonly eventListeners = new Map<number, Set<DebuggerEventListener>>()
+  /** 每个 tab 的"空闲延迟 detach"定时器(防抖释放 CDP 会话,见 {@link scheduleIdleDetach})。 */
+  private readonly idleDetachTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly chrome: typeof globalThis.chrome) {
     this.chrome.debugger.onDetach.addListener(this.onDetach)
@@ -51,6 +53,8 @@ export class DebuggerManager {
    * returns the existing session without issuing another CDP attach call.
    */
   async attach(tabId: number): Promise<void> {
+    // 新的一次使用 → 取消任何待执行的空闲 detach,复用同一会话(横幅不闪、页面不跳)。
+    this.cancelIdleDetach(tabId)
     if (this.sessions.has(tabId)) return
 
     try {
@@ -89,11 +93,38 @@ export class DebuggerManager {
    * Detach from a tab. No-op if not attached. Never throws while cleaning up.
    */
   async detach(tabId: number): Promise<void> {
+    this.cancelIdleDetach(tabId)
     if (!this.sessions.has(tabId)) return
 
     await this.detachChrome(tabId)
     this.sessions.delete(tabId)
     this.detachedReasons.delete(tabId)
+  }
+
+  /** 取消某 tab 待执行的空闲 detach 定时器(若有)。 */
+  private cancelIdleDetach(tabId: number): void {
+    const t = this.idleDetachTimers.get(tabId)
+    if (t !== undefined) {
+      clearTimeout(t)
+      this.idleDetachTimers.delete(tabId)
+    }
+  }
+
+  /**
+   * 防抖延迟 detach:截图/快照后【不要】立即 detach —— CDP 调试横幅("已开始调试此浏览器")会随
+   * 每次 attach/detach"出现→消失",页面被顶下去再弹回来,连续截图时表现为整页反复上下跳动
+   * (用户看到的"页面变形")。改为延迟 {@code delayMs} 再 detach;期间任何新的 attach(下一次截图)
+   * 都会 {@link cancelIdleDetach} 取消本次延迟并复用同一会话 → 跑获客连续截图时横幅稳定不闪、页面
+   * 不跳;真正空闲 {@code delayMs} 后才释放、横幅消失。tab 关闭时 Chrome 会自动 detach,无泄漏。
+   */
+  scheduleIdleDetach(tabId: number, delayMs = 30_000): void {
+    this.cancelIdleDetach(tabId)
+    if (!this.sessions.has(tabId)) return
+    const timer = setTimeout(() => {
+      this.idleDetachTimers.delete(tabId)
+      void this.detach(tabId)
+    }, delayMs)
+    this.idleDetachTimers.set(tabId, timer)
   }
 
   private async forceDetach(tabId: number): Promise<void> {

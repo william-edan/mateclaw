@@ -427,7 +427,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return BrowserObservation.failed("EMPTY_KEYWORD", "搜索关键词为空");
         }
         BrowserObservation cur = observeMain("all");
-        if (!hasDouyinSearchBarContext(cur.url())) {
+        // 每次开始任务都要落到"干净的搜索基底"。当前页若开着视频弹层/详情(url 带 modal_id / aweme_id /
+        // /video/),直接在原页打字搜索无效(弹层挡住搜索框、同关键词 SPA 不重渲染)——用户"已在 modal 页
+        // 重启任务没反应"的根因。这里对"弹层/详情态"强制整页导航回 /jingxuan(浏览器级跳转=全量重载,
+        // 弹层必被清掉),再走真实 DOM 搜索,等价于"开新页的干净状态",且不堆积多余标签页。
+        if (!hasDouyinSearchBarContext(cur.url()) || urlHasOpenVideoOrModal(cur.url())) {
             tryOk(browser.extension_browser_navigate(
                     "https://www.douyin.com/jingxuan",
                     "domcontentloaded",
@@ -460,6 +464,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     private boolean hasDouyinSearchBarContext(@Nullable String url) {
         String u = url == null ? "" : url.toLowerCase(Locale.ROOT);
         return u.contains("douyin.com") && (u.contains("/jingxuan") || u.contains("/search/"));
+    }
+
+    /** 当前 url 是否处于"视频弹层/详情"态(需先整页导航清掉,才能干净地重新搜索)。 */
+    private boolean urlHasOpenVideoOrModal(@Nullable String url) {
+        String u = url == null ? "" : url.toLowerCase(Locale.ROOT);
+        return u.contains("modal_id=") || u.contains("aweme_id=") || u.contains("/video/");
     }
 
     @Override
@@ -990,7 +1000,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             return true;
         }
         RegionInfo runtimeRegion = detectRuntimeCommentRegion();
-        if (runtimeRegion != null && extractedCommentPanelReady(runtimeRegion, observed.url())) {
+        // 网络-only 采集模式下不做 DOM 抽取(extractedCommentPanelReady 恒 false),此时"评论列表区域已
+        // 探到(detectRuntimeCommentRegion 非空,executeScript 真实 DOM、modal-aware)"本身就是评论区
+        // 已打开的权威信号。否则在 DOM-only(observe 树对弹层失明)叠加下,commentsPanelReady 的所有分支
+        // 全 false → ensureCommentsPanelReady 三条件全 false → 采集入口必抛 COMMENTS_PANEL_LOST(死结)。
+        if (runtimeRegion != null
+                && (COMMENT_NETWORK_ONLY_COLLECTION || extractedCommentPanelReady(runtimeRegion, observed.url()))) {
             return true;
         }
         return collector.detectCommentRegion(observed)
@@ -4632,7 +4647,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 && !tree.contains("播放")
                 && !tree.contains("最多点赞")
                 && targets.isEmpty();
-        return searchUrlVisible && keywordVisible && resultSignal && !emptyShell;
+        // url 在 /search/关键词 结果页 = 【格式无关】的强信号:DOM 走树器与 CDP a11y 都能可靠拿到 url
+        // (F12 实测 url=/jingxuan/search/<kw>?type=general)。而 tree 文本信号(keywordVisible/resultSignal)
+        // 在不同 observe 源下口径不一 —— 尤其精选搜索页连"最多点赞/播放/视频卡"都没有、DOM 走树器更取不到,
+        // 死要 tree 信号会让搜索永远校验不过、反复重试。故放宽:url 命中【或】原 tree 双信号 均算已进结果页;
+        // 非空壳判断保留以防误判进了空搜索首页。
+        return !emptyShell && (searchUrlVisible || (keywordVisible && resultSignal));
     }
 
     boolean canReuseSearchResultsForSorting(BrowserObservation observed, String keyword) {

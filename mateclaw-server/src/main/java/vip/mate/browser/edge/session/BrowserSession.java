@@ -59,6 +59,14 @@ public class BrowserSession {
     private volatile String extensionVersion = null;
 
     /**
+     * 用户在桌面"断开连接"后的【开关式禁用】态。true 时:UI 视为未连接(snapshot 的 extensionAttached
+     * 报 false)、获客路由 {@code findLiveBySubject} 跳过此会话(不下发动作),但【不】关闭 WS、不 evict
+     * —— 扩展保持连着,后端只是"闸住"它,故桌面"连接"可随时解禁恢复(可逆,不像旧的扩展闩会卡死)。
+     */
+    @Builder.Default
+    private volatile boolean disabled = false;
+
+    /**
      * Every subject-string key this session is reachable under in the registry's
      * alias map — at minimum {@link #subject}, plus (契约4) the PAT {@code userId}
      * string and the owning username when the registrar could resolve both. The

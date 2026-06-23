@@ -194,6 +194,10 @@ public class BrowserSessionRegistry {
             return found;
         }
         BrowserSession s = found.get();
+        if (s.isDisabled()) {
+            // 用户已开关式断开:不路由动作,但【不】evict、不关 WS —— 扩展保持连着,"连接"可解禁恢复。
+            return Optional.empty();
+        }
         if (isLive(s)) {
             return found;
         }
@@ -277,6 +281,22 @@ public class BrowserSessionRegistry {
         }
     }
 
+    /**
+     * 开关式"断开/连接":把所有 live session 的 {@link BrowserSession#isDisabled() disabled} 置为
+     * {@code disabled}。true=断开(UI 未连接、获客不路由动作,但保持 WS 连着、可逆);false=恢复连接。
+     * 返回受影响的会话数。桌面端"断开/连接"经此实现(不依赖在 Electron 内够不到的扩展直发),故可逆不卡死。
+     */
+    public int setDisabledAllLive(boolean disabled) {
+        int n = 0;
+        for (BrowserSession s : byId.values()) {
+            if (isLive(s)) {
+                s.setDisabled(disabled);
+                n++;
+            }
+        }
+        return n;
+    }
+
     public int sizeForSubject(String subject) {
         return subjectToSession.containsKey(subject) ? 1 : 0;
     }
@@ -293,7 +313,8 @@ public class BrowserSessionRegistry {
         for (var s : byId.values()) {
             out.add(new BrowserSessionView(
                     s.getId(), s.getSubject(), s.getAgentVersion(), s.getLastHeartbeatAt(),
-                    s.isExtensionAttached(), s.getExtensionVersion()));
+                    // 开关式断开:disabled=true 时对 UI 报 extensionAttached=false → 显示"未连接"。
+                    s.isExtensionAttached() && !s.isDisabled(), s.getExtensionVersion()));
         }
         return out;
     }

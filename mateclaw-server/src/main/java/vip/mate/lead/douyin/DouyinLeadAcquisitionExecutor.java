@@ -2,6 +2,7 @@ package vip.mate.lead.douyin;
 
 import org.springframework.stereotype.Service;
 import vip.mate.browser.edge.RoutingSubjectContext;
+import vip.mate.browser.orchestrator.snapshot.SnapshotPreferenceContext;
 import vip.mate.lead.douyin.browser.DouyinBrowserAdapter;
 import vip.mate.lead.douyin.browser.DouyinBrowserException;
 import vip.mate.lead.douyin.match.CommentMatcher;
@@ -69,6 +70,9 @@ public class DouyinLeadAcquisitionExecutor {
             // sleep 里主动跳出。彻底取代旧的 interrupt —— NIO 中断会关闭 H2 共享 FileChannel,导致
             // 整库 "database has been closed"(详见 LeadRunContext 类注释)。
             LeadRunContext.set(() -> cancellation.isCancellationRequested(runId));
+            // 获客 observe 走 DOM 走树器(prefer_dom),扩展不再 CDP attach → 无"已开始调试此浏览器"
+            // 横幅、页面不变形,且更快、后台不空树。仅本 run 线程置位,通用 agent 不受影响;finally 清理。
+            SnapshotPreferenceContext.setPreferDom(true);
             AgentRunEntity run = runKernel.startRun(runId);
             // 契约3:在抖音获客任务入口(虚拟线程内)set 发起人 edge subject,使后台 service_*
             // (resolveSession(null) 无 ChatOrigin subject)能回退读 RoutingSubjectContext.get() 精确命中
@@ -169,6 +173,7 @@ public class DouyinLeadAcquisitionExecutor {
                     Map.of("code", code, "message", message), null));
         } finally {
             LeadRunContext.clear();
+            SnapshotPreferenceContext.clear();
             if (routingSubjectSet) {
                 // 虚拟线程在 newVirtualThreadPerTaskExecutor 下虽不复用,但 RoutingSubjectContext 基于
                 // ThreadLocal,clear 是 ThreadLocal 卫生的硬约束:绝不把发起人 subject 泄漏到任何后续使用。

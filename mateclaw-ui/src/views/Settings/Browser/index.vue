@@ -27,8 +27,11 @@
         <p class="empty-hint">
           {{ isDesktopClient ? t('settings.browser.notDetected.desktopHint') : t('settings.browser.notDetected.hint') }}
         </p>
-        <!-- Desktop uses Native Messaging auto-connect — no web-pairing button. -->
-
+        <!-- 桌面端:断开(开关式)后这里给"连接"按钮 → 后端解禁会话恢复连接(扩展本由常驻 bridge 连着)。 -->
+        <button v-if="isDesktopClient" class="btn-primary" :disabled="busy" @click="connect">
+          <el-icon v-if="connecting" class="is-loading"><Loading /></el-icon>
+          {{ connecting ? t('settings.browser.connecting') : t('settings.browser.connect') }}
+        </button>
       </div>
 
       <!-- Detected, not connected: name + Connect -->
@@ -211,6 +214,14 @@ async function refresh() {
 async function connect() {
   connecting.value = true
   try {
+    if (isDesktopClient.value) {
+      // 桌面端"连接"=后端解禁会话(开关式断开的逆操作);扩展本就由常驻 bridge 自动连着,无需 pair
+      // (且 Electron 内够不到 Chrome 扩展)。解禁后 refresh 以服务端为准,extensionAttached 恢复 true。
+      await browserPairingApi.connectSessions()
+      await refresh()
+      mcToast.success(t('settings.browser.toast.connected'))
+      return
+    }
     const result = await runConnect(
       {
         mintToken: async (name) => {
@@ -252,6 +263,23 @@ async function connect() {
 async function disconnect() {
   disconnecting.value = true
   try {
+    if (isDesktopClient.value) {
+      // 桌面端 SPA 在 Electron 内够不到 Chrome 扩展,chrome.runtime 直发 unpair 不会送达;改走后端
+      // 中转:后端沿 live session 下发 connection.disconnect → 扩展置闩断开且不再自动重连。
+      try {
+        await browserPairingApi.disconnectSessions()
+      } catch {
+        /* 后端不可达也按已断开处理 */
+      }
+      // 乐观置"未连接"且【不】立即 refresh —— 扩展在场宽限(~8s)内 listSessions 仍可能读到
+      // extensionAttached 残留 true,refresh 会闪回"已连接";闩已置,稍后心跳会真转未连接。
+      status.value = 'not-detected'
+      deviceName.value = null
+      extVersion.value = null
+      extOutdated.value = false
+      mcToast.success(t('settings.browser.toast.disconnected'))
+      return
+    }
     await sendToExtension<PairResponse>({ type: 'unpair' })
     // Best-effort revoke of the remembered PAT; unpair the extension regardless.
     const tokenId = localStorage.getItem(PAIRING_TOKEN_KEY)

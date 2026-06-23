@@ -405,15 +405,27 @@ async function typeDouyinDmDraftInPage(
   text: string,
   send: boolean,
 ): Promise<{ ok: boolean; reason?: string; draftTyped?: boolean; sent?: boolean; clicked?: boolean; target?: string; sendTarget?: string }> {
+  // ⚠️ 自包含铁律:本函数经 executeScript({func}) 序列化注入页面执行,页面没有本模块作用域。绝不能引用
+  // 任何模块级函数(早期引用 findDmEditable/clickDmSendButton/editableText 等 → 注入后 ReferenceError →
+  // 整段崩 → payload undefined → 私信落到 CDP 兜底 + 横幅。见 detect_region 同款坑)。所有辅助一律内联。
   if (!/douyin\.com$/u.test(location.hostname) && !location.hostname.endsWith('.douyin.com')) {
     return { ok: false, reason: 'not_douyin_page' }
   }
-  // 抖音私信是作者主页上的同页浮层(#imSaasContainerId)，URL 不变；用 DOM 锚点判断浮层是否打开，
-  // 而非 innerText(后台/最小化时 innerText 可能残缺、误判 dm_context_not_visible)。
-  if (!document.querySelector('#imSaasContainerId, [data-e2e="im-dialog"], .messageEditorinputArea, .e2e-send-msg-btn')) {
+  const panel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"], .messageEditorinputArea')
+  if (!panel && !document.querySelector('.e2e-send-msg-btn')) {
     return { ok: false, reason: 'dm_panel_not_open' }
   }
-  const target = findDmEditable()
+  const root: ParentNode = panel ?? document
+  const editableSel = '[data-slate-editor="true"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [role="textbox"], textarea, input'
+  const readText = (el: HTMLElement): string =>
+    (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) ? (el.value || '') : (el.innerText || el.textContent || '')
+  const coreOf = (s: string): string => String(s || '').toLowerCase().replace(/[^一-龥a-z0-9]/g, '')
+  const sleepMs = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)))
+  const describe = (el: HTMLElement): string => `${el.tagName.toLowerCase()}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''}`
+
+  const target = (Array.from(root.querySelectorAll<HTMLElement>(editableSel))
+    .find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
+    ?? document.querySelector<HTMLElement>(editableSel)) ?? null
   if (!target) {
     return { ok: false, reason: 'dm_editable_not_found' }
   }
@@ -422,75 +434,59 @@ async function typeDouyinDmDraftInPage(
 
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     const setter = Object.getOwnPropertyDescriptor(
-      target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-      'value',
+      target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value',
     )?.set
     if (setter) setter.call(target, text)
     else target.value = text
-    target.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      composed: true,
-      data: text,
-      inputType: 'insertReplacementText',
-    }))
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertReplacementText' }))
     target.dispatchEvent(new Event('change', { bubbles: true, composed: true }))
   } else {
-    placeCaretAtEnd(target)
-    const selected = selectEditableContent(target)
-    if (selected) {
-      document.execCommand?.('delete', false)
-    } else {
-      target.textContent = ''
-      placeCaretAtEnd(target)
+    // contenteditable / Slate:先清空,再逐行 execCommand insertText(换行插入 '\n' 软换行,不触发回车发送)。
+    try { document.execCommand?.('selectAll', false); document.execCommand?.('delete', false) } catch { /* ignore */ }
+    const lines = text.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) document.execCommand?.('insertText', false, '\n')
+      if (lines[i]) document.execCommand?.('insertText', false, lines[i])
     }
-    document.execCommand?.('insertText', false, text)
-    if (!(editableText(target).includes(text))) {
+    if (coreOf(readText(target)).length === 0) {
       target.textContent = text
-      target.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        composed: true,
-        data: text,
-        inputType: 'insertReplacementText',
-      }))
+      target.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertReplacementText' }))
     }
   }
 
-  const typed = editableText(target).includes(text) ||
-    findDmEditableText().includes(text) ||
-    clean(document.body?.innerText || document.body?.textContent || '').includes(text)
+  // 容差校验(核心字符:中文+字母+数字,去空白/表情/标点/URL符号):草稿在即认成功,渲染差异不误判。
+  const wantedCore = coreOf(text)
+  const typed = wantedCore.length > 0
+    ? (coreOf(readText(target)).includes(wantedCore)
+        || Array.from(document.querySelectorAll<HTMLElement>(editableSel)).some(el => coreOf(readText(el)).includes(wantedCore)))
+    : readText(target).trim().length > 0
   if (!typed || !send) {
-    return {
-      ok: typed,
-      draftTyped: typed,
-      sent: false,
-      reason: typed ? undefined : 'draft_text_not_visible_in_editable',
-      target: targetDescription(target),
-    }
+    return { ok: typed, draftTyped: typed, sent: false, reason: typed ? undefined : 'draft_text_not_visible_in_editable', target: describe(target) }
   }
-  await sleep(160)
-  const sendResult = clickDmSendButton(text, target)
-  if (!sendResult.ok) {
-    return {
-      ok: false,
-      draftTyped: true,
-      sent: false,
-      reason: sendResult.reason,
-      target: targetDescription(target),
-      sendTarget: sendResult.target,
-    }
+
+  // 发送 = 在编辑器里按回车(F12 实测:抖音私信靠 Enter 发送、合成 KeyboardEvent 即可触发;点 svg 发送按钮
+  // 不生效。换行已在上面用软换行写入,故此处单次 Enter 即整条发出)。再 best-effort 点一下发送图标作兜底。
+  await sleepMs(160)
+  target.focus()
+  for (const evt of ['keydown', 'keypress', 'keyup']) {
+    target.dispatchEvent(new KeyboardEvent(evt, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
   }
-  // 点击后只做一次即时(不 sleep)草稿快判:已清空即 sent=true 走快路;否则 sent=false 交给 SW 层
-  // confirmDmSentInBudget 在剩余预算内轮询确认——不再 in-page 固定 sleep(260) 单次判定(慢网络误判)。
-  // clicked=true 标记"发送按钮已点中",SW 层据此决定是否进入确认轮询(没点中就别空轮询耗预算)。
-  const sent = !draftStillVisibleInEditable(text)
+  const sendIcon = root.querySelector<HTMLElement>('.e2e-send-msg-btn, .messageMsgInputpublishRedBtn')
+  if (sendIcon) {
+    const clickable = (sendIcon.closest('button, [role="button"], div[tabindex], span[tabindex]') as HTMLElement | null) ?? sendIcon
+    try { clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })) } catch { /* ignore */ }
+  }
+  // 即时快判:核心字符已不在编辑器即视为发出(草稿被清空);否则交 SW 层 confirmDmSentInBudget 轮询确认。
+  await sleepMs(140)
+  const sent = wantedCore.length > 0 ? !coreOf(readText(target)).includes(wantedCore) : false
   return {
     ok: true,
     draftTyped: true,
     sent,
     clicked: true,
     reason: sent ? undefined : 'dm_send_not_confirmed_after_click',
-    target: targetDescription(target),
-    sendTarget: sendResult.target,
+    target: describe(target),
+    sendTarget: 'enter_key',
   }
 }
 
@@ -846,46 +842,25 @@ async function clickDmSendInPage(
       const editable = findEditable()
       if (!editable) return { ok: false, reason: 'dm_editable_not_found_before_send' }
       composer = findComposerRoot(editable)
-      const wanted = clean(draft)
-      if (!clean(allEditableText()).includes(wanted) && !clean(editableText(editable)).includes(wanted)) {
+      // 容差校验(核心字符:中文+字母+数字,去空白/表情/标点/URL符号):草稿在即可发,渲染差异不误判。
+      const coreOf = (s: string) => String(s || '').toLowerCase().replace(/[^一-龥a-z0-9]/g, '')
+      const draftCore = coreOf(draft)
+      if (draftCore.length > 0
+          && !coreOf(allEditableText()).includes(draftCore)
+          && !coreOf(editableText(editable)).includes(draftCore)) {
         return { ok: false, reason: 'draft_not_visible_before_send' }
       }
-      // testid 短路(Fix 4):稳定发送 class 存在即优先点击,绕开下面按视口几何(rect.left/top)的过滤。
-      // 后台标签 rect 塌缩时几何会把按钮全过滤掉;这些 class 不依赖几何。命中后仍排除禁用/附件态。
-      const dmPanel = document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]')
-      const testIdRoot: ParentNode = dmPanel ?? document
-      for (const sel of ['.e2e-send-msg-btn', '.messageMsgInputpublishRedBtn']) {
-        const hit = Array.from(testIdRoot.querySelectorAll<HTMLElement>(sel))
-          .map(el => actionRoot(el))
-          .find(el => !isDisabled(el) && !isAttachmentControl(el, elementText(el)))
-        if (hit) {
-          hit.scrollIntoView({ block: 'center', inline: 'center' })
-          click(hit)
-          return { ok: true, clicked: true, target: `testid:${sel.slice(1)}` }
-        }
+      // 发送 = 在编辑器里按回车(F12 实测:抖音私信靠 Enter 发送、合成事件即可触发;点 svg 发送按钮不生效)。
+      // 换行在输入阶段用 Slate softBreak 写入,不会触发 Enter→提前发送,故此处单次 Enter 即整条发出。
+      // 再 best-effort 点一下稳定发送 class 作兜底(回车已清空草稿时点空按钮无副作用)。
+      editable.focus()
+      for (const evt of ['keydown', 'keypress', 'keyup']) {
+        editable.dispatchEvent(new KeyboardEvent(evt, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
       }
-      const editableRect = editable.getBoundingClientRect()
-      const viewportW = window.innerWidth || document.documentElement.clientWidth || 1
-      const viewportH = window.innerHeight || document.documentElement.clientHeight || 1
-      const selectors = `${explicitActionSelector},${sendSelector},svg,path`
-      const buttonRoot: ParentNode = composer ?? document
-      const rawItems = uniqueActionItems(buttonRoot, selectors)
-        .filter(item => item.rect.width > 0 && item.rect.height > 0)
-        .filter(item => item.rect.left >= viewportW * 0.45)
-        .filter(item => item.rect.top >= Math.max(120, viewportH * 0.32))
-        .filter(item => !isDisabled(item.el))
-        .filter(item => composer?.contains(item.el) || likelySendText(item.text))
-      const safeItems = rawItems.filter(item => !isAttachmentControl(item.el, item.text))
-      const structuralSend = pickStructuralSend(rawItems, safeItems, editableRect)
-      const button = safeItems
-        .filter(item => likelySendText(item.text) || iconOnlySend(item.el, item.rect, editableRect, item.text) || item.el === structuralSend)
-        .sort((a, b) => score(b, editableRect) - score(a, editableRect) || a.index - b.index)[0]?.el ?? null
-      if (!button) return { ok: false, reason: 'dm_send_button_not_found' }
-      button.scrollIntoView({ block: 'center', inline: 'center' })
-      click(button)
-      // 只点不在 page 内固定 sleep(260) 判定——慢网络下"发送 XHR 往返 + React 清空"可能 >260ms,
-      // 单次判定会误判"真发出"为"未发出"。确认交给 SW 层 confirmDmSentInBudget 在剩余预算内轮询。
-      return { ok: true, clicked: true, target: button.tagName.toLowerCase() }
+      const sendIcon = (document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]') ?? document)
+        .querySelector<HTMLElement>('.e2e-send-msg-btn, .messageMsgInputpublishRedBtn')
+      if (sendIcon) { try { click(actionRoot(sendIcon)) } catch { /* ignore */ } }
+      return { ok: true, clicked: true, target: 'enter_key' }
     },
     args: [text],
   })
@@ -905,23 +880,28 @@ function clickDmSendButton(
   if (!/douyin\.com$/u.test(location.hostname) && !location.hostname.endsWith('.douyin.com')) {
     return { ok: false, reason: 'not_douyin_page' }
   }
-  const wanted = clean(text)
-  if (!wanted) return { ok: false, reason: 'empty_draft' }
+  if (!clean(text)) return { ok: false, reason: 'empty_draft' }
   const currentEditable = editable ?? findDmEditable()
   if (!currentEditable) return { ok: false, reason: 'dm_editable_not_found_before_send' }
-  if (!clean(findDmEditableText()).includes(wanted) && !clean(editableText(currentEditable)).includes(wanted)) {
+  // 容差校验(核心字符:中文+字母+数字,去空白/表情/标点/URL符号):草稿在即可发,渲染差异不误判。
+  const coreOf = (s: string) => String(s || '').toLowerCase().replace(/[^一-龥a-z0-9]/g, '')
+  const wantedCore = coreOf(text)
+  if (wantedCore.length > 0
+      && !coreOf(findDmEditableText()).includes(wantedCore)
+      && !coreOf(editableText(currentEditable)).includes(wantedCore)) {
     return { ok: false, reason: 'draft_not_visible_before_send' }
   }
-  const button = findDmSendButton(currentEditable)
-  if (!button) return { ok: false, reason: 'dm_send_button_not_found' }
-  button.scrollIntoView({ block: 'center', inline: 'center' })
-  clickElement(button)
-  const sendTarget = targetDescription(button)
-  return {
-    ok: true,
-    sent: false,
-    target: sendTarget,
+  // 发送 = 在编辑器里按回车(F12 实测:抖音私信靠 Enter 发送、合成事件即可触发;点 svg 发送按钮不生效)。
+  // 换行在输入阶段用 Slate softBreak 写入,不会触发 Enter→提前发送。再 best-effort 点一下稳定发送 class 兜底。
+  currentEditable.focus()
+  for (const evt of ['keydown', 'keypress', 'keyup']) {
+    currentEditable.dispatchEvent(new KeyboardEvent(evt, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
   }
+  const button = findDmSendButton(currentEditable)
+  if (button) {
+    try { button.scrollIntoView({ block: 'center', inline: 'center' }); clickElement(button) } catch { /* ignore */ }
+  }
+  return { ok: true, sent: false, target: button ? targetDescription(button) : 'enter_key' }
 }
 
 function draftStillVisibleInEditable(text: string): boolean {

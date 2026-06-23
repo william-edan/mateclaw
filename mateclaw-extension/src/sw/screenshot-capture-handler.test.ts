@@ -50,6 +50,7 @@ function fakeDebugger(
     attach,
     send,
     detach: vi.fn(async () => {}),
+    scheduleIdleDetach: vi.fn(),
     isAttached: () => true,
   } as unknown as DebuggerManager
   return { debuggerManager, attach, send, calls }
