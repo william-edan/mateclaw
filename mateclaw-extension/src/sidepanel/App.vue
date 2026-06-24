@@ -9,6 +9,14 @@
         <span class="label">Status</span>
         <span class="pill" :class="statusClass" data-test="status-pill">{{ statusLabel }}</span>
       </div>
+      <div class="row">
+        <span class="label">Mode</span>
+        <span class="seg">
+          <button class="seg-btn" :class="{ active: connMode === 'auto' }" data-test="mode-auto" @click="setMode('auto')">自动</button>
+          <button class="seg-btn" :class="{ active: connMode === 'web' }" data-test="mode-web" @click="setMode('web')">网页端</button>
+          <button class="seg-btn" :class="{ active: connMode === 'client' }" data-test="mode-client" @click="setMode('client')">客户端</button>
+        </span>
+      </div>
       <label class="field">
         <span class="label">Server URL</span>
         <input
@@ -55,6 +63,7 @@ const log = ref<LogEntry[]>([])
 const serverUrl = ref('ws://localhost:18088/api/v1/browser/edge')
 const pat = ref('')
 const connState = ref<ConnState>('closed')
+const connMode = ref<'auto' | 'web' | 'client'>('auto')
 
 const canConnect = computed(() => serverUrl.value.trim() !== '' && pat.value.trim() !== '')
 const statusLabel = computed(() =>
@@ -102,10 +111,17 @@ async function disconnect() {
   append({ kind: 'unpair', summary: 'disconnected' })
 }
 
+async function setMode(m: 'auto' | 'web' | 'client') {
+  connMode.value = m
+  await chrome.runtime.sendMessage({ kind: 'bridge.setMode', mode: m })
+  append({ kind: 'mode', summary: m })
+  void refreshStatus()
+}
+
 async function refreshStatus() {
   try {
     const res = (await chrome.runtime.sendMessage({ kind: 'bridge.status' })) as
-      | { connected?: boolean; serverUrl?: string | null }
+      | { connected?: boolean; serverUrl?: string | null; mode?: string }
       | undefined
     if (res?.connected) {
       connState.value = 'open'
@@ -114,6 +130,9 @@ async function refreshStatus() {
     }
     if (typeof res?.serverUrl === 'string' && res.serverUrl) {
       serverUrl.value = res.serverUrl
+    }
+    if (res?.mode === 'auto' || res?.mode === 'web' || res?.mode === 'client') {
+      connMode.value = res.mode
     }
   } catch {
     // SW asleep / no listener — leave state as-is.
@@ -199,6 +218,23 @@ onUnmounted(() => {
 }
 .pill--closed {
   background: #9e9e9e;
+}
+.seg {
+  display: inline-flex;
+  gap: 4px;
+}
+.seg-btn {
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.seg-btn.active {
+  background: #2e7d32;
+  border-color: #2e7d32;
+  color: #fff;
 }
 .log {
   list-style: none;
