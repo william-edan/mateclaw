@@ -10,7 +10,7 @@ const STORAGE_KEY = 'tabGroups'
  *   `chrome.tabGroups.update(gid, { title: "Claude", color: ORANGE, collapsed: false })`).
  * MateClaw uses its own brand name; orange reads as "the agent's tabs".
  */
-const GROUP_TITLE = 'MateClaw'
+const GROUP_TITLE = '获客助手'
 const GROUP_TITLE_WORKING = 'MateClaw - Working'
 const GROUP_TITLE_DONE = 'MateClaw - Done'
 /**
@@ -97,6 +97,29 @@ export class TabGroupManager {
       // provision a fresh visible MateClaw tab instead of failing NO_TARGET_TAB.
       await this.#removeTrackedTab(subject, tabId)
       return null
+    }
+  }
+
+  /**
+   * 主 tab 是否处在一个"只属于本 agent"的独立窗口里——窗口内每个 tab 都在 allTabIds。
+   * 供 navigate 复用主 tab 前判断:旧绑定可能落在用户的普通窗口(混着用户自己的 tab),此时应
+   * 重建到独立窗口而非复用(用户反馈"获客没新开独立窗口"的根因)。能力缺失/查询失败时返回 true
+   * (保守,绝不误开新窗口、不破坏现有可用性)。
+   */
+  async isMainTabInDedicatedWindow(subject: string): Promise<boolean> {
+    const group = (await this.#loadGroups())[subject]
+    if (!group || typeof group.mainTabId !== 'number') return false
+    const tabsGet = this.chrome.tabs?.get
+    const tabsQuery = this.chrome.tabs?.query
+    if (typeof tabsGet !== 'function' || typeof tabsQuery !== 'function') return true
+    try {
+      const mainTab = await tabsGet.call(this.chrome.tabs, group.mainTabId)
+      if (typeof mainTab.windowId !== 'number') return true
+      const winTabs = await tabsQuery.call(this.chrome.tabs, { windowId: mainTab.windowId })
+      const managed = new Set(group.allTabIds)
+      return winTabs.every(t => typeof t.id === 'number' && managed.has(t.id))
+    } catch {
+      return true
     }
   }
 
@@ -207,10 +230,25 @@ export class TabGroupManager {
       return null
     }
 
+    // 独立窗口模式:tab 处在"只属于本 agent"的独立窗口时,绝不加入 Chrome 标签分组。
+    // Chrome 标签分组不能跨窗口——把独立窗口里的 tab group() 进一个落在别处(用户主窗口/上次
+    // 残留窗口)的分组,会把这个 tab 整个拽到那个窗口,这正是"获客独立窗口弹一下又回到原窗口"的
+    // 根因。tabs.group 是全工程唯一能跨窗口移动 tab 的调用,独立窗口里直接跳过它——无论旧分组
+    // 绑定是否残留、dist 是否最新,都不会再被拽走。独立窗口本身即隔离与视觉区分,分组标签多余。
+    if (await this.#isTabInDedicatedWindow(subject, tabId)) {
+      return null
+    }
+
     const existing = await this.getChromeGroupId(subject)
 
-    // Try to join the already-tracked group first.
-    if (existing !== null) {
+    // Try to join the already-tracked group first — but ONLY if that group lives
+    // in the SAME window as the tab. Chrome tab groups can't span windows, so
+    // grouping a tab into a group in another window MOVES the tab there — exactly
+    // the "获客独立窗口弹一下又回到主窗口" bug: the agent tab is created in a fresh
+    // isolated window, but the old group lives in the user's main window, so reuse
+    // drags it back. When the tracked group is in a different window, skip reuse and
+    // create a fresh group in the tab's own window below.
+    if (existing !== null && await this.#groupInSameWindowAsTab(existing, tabId)) {
       try {
         await this.chrome.tabs.group({ tabIds: [tabId], groupId: existing })
         await this.#setChromeGroupId(subject, existing)
@@ -236,6 +274,49 @@ export class TabGroupManager {
     } catch {
       // Grouping is a visual nicety; never let it break tab provisioning.
       return null
+    }
+  }
+
+  /**
+   * 已跟踪的分组是否和 tab 处在同一窗口。Chrome 标签分组不能跨窗口:把 tab group() 进另一个
+   * 窗口的分组会把它移过去。独立窗口的 agent tab 必须只在同窗口分组,否则被拽回旧分组(主窗口)
+   * —— 这正是"获客独立窗口弹一下又回到主窗口"的根因。tabGroups.get / tabs.get 不可用或查询
+   * 失败时返回 false(保守:宁可新建分组,绝不把 tab 拽走)。
+   */
+  async #groupInSameWindowAsTab(groupId: number, tabId: number): Promise<boolean> {
+    const groupsGet = this.chrome.tabGroups?.get
+    const tabsGet = this.chrome.tabs?.get
+    if (typeof groupsGet !== 'function' || typeof tabsGet !== 'function') return false
+    try {
+      const tab = await tabsGet.call(this.chrome.tabs, tabId)
+      const group = await groupsGet.call(this.chrome.tabGroups, groupId)
+      return typeof tab.windowId === 'number' && group?.windowId === tab.windowId
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * tabId 是否处在一个"只属于本 agent"的独立窗口(窗口内每个 tab 都在 allTabIds)。
+   * 供 joinChromeGroup 判断是否跳过分组——独立窗口里 tabs.group() 会把 tab 跨窗口拽走。
+   * 与 isMainTabInDedicatedWindow 的"保守方向"相反:这里能力缺失/查询失败/空窗口时返回 false
+   * (回退到正常分组,绝不误伤老的"在当前窗口建 tab"路径);那里返回 true(倾向复用主 tab、不无谓重开窗口)。
+   */
+  async #isTabInDedicatedWindow(subject: string, tabId: number): Promise<boolean> {
+    const group = (await this.#loadGroups())[subject]
+    if (!group) return false
+    const tabsGet = this.chrome.tabs?.get
+    const tabsQuery = this.chrome.tabs?.query
+    if (typeof tabsGet !== 'function' || typeof tabsQuery !== 'function') return false
+    try {
+      const tab = await tabsGet.call(this.chrome.tabs, tabId)
+      if (typeof tab.windowId !== 'number') return false
+      const winTabs = await tabsQuery.call(this.chrome.tabs, { windowId: tab.windowId })
+      if (winTabs.length === 0) return false
+      const managed = new Set(group.allTabIds)
+      return winTabs.every(t => typeof t.id === 'number' && managed.has(t.id))
+    } catch {
+      return false
     }
   }
 

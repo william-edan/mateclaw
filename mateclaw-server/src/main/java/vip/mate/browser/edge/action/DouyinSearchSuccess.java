@@ -16,6 +16,8 @@ public record DouyinSearchSuccess(
         String value,
         String inputSelector,
         String buttonSelector,
-        String reason
+        String reason,
+        // 扩展据 general/search 结果接口回包确认搜索就绪(接口驱动)。null=旧扩展无此字段。
+        Boolean searchConfirmed
 ) implements ActionSuccessPayload {
 }

@@ -338,11 +338,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         // 真实 DOM 搜索流程(用户要求,非 URL 直达):进抖音首页(默认跳 /jingxuan)→ 在搜索框
         // 输入关键词(React 受控:原生 setter + _valueTracker)→ 点击搜索按钮。全程页内 DOM
         // (douyin_search 动作),不依赖窗口活动tab/焦点,后台/最小化可用,且行为接近真人。
-        BrowserObservation viaDom = searchByRealDomFlow(input.keyword(), attempt);
-        if (searchVerified(viaDom, input.keyword())) {
+        SearchDomOutcome viaDom = searchByRealDomFlow(input.keyword(), attempt);
+        // DOM 已提交搜索(domSubmitted)就信任——后台/新窗口 a11y 树空会让 searchVerified 误判失败、误走 CDP 兜底
+        // (坐标点击 + Ctrl+A 全选页面 + 逐字输入,即用户反馈的"变蓝"+"等很久")。仅 DOM 真失败(搜索框没找到)才回退 CDP。
+        if (viaDom.domSubmitted() || searchVerified(viaDom.observation(), input.keyword())) {
             log.info("[douyin.lead] search opened via real DOM flow (type + click search, background-capable): keyword={}",
                     input.keyword());
-            return viaDom;
+            return viaDom.observation();
         }
         // 兜底(仅前台活动tab可用):首页搜索框 CDP 打字 + 回车
         JsonNode navigate = parse(browser.extension_browser_navigate(
@@ -421,10 +423,15 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
      *   3. 用 searchVerified 校验已进入搜索结果。
      * 全程页内 DOM + chrome 导航,不依赖窗口活动tab/焦点,后台/最小化可用。
      */
-    private BrowserObservation searchByRealDomFlow(String keyword, int attempt) {
+    /** searchByRealDomFlow 结果:observation + domSubmitted(搜索框已输入并点了搜索 = DOM 路径真的搜了)。
+     *  domSubmitted=true 时上层【信任】不走 CDP 兜底——后台/新窗口 a11y 树空会让 searchVerified 误判失败,
+     *  但 DOM 已经搜了,再走 CDP(坐标点击 + Ctrl+A 全选页面 + 逐字输入)只会重复 + 变蓝 + 变慢。 */
+    private record SearchDomOutcome(BrowserObservation observation, boolean domSubmitted) {}
+
+    private SearchDomOutcome searchByRealDomFlow(String keyword, int attempt) {
         String kw = keyword == null ? "" : keyword.trim();
         if (kw.isEmpty()) {
-            return BrowserObservation.failed("EMPTY_KEYWORD", "搜索关键词为空");
+            return new SearchDomOutcome(BrowserObservation.failed("EMPTY_KEYWORD", "搜索关键词为空"), false);
         }
         BrowserObservation cur = observeMain("all");
         // 每次开始任务都要落到"干净的搜索基底"。当前页若开着视频弹层/详情(url 带 modal_id / aweme_id /
@@ -436,29 +443,38 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     "https://www.douyin.com/jingxuan",
                     "domcontentloaded",
                     null));
-            // 慢环境:首页搜索栏在慢网下渲染更慢,导航后就绪宽限按慢系数放大,降低首次 douyin_search 落空。
-            waitMs(slowMs(attempt == 0 ? 2000L : 2800L));
+            // 导航已等到 domcontentloaded,搜索栏只差 React mount(通常 <1.5s):给小余量即可,之后由下面的
+            // 快间隔重试在搜索栏一就绪时立即命中 —— 不再盲等 3.2~4.5s(用户反馈"进主页等搜索框慢"的主因)。
+            waitMs(slowMs(600L));
         }
         JsonNode res = null;
         // 慢环境:搜索框渲染慢,重试次数/间隔放大,给 React 受控搜索框更多 mount 时间(ok 即提前退出)。
-        int searchTries = slowAttempts(5);
+        int searchTries = slowAttempts(8);
         for (int i = 0; i < searchTries; i++) {
             res = parse(browser.service_douyin_search_main(kw));
             if (ok(res)) {
                 break;
             }
-            // 搜索框尚未渲染/未就绪,等待后重试
-            waitMs(slowMs(700L));
+            // 搜索框尚未渲染/未就绪,快间隔重试 —— 一就绪即命中,不盲等(总上限仍受 searchTries 保护)
+            waitMs(slowMs(350L));
         }
         if (res == null || !ok(res)) {
             log.warn("[douyin.lead] real DOM search action not ok after retries: keyword={}, last={}",
                     kw, errorSummary(res));
-            return observeMain("all");
+            return new SearchDomOutcome(observeMain("all"), false);
         }
         log.info("[douyin.lead] real DOM search submitted: keyword={}, payload={}",
                 kw, res.path("results").path(0).path("payload"));
+        // 接口确认:扩展已据 general/search 结果接口回包确认搜索结果就绪 → 跳过约 8s 的 DOM 校验轮询。
+        // 无信号(探针没装上/慢回包/SPA 整页重载)则退回原行为(等待 + waitForSearchVerified),零回归。
+        if (actionPayloadBoolean(res, "searchConfirmed")) {
+            // 接口回包≠结果已渲染:跳过固定盲等(1.2s),但仍用【快间隔】轮询确认结果卡片真渲染进 DOM
+            // 再返回(waitForSearchVerified 先 observe、verified 即提前退;数据已到渲染马上好,通常一两次命中)。
+            log.info("[douyin.lead] search net-confirmed; fast DOM-ready poll (skip 1.2s fixed wait): keyword={}", kw);
+            return new SearchDomOutcome(waitForSearchVerified(kw, slowAttempts(8), 250L), true);
+        }
         waitMs(slowMs(1200L));
-        return waitForSearchVerified(kw, slowAttempts(8), 900L);
+        return new SearchDomOutcome(waitForSearchVerified(kw, slowAttempts(8), 900L), true);
     }
 
     private boolean hasDouyinSearchBarContext(@Nullable String url) {
@@ -479,7 +495,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         // 断连续跑:整步纳入 withReconnect。排序天然幂等(重新等结果页 + 重选排序),会话层断连由外层
         // 等会话重现后整步重跑。
         return withReconnect("apply_sort", () -> {
-            BrowserObservation observed = waitForSearchVerified(keyword, 4, 600L);
+            BrowserObservation observed = waitForSearchVerified(keyword, 2, 400L);
             observed = ensurePlainSearchResultPage(observed, keyword);
             if (sort.isComprehensive()) {
                 rememberSortedVideoSnapshot(keyword, observed);
@@ -521,7 +537,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         if (DOM_ONLY_DEBUG) {
             // douyin_ui sort 的 ok 已表示"找到筛选并点中了排序选项",DOM-only 直接信任,
             // 不做后台不可靠的 observe 二次校验(空树校验失败会回退 CDP 筛选面板,导致重复点)。
-            log.info("[douyin.lead] sorted via douyin_ui hover (DOM_ONLY, trust ok): {}", sort.primaryLabel());
+            boolean sortReloadConfirmed = actionPayloadBoolean(res, "sortConfirmed");
+            JsonNode sortPayload = res.path("results").path(0).path("payload");
+            long sortNetMs = sortPayload.path("sortNetMs").asLong(-1);
+            log.info("[douyin.lead] sorted via douyin_ui hover (DOM_ONLY, trust ok): {}, netReloadConfirmed={}, sortNetMs={}, netDebug={}",
+                    sort.primaryLabel(), sortReloadConfirmed, sortNetMs, sortPayload.path("netDebug"));
             return observeMain("all");
         }
         BrowserObservation observed = waitForSortVerifiedAfterSelection(keyword, sort, 10, 700L);
@@ -697,6 +717,25 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             log.info("[douyin.lead] open video by cover card ok but total=0, treat as list not ready, will retry");
             return CoverCardOutcome.listNotReady("total=0");
         }
+        // 接口确认:扩展已据点开视频后的评论首屏 comment/list 回包确认视频已打开。但接口回包≠播放器/
+        // 结果 DOM 已渲染:命中时跳过 2.88s 固定硬睡,改用【快间隔】轮询等视频页 DOM 真就绪再继续
+        // (就绪即退;数据已到渲染马上好,通常一两次命中)。无信号(探针没装/慢回包)退回原 2.88s 硬睡(零回归)。
+        // 接口确认:点开视频后评论首屏 comment/list 已回包 = 视频确实打开了。后台 tab a11y 树空会让
+        // looksLikeVideoOpen 误判失败、空等满 ~3-5s;命中接口就直接信任,暂停后取一次快照即返回,不再 a11y 空等。
+        if (actionPayloadBoolean(opened, "openVideoConfirmed")) {
+            tryOk(browser.service_douyin_ui_main("pause", "")); // 暂停视频,避免自动播放
+            BrowserObservation netObs = observeMain("all");
+            log.info("[douyin.lead] opened video by cover card (net-confirmed comment/list): index={}, total={}, title={}",
+                    payload.path("index").asInt(-1), payload.path("total").asInt(-1), payload.path("title").asText(""));
+            return CoverCardOutcome.opened(new BrowserObservation(
+                    netObs.ok(), netObs.url(), netObs.title(), netObs.tree(),
+                    netObs.viewportWidth(), netObs.viewportHeight(),
+                    "VIDEO_TARGET",
+                    "opened_by_cover_card:index=" + payload.path("index").asInt(zeroBasedIndex)
+                            + ",total=" + payload.path("total").asInt(-1)
+                            + ",title=" + payload.path("title").asText("")));
+        }
+        // 无接口信号(探针没装/慢回包):退回原 DOM 路径——固定 2.88s 硬睡 + observe + looksLike 判定。
         waitMs(slowMs(1_800L));
         BrowserObservation obs = observeMain("all");
         if (looksLikeVideoOpenHard(obs) || looksLikeLoginWall(obs)) {
@@ -2033,20 +2072,29 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
         boolean alreadyFollowed = profileFollowConfirmed(profile);
         boolean followClicked = false;
+        boolean followNetConfirmed = false;
         if (!alreadyFollowed) {
-            followClicked = clickProfileAction(profile, "follow", List.of("关注", "回关", "Follow"), engagementTabId);
+            ProfileClickOutcome followOutcome = clickProfileAction(profile, "follow", List.of("关注", "回关", "Follow"), engagementTabId);
+            followClicked = followOutcome.clicked();
             if (!followClicked) {
                 return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
                         false, false, false, false, "failed", "FOLLOW_BUTTON_NOT_FOUND",
                         "未找到可点击的关注入口，已跳过私信以避免未关注直达私信。");
             }
-            // 慢环境:关注后"已关注"态在慢机/后台 tab 渲染滞后,轮询次数/间隔放大,避免还没确认就误判。
-            profile = waitForFollowConfirmation(engagementTabId, profile, slowAttempts(6), slowMs(700L));
+            followNetConfirmed = followOutcome.netConfirmed();
+            if (followNetConfirmed) {
+                // 接口确认:扩展已据 commit/follow 回包(status_code==0)确认关注成功 → 跳过约 11s 的 DOM 轮询。
+                log.info("[douyin.lead] follow confirmed by commit/follow network signal (status_code=0); skip DOM poll: tabId={}", engagementTabId);
+            } else {
+                // 无接口信号(探针没装上/慢回包):退回原行为——慢环境下"已关注"态在慢机/后台 tab 渲染滞后,
+                // 轮询次数/间隔放大,避免还没确认就误判。
+                profile = waitForFollowConfirmation(engagementTabId, profile, slowAttempts(6), slowMs(700L));
+            }
         }
-        boolean followConfirmed = alreadyFollowed || profileFollowConfirmed(profile);
+        boolean followConfirmed = alreadyFollowed || followNetConfirmed || profileFollowConfirmed(profile);
 
         List<String> dmLabels = List.of("私信", "发私信", "Message", "发消息");
-        if (!clickProfileAction(profile, "dm", dmLabels, engagementTabId)) {
+        if (!clickProfileAction(profile, "dm", dmLabels, engagementTabId).clicked()) {
             return new EngagementResult(comment, comment.authorName(), resultProfileUrl, true,
                     followConfirmed, false, false, false, "failed", "DM_BUTTON_NOT_FOUND",
                     "未找到私信入口：A11y 与 DOM 均未命中");
@@ -2366,7 +2414,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                     active.url(), active.title(), dmPageSignals(active));
             return unconfirmed;
         }
-        if (!clickProfileActionByDom(engagementTabId, dmLabels)) {
+        if (!clickProfileActionByDom(engagementTabId, dmLabels).clicked()) {
             log.warn("[douyin.lead] dom dm retry did not find profile action: url={}, title={}, tree={}",
                     retryBase.url(), retryBase.title(), treeExcerpt(retryBase.tree()));
             return unconfirmed;
@@ -2473,7 +2521,14 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         return null;
     }
 
-    private boolean clickProfileAction(BrowserObservation profile, String actionName, List<String> labels,
+    /** click_profile_action 的结果:clicked=是否点中按钮;netConfirmed=是否据接口回包确认成功(仅关注用)。 */
+    private record ProfileClickOutcome(boolean clicked, boolean netConfirmed) {
+        private static ProfileClickOutcome notClicked() {
+            return new ProfileClickOutcome(false, false);
+        }
+    }
+
+    private ProfileClickOutcome clickProfileAction(BrowserObservation profile, String actionName, List<String> labels,
                                        @Nullable Long engagementTabId) {
         // [出路③] DOM 优先 + 短轮询：open_author 已等到页面 readyState complete(加载完成)。这里
         // 在加载完成基础上再给 SPA 一点渲染余量，轮询匹配关注/私信按钮，最多约 15s——不再死等，
@@ -2486,43 +2541,45 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         int attempt = 0;
         while (true) {
             attempt++;
-            if (clickProfileActionByDom(engagementTabId, labels)) {
-                log.info("[douyin.lead] clicked profile action by dom: action={}, labels={}, attempt={}",
-                        actionName, labels, attempt);
-                return true;
+            ProfileClickOutcome domOutcome = clickProfileActionByDom(engagementTabId, labels);
+            if (domOutcome.clicked()) {
+                log.info("[douyin.lead] clicked profile action by dom: action={}, labels={}, attempt={}, netConfirmed={}",
+                        actionName, labels, attempt, domOutcome.netConfirmed());
+                return domOutcome;
             }
             ClickPoint a11y = findProfileActionPoint(profile, labels.toArray(String[]::new));
             if (a11y != null && clickEngagementPoint(engagementTabId, a11y)) {
                 log.info("[douyin.lead] clicked profile action by a11y(fallback): action={}, labels={}, x={}, y={}, attempt={}",
                         actionName, labels, a11y.x(), a11y.y(), attempt);
-                return true;
+                return new ProfileClickOutcome(true, false);
             }
             if (System.currentTimeMillis() >= retryDeadlineMs) {
                 break;
             }
             log.info("[douyin.lead] profile action not present yet, waiting for SPA render: action={}, labels={}, attempt={}",
                     actionName, labels, attempt);
-            waitMs(slowMs(2_000L));
+            waitMs(slowMs(1_000L)); // 找关注/私信按钮失败后快重试:后台 SPA 渲染慢,缩短间隔让按钮一就绪即命中
         }
         if ("dm".equals(actionName) && openProfileMoreMenu(profile, engagementTabId)) {
             waitMs(350L);
-            if (clickProfileActionByDom(engagementTabId, labels)) {
+            ProfileClickOutcome moreOutcome = clickProfileActionByDom(engagementTabId, labels);
+            if (moreOutcome.clicked()) {
                 log.info("[douyin.lead] clicked profile action from more menu by dom: action={}, labels={}",
                         actionName, labels);
-                return true;
+                return moreOutcome;
             }
             BrowserObservation afterMore = observeEngagementTab(engagementTabId, "all");
             ClickPoint menuPoint = findProfileActionPoint(afterMore, labels.toArray(String[]::new));
             if (menuPoint != null && clickEngagementPoint(engagementTabId, menuPoint)) {
                 log.info("[douyin.lead] clicked profile action from more menu by a11y(fallback): action={}, labels={}, x={}, y={}",
                         actionName, labels, menuPoint.x(), menuPoint.y());
-                return true;
+                return new ProfileClickOutcome(true, false);
             }
         }
         log.warn("[douyin.lead] profile action not found after {} attempts (~180s): action={}, labels={}, url={}, tree={}",
                 attempt, actionName, labels, profile == null ? "" : profile.url(),
                 profile == null ? "" : treeExcerpt(profile.tree()));
-        return false;
+        return ProfileClickOutcome.notClicked();
     }
 
     private boolean clickEngagementPoint(@Nullable Long engagementTabId, ClickPoint point) {
@@ -2534,18 +2591,26 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 : browser.service_click_tab(engagementTabId, point.x(), point.y()));
     }
 
-    private boolean clickProfileActionByDom(@Nullable Long engagementTabId, List<String> labels) {
+    private ProfileClickOutcome clickProfileActionByDom(@Nullable Long engagementTabId, List<String> labels) {
         String raw = engagementTabId == null
                 ? browser.service_click_profile_action_active(labels)
                 : browser.service_click_profile_action_tab(engagementTabId, labels);
         if (tryOk(raw)) {
-            return true;
+            // 关注:扩展回执 payload.followConfirmed=true 表示已据 commit/follow 接口回包(status_code==0)
+            // 确认关注成功 → 上层据此跳过 DOM"已关注"轮询。私信/更多等动作无此字段,netConfirmed=false。
+            boolean netConfirmed = false;
+            try {
+                netConfirmed = actionPayloadBoolean(parse(raw), "followConfirmed");
+            } catch (RuntimeException ignored) {
+                // 回执非预期 JSON:按未确认处理,退回 DOM 轮询(零回归)
+            }
+            return new ProfileClickOutcome(true, netConfirmed);
         }
         // 诊断：找不到按钮时打印扩展回传的后台 tab DOM 状态(reason 里带 diag={rs,vis,roots,btns,texts})，
         // 用于判断后台 tab 是否真的渲染了主内容区与关注/私信按钮。
         String snippet = raw == null ? "" : (raw.length() > 600 ? raw.substring(0, 600) : raw);
         log.info("[douyin.lead] dom click_profile miss: labels={}, raw={}", labels, snippet);
-        return false;
+        return ProfileClickOutcome.notClicked();
     }
 
     private BrowserObservation observeEngagementTab(@Nullable Long engagementTabId, String filter) {
@@ -2561,7 +2626,7 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
             log.info("[douyin.lead] opened profile more menu by a11y: x={}, y={}", more.x(), more.y());
             return true;
         }
-        return clickProfileActionByDom(engagementTabId, List.of("更多", "...", "…"));
+        return clickProfileActionByDom(engagementTabId, List.of("更多", "...", "…")).clicked();
     }
 
     @Nullable
@@ -2615,6 +2680,13 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         BrowserObservation observed = observeEngagementTab(engagementTabId, "all");
         for (int i = 0; i < Math.max(1, attempts); i++) {
             if (looksLikeDouyinDmPage(observed)) {
+                return observed;
+            }
+            // 后台 tab 的 observe 必然空(snapshot blank、连 url 都空):a11y 永远确认不了私信浮层,继续轮询
+            // 是纯白等(实测 ~13s,即"私信浮层就绪慢"的主因)。一旦判定后台空,立即返回 —— 交给 type_dm_draft
+            // 的 ensureRendered(以 page DOM 锚 #imSaasContainerId 等浮层并输入)处理,不在这层 a11y 空等满。
+            // 前台 observe 可用时仍正常轮询确认私信页。
+            if (isBlankObservation(observed)) {
                 return observed;
             }
             waitMs(waitMs);
@@ -4031,31 +4103,22 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
      * 避免在"就绪等待"阶段就产生点开视频的副作用。
      */
     private void waitForVideoResultListReady() {
-        int attempts = slowAttempts(6);
-        long stepMs = slowMs(600L);
-        boolean a11yEverUsable = false;
-        for (int i = 0; i < attempts; i++) {
-            BrowserObservation observed = observeMain("all");
-            if (looksLikeVideoOpenHard(observed)) {
-                // 已经在视频页(复用既有页),无需再等结果列表。
-                return;
-            }
-            boolean a11yUsable = !isBlankObservation(observed);
-            a11yEverUsable = a11yEverUsable || a11yUsable;
-            if (a11yUsable && !videoCandidatesFromObservation(observed).isEmpty()) {
-                log.info("[douyin.lead] video result list ready (cards visible) after {} settle rounds", i);
-                return;
-            }
-            waitMs(stepMs);
+        // 仅"点视频前的轻量就绪预检":真正等卡+点由 douyin_open_video 在 page DOM 完成(自带卡稳定轮询 +
+        // comment/list 接口确认)。后台 tab a11y 树常空/检测不到卡,这里久等纯属与下游重复(实测白等~10s),
+        // 故只给很短上限——检测到卡即提前点,检测不到立即把控制权交给 douyin_open_video,不再叠加白等。
+        // 只轻量探一次:已在视频页 / a11y 已见卡 → 直接返回(快路,0 等待)。否则【不再】用"后台 tab a11y 树
+        // 必失败的空等 ~6s"——只给排序重载一个小渲染宽限,随后把"等卡 + 点"交给 douyin_open_video
+        // (它在 page DOM 能真正检测到卡并等渲染、自带 listNotReady 重试)。消除与下游重复的 a11y 白等。
+        BrowserObservation observed = observeMain("all");
+        if (looksLikeVideoOpenHard(observed)) {
+            return;
         }
-        if (!a11yEverUsable) {
-            // 全程 a11y 空(后台 tab):无法据 observe 判就绪,给排序重载一个固定就绪宽限再继续。
-            log.info("[douyin.lead] video result readiness unverifiable (background blank a11y); "
-                    + "applying sort-reload settle {}ms before opening video", SORT_RELOAD_SETTLE_MS);
-            waitMs(SORT_RELOAD_SETTLE_MS);
-        } else {
-            log.info("[douyin.lead] video result list not confirmed within {} settle rounds; proceeding to open", attempts);
+        if (!isBlankObservation(observed) && !videoCandidatesFromObservation(observed).isEmpty()) {
+            log.info("[douyin.lead] video result list ready (cards visible), proceeding to open");
+            return;
         }
+        log.info("[douyin.lead] video list not visible via a11y (likely background); brief render settle then defer card-wait to douyin_open_video");
+        waitMs(slowMs(1000L));
     }
 
     private VideoCandidates waitForVideoTargets(int attempts, long waitMs) {

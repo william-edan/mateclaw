@@ -289,7 +289,7 @@ describe('TabGroupManager', () => {
     // Official sequence: chrome.tabs.group({tabIds}) THEN tabGroups.update(...).
     expect(f.groupCalls).toEqual([{ tabIds: [42], groupId: undefined }])
     expect(f.updateCalls).toEqual([
-      { groupId: 7001, props: { title: 'MateClaw', color: 'orange', collapsed: false } },
+      { groupId: 7001, props: { title: '获客助手', color: 'orange', collapsed: false } },
     ])
     expect(await manager.getChromeGroupId('alice')).toBe(7001)
   })
@@ -482,7 +482,7 @@ describe('TabGroupManager', () => {
     expect(f.updateCalls).toEqual([
       { groupId: 7001, props: { title: 'MateClaw - Working' } },
       { groupId: 7001, props: { title: 'MateClaw - Done' } },
-      { groupId: 7001, props: { title: 'MateClaw' } },
+      { groupId: 7001, props: { title: '获客助手' } },
     ])
   })
 })

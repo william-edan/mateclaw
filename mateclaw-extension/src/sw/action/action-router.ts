@@ -119,7 +119,6 @@ export class ActionRouter {
     this.deps.inflight?.set(req.msg_id, controller)
     let result: ActionResult
     try {
-      await this.markWorking()
       result = await this.deps.executor.run(tabId, req, controller.signal)
     } catch (err) {
       // Defensive — ActionExecutor.run already catches handler throws,
@@ -137,7 +136,6 @@ export class ActionRouter {
       if (this.deps.inflight?.get(req.msg_id) === controller) {
         this.deps.inflight.delete(req.msg_id)
       }
-      await this.markDone()
     }
 
     this.sendResult(msg, result)
@@ -202,23 +200,6 @@ export class ActionRouter {
     }))
   }
 
-  private async markWorking(): Promise<void> {
-    if (!this.deps.tabGroupManager || !this.deps.subject) return
-    try {
-      await this.deps.tabGroupManager.markWorking(this.deps.subject)
-    } catch {
-      // Visual status only; never let tab group title churn break an action.
-    }
-  }
-
-  private async markDone(): Promise<void> {
-    if (!this.deps.tabGroupManager || !this.deps.subject) return
-    try {
-      await this.deps.tabGroupManager.markDone(this.deps.subject)
-    } catch {
-      // Visual status only; the action.result has already been shaped.
-    }
-  }
 }
 
 // ---------------------------------------------------------------

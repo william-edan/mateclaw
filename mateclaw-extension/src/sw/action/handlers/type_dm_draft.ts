@@ -100,6 +100,10 @@ export const typeDmDraftHandler = (
       '#imSaasContainerId, [data-e2e="im-dialog"], .messageEditorinputArea',
       12_000,
     )
+    // 网络确认探针(MAIN world):页内拦截 fetch/XHR,命中抖音私信发送接口
+    // (imapi.douyin.com/.../message/send)即在 DOM 打 data-mc-dm-sent=<时间戳>。发送确认据此判"真发出",
+    // 比 DOM 草稿清空/气泡更可靠(用户实测:私信成功但 DOM 信号漏判→统计误记失败)。装在所有发送路径之前。
+    await installDmSendProbe(chromeApi, tabId)
     // ensureRendered 可能等待并激活 tab(数秒 await),跨过取消窗口——真正写入/发送前再查一次。
     throwIfAborted(signal)
     if (sendOnly) {
@@ -423,9 +427,26 @@ async function typeDouyinDmDraftInPage(
   const sleepMs = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)))
   const describe = (el: HTMLElement): string => `${el.tagName.toLowerCase()}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''}`
 
-  const target = (Array.from(root.querySelectorAll<HTMLElement>(editableSel))
-    .find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
-    ?? document.querySelector<HTMLElement>(editableSel)) ?? null
+  // 定位【消息编辑器】而非搜索框:私信浮层顶部有"搜索联系人/会话"输入框,naive 取第一个 editable 会
+  // 误中它(用户实测:定位到了搜索框)。① 优先 .messageEditorinputArea 锚点;② 排除含"搜索"的输入框;
+  // ③ 兜底取面板内最靠下的可见 editable(消息编辑器在底部、搜索框在顶部)。绝不全文档抓第一个(那是页面搜索框)。
+  const elTextOf = (el: HTMLElement): string =>
+    `${el.getAttribute('placeholder') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''} ${el.innerText || el.textContent || ''}`
+  const isSearchBox = (el: HTMLElement): boolean => /搜索|search/i.test(elTextOf(el))
+  const isVisible = (el: HTMLElement): boolean => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const composerAnchor = root.querySelector<HTMLElement>(
+    '.messageEditorinputArea [contenteditable], .messageEditorinputArea [data-slate-editor="true"], [class*="messageEditor"] [contenteditable], [class*="messageEditor"] [data-slate-editor="true"]',
+  ) ?? (() => {
+    const area = root.querySelector<HTMLElement>('.messageEditorinputArea')
+    return area && (area.isContentEditable || area.getAttribute('contenteditable') !== null) ? area : null
+  })()
+  let target: HTMLElement | null = composerAnchor && !isSearchBox(composerAnchor) ? composerAnchor : null
+  if (!target) {
+    target = Array.from(root.querySelectorAll<HTMLElement>(editableSel))
+      .filter(isVisible)
+      .filter(el => !isSearchBox(el))
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] ?? null
+  }
   if (!target) {
     return { ok: false, reason: 'dm_editable_not_found' }
   }
@@ -471,11 +492,8 @@ async function typeDouyinDmDraftInPage(
   for (const evt of ['keydown', 'keypress', 'keyup']) {
     target.dispatchEvent(new KeyboardEvent(evt, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
   }
-  const sendIcon = root.querySelector<HTMLElement>('.e2e-send-msg-btn, .messageMsgInputpublishRedBtn')
-  if (sendIcon) {
-    const clickable = (sendIcon.closest('button, [role="button"], div[tabindex], span[tabindex]') as HTMLElement | null) ?? sendIcon
-    try { clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })) } catch { /* ignore */ }
-  }
+  // 只用回车发送,【不】再点发送按钮:回车发送是异步的,紧接着点按钮时草稿往往还没清空 → 会再发一次
+  // = 同一条私信双发(用户实测)。回车已验证可靠,去掉按钮兜底。
   // 即时快判:核心字符已不在编辑器即视为发出(草稿被清空);否则交 SW 层 confirmDmSentInBudget 轮询确认。
   await sleepMs(140)
   const sent = wantedCore.length > 0 ? !coreOf(readText(target)).includes(wantedCore) : false
@@ -571,6 +589,13 @@ async function dmSentSignalInPage(
     const [result] = await chromeApi.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: (draft: string) => {
+        // 强信号⓪(网络,最可靠):页内探针已记录抖音私信发送接口被调用(data-mc-dm-sent=时间戳ms)。
+        // 最近一次调用在 35s 内即视为"本次已发出"——优先于下面的 DOM 草稿清空/气泡(后者会漏判,
+        // 导致"私信明明发出去了却统计成失败")。每个作者新标签页 + 探针装载时清旧标记 → 不会串。
+        try {
+          const sentAt = Number(document.documentElement.getAttribute('data-mc-dm-sent') || '0')
+          if (sentAt > 0 && Date.now() - sentAt < 35_000) return true
+        } catch { /* ignore */ }
         const clean = (value: string) => String(value || '').replace(/\s+/g, '')
         const wanted = clean(draft)
         if (!wanted) return false
@@ -620,6 +645,62 @@ async function dmSentSignalInPage(
     // tab 可能正在导航 —— 视作未确认,交给上层在预算内继续轮询。
     return false
   }
+}
+
+/**
+ * 安装"私信发送网络探针"(MAIN world):包裹 window.fetch 与 XMLHttpRequest.open,命中抖音私信发送接口
+ * (imapi.douyin.com/.../message/send)即在 document.documentElement 上打 data-mc-dm-sent=<时间戳ms>。
+ * 发送确认 dmSentSignalInPage 读到最近的这个标记即判"已发出"(比 DOM 草稿清空/气泡可靠)。
+ * idempotent(window.__mcDmSendProbe 守卫);best-effort,装不上不阻断 DOM 兜底。
+ */
+async function installDmSendProbe(chromeApi: typeof globalThis.chrome, tabId: number): Promise<void> {
+  try {
+    await chromeApi.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      world: 'MAIN',
+      func: installDmSendProbeInPage,
+    })
+  } catch {
+    // best-effort —— 探针装不上仍有 DOM 双信号兜底确认。
+  }
+}
+
+/** MAIN world 注入:自包含。包裹 fetch/XHR,命中私信发送接口就在 DOM 打时间戳标记。 */
+function installDmSendProbeInPage(): void {
+  const w = window as unknown as { __mcDmSendProbe?: boolean; fetch: typeof fetch }
+  if (w.__mcDmSendProbe) return
+  w.__mcDmSendProbe = true
+  // 装载时清掉可能的旧标记,确保只有本次安装之后的发送才算数。
+  try { document.documentElement.removeAttribute('data-mc-dm-sent') } catch { /* ignore */ }
+  const isSendUrl = (u: unknown): boolean => {
+    try { return typeof u === 'string' && /imapi\.douyin\.com\/.*message\/send/i.test(u) } catch { return false }
+  }
+  const mark = (): void => {
+    try { document.documentElement.setAttribute('data-mc-dm-sent', String(Date.now())) } catch { /* ignore */ }
+  }
+  try {
+    const origFetch = w.fetch
+    if (typeof origFetch === 'function') {
+      w.fetch = function (this: unknown, ...args: unknown[]) {
+        try {
+          const input = args[0] as string | { url?: string } | undefined
+          const url = typeof input === 'string' ? input : (input && input.url) || ''
+          if (isSendUrl(url)) mark()
+        } catch { /* ignore */ }
+        return (origFetch as (...a: unknown[]) => unknown).apply(this, args)
+      } as unknown as typeof fetch
+    }
+  } catch { /* ignore */ }
+  try {
+    const origOpen = XMLHttpRequest.prototype.open
+    XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, ...args: unknown[]) {
+      try {
+        const u = args[1]
+        if (isSendUrl(typeof u === 'string' ? u : (u && (u as URL).toString?.()))) mark()
+      } catch { /* ignore */ }
+      return (origOpen as (...a: unknown[]) => unknown).apply(this, args)
+    } as unknown as typeof XMLHttpRequest.prototype.open
+  } catch { /* ignore */ }
 }
 
 async function clickDmSendInPage(
@@ -857,9 +938,7 @@ async function clickDmSendInPage(
       for (const evt of ['keydown', 'keypress', 'keyup']) {
         editable.dispatchEvent(new KeyboardEvent(evt, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
       }
-      const sendIcon = (document.querySelector<HTMLElement>('#imSaasContainerId, [data-e2e="im-dialog"]') ?? document)
-        .querySelector<HTMLElement>('.e2e-send-msg-btn, .messageMsgInputpublishRedBtn')
-      if (sendIcon) { try { click(actionRoot(sendIcon)) } catch { /* ignore */ } }
+      // 只用回车发送,不再点按钮兜底(回车异步发送 + 立即点按钮 = 同一条私信双发)。
       return { ok: true, clicked: true, target: 'enter_key' }
     },
     args: [text],

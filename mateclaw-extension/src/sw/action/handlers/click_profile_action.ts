@@ -2,6 +2,10 @@ import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { ClickProfileActionParams } from '../types'
 import { activateTabForRender } from './activate-tab'
 import { ensureVisibilityOverride } from './visibility-keepalive'
+import { installNetObserver, netSignalSince } from '../net_observer'
+
+/** 关注动作标签(用于判定本次 click_profile_action 是否为"关注",决定是否接入接口确认)。 */
+const FOLLOW_LABELS = ['关注', '回关', 'follow']
 
 export interface ClickProfileActionHandlerDeps {
   chrome?: typeof globalThis.chrome
@@ -17,7 +21,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 export const clickProfileActionHandler = (
   deps: ClickProfileActionHandlerDeps = {},
 ): ActionHandler<ClickProfileActionParams> => {
-  return async (tabId, params, _deadlineMs, signal) => {
+  return async (tabId, params, deadlineMs, signal) => {
     const labels = Array.isArray(params?.labels)
       ? params.labels.map(label => String(label || '').trim()).filter(Boolean)
       : []
@@ -28,11 +32,24 @@ export const clickProfileActionHandler = (
     if (!chromeApi?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
+    const isFollow = labels.some(l => FOLLOW_LABELS.includes(l.toLowerCase()))
     // 后台保活(契约):幂等覆盖该 tab 的可见性 API、吞掉 visibilitychange,让后台标签下抖音 React
     // 不因 hidden 暂停作者主页关注/回关/私信按钮的异步渲染(根因之一:后台主页按钮没 mount,
     // 单次注入扑空 → no_profile_action)。与 douyin_search / douyin_open_video / douyin_ui 开头一致,
     // best-effort、不阻断后续。在第一次后台尝试之前注入,使首轮就有机会命中、少触发激活兜底。
     await ensureVisibilityOverride(chromeApi, tabId)
+
+    // 关注接口确认(基于接口判定成功):点击【之前】先装网络观察器登记 commit/follow 接口。点击后
+    // 据该接口回包 status_code==0 直接确认关注成功 —— 比后端轮询 DOM"已关注"文案(慢环境约 11s)
+    // 又快又稳:后台 tab 的 a11y/DOM 恒空也照样能从网络回包判定。best-effort,装不上则回执无
+    // followConfirmed、后端原样退回 DOM 轮询(零回归)。
+    let followSinceTs = 0
+    if (isFollow) {
+      await installNetObserver(chromeApi, tabId, [
+        { key: 'follow', urlSource: 'aweme/v1/web/commit/follow', captureBody: true },
+      ])
+      followSinceTs = Date.now()
+    }
 
     const runOnce = async () => {
       const results = await chromeApi.scripting.executeScript({
@@ -67,13 +84,45 @@ export const clickProfileActionHandler = (
         false,
       )
     }
+    // 关注:在剩余预算内轮询 commit/follow 回包(status_code==0)确认。已关注短路(already_followed)
+    // 本就处于关注态,直接视为确认,不必等接口。命中→回执 followConfirmed=true,后端跳过 DOM 轮询。
+    let followConfirmed: boolean | undefined
+    if (isFollow) {
+      followConfirmed = payload.label === 'already_followed'
+        ? true
+        : await waitFollowNetConfirm(chromeApi, tabId, followSinceTs, signal, deadlineMs)
+    }
     return {
       ok: true,
       elapsed_ms: 0,
       payload: {
         label: payload.label || labels[0],
+        ...(isFollow ? { followConfirmed: followConfirmed === true } : {}),
       },
     }
+  }
+}
+
+/**
+ * 在有限预算内轮询"关注接口(commit/follow)是否回包且 status_code==0"。命中即返回 true。
+ * 关注接口通常 <1s 回包,预算封顶 6s(且不超过下发 deadline 的余量);超时返回 false,
+ * 由后端原样退回 DOM"已关注"轮询(零回归)。netSignalSince 读的是 MAIN world 观察器写在
+ * documentElement 上的 data-mc-net-follow 属性,ISOLATED 注入即可读,无需再进 MAIN world。
+ */
+async function waitFollowNetConfirm(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  sinceTs: number,
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+): Promise<boolean> {
+  const budget = deadlineMs && deadlineMs > 0 ? Math.min(6000, Math.max(1500, deadlineMs - 800)) : 6000
+  const until = Date.now() + budget
+  for (;;) {
+    if (signal?.aborted) return false
+    if (await netSignalSince(chromeApi, tabId, 'follow', sinceTs, { statusCode: 0, windowMs: 20_000 })) return true
+    if (Date.now() >= until) return false
+    await new Promise(resolve => setTimeout(resolve, 250))
   }
 }
 

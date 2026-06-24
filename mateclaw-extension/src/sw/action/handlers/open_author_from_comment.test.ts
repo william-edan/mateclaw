@@ -4,12 +4,13 @@ import { openAuthorFromCommentHandler } from './open_author_from_comment'
 describe('openAuthorFromCommentHandler', () => {
   it('tracks and groups the opened author tab under the MateClaw subject', async () => {
     const create = vi.fn(async () => ({ id: 77 }))
+    const get = vi.fn(async () => ({ id: 42, windowId: 100 }))
     const addTab = vi.fn(async () => undefined)
     const joinChromeGroup = vi.fn(async () => 12)
     const handler = openAuthorFromCommentHandler({
       chrome: {
         scripting: { executeScript: vi.fn() },
-        tabs: { create },
+        tabs: { create, get },
       } as unknown as typeof chrome,
       tabGroupManager: { addTab, joinChromeGroup },
       subject: 'default',
@@ -23,8 +24,9 @@ describe('openAuthorFromCommentHandler', () => {
 
     expect(create).toHaveBeenCalledExactlyOnceWith({
       url: 'https://www.douyin.com/user/MS4wLjABAAAA-test',
-      active: true,
+      active: false,
       openerTabId: 42,
+      windowId: 100,
     })
     expect(addTab).toHaveBeenCalledExactlyOnceWith('default', 77)
     expect(joinChromeGroup).toHaveBeenCalledExactlyOnceWith('default', 77)
@@ -42,12 +44,13 @@ describe('openAuthorFromCommentHandler', () => {
     const create = vi.fn()
       .mockRejectedValueOnce(new Error('Tab opener must be in the same window as the updated tab.'))
       .mockResolvedValueOnce({ id: 78 })
+    const get = vi.fn(async () => ({ id: 42, windowId: 100 }))
     const addTab = vi.fn(async () => undefined)
     const joinChromeGroup = vi.fn(async () => 12)
     const handler = openAuthorFromCommentHandler({
       chrome: {
         scripting: { executeScript: vi.fn() },
-        tabs: { create },
+        tabs: { create, get },
       } as unknown as typeof chrome,
       tabGroupManager: { addTab, joinChromeGroup },
       subject: 'default',
@@ -61,12 +64,14 @@ describe('openAuthorFromCommentHandler', () => {
 
     expect(create).toHaveBeenNthCalledWith(1, {
       url: 'https://www.douyin.com/user/MS4wLjABAAAA-test',
-      active: true,
+      active: false,
       openerTabId: 42,
+      windowId: 100,
     })
     expect(create).toHaveBeenNthCalledWith(2, {
       url: 'https://www.douyin.com/user/MS4wLjABAAAA-test',
-      active: true,
+      active: false,
+      windowId: 100,
     })
     expect(addTab).toHaveBeenCalledExactlyOnceWith('default', 78)
     expect(joinChromeGroup).toHaveBeenCalledExactlyOnceWith('default', 78)

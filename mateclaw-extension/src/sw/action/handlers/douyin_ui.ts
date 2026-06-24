@@ -1,6 +1,7 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { DouyinUiParams } from '../types'
 import { ensureVisibilityOverride } from './visibility-keepalive'
+import { installNetObserver, netSignalSince, netObserverDebug } from '../net_observer'
 
 export interface DouyinUiHandlerDeps {
   /** Chrome API; injectable for tests. Defaults to global chrome. */
@@ -28,7 +29,7 @@ interface DouyinUiResult {
  * All via chrome.scripting.executeScript — works on a background / minimised tab.
  */
 export const douyinUiHandler = (deps: DouyinUiHandlerDeps): ActionHandler<DouyinUiParams> => {
-  return async (tabId, params) => {
+  return async (tabId, params, deadlineMs) => {
     const api = deps.chrome ?? globalThis.chrome
     if (!api?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting unavailable', true)
@@ -37,6 +38,20 @@ export const douyinUiHandler = (deps: DouyinUiHandlerDeps): ActionHandler<Douyin
     await ensureVisibilityOverride(api, tabId)
     const op = params?.op ?? ''
     const label = params?.label ?? ''
+
+    // 排序:点排序选项【之前】装观察器登记 general/search 重载接口(排序复用搜索接口,query 带 filter_selected)。
+    // 点完后据该接口回包确认排序结果已重载 —— 替代 in-page 盲等 sleep(1500)。best-effort,装不上/没回包
+    // 则回执无 sortConfirmed,后端靠后续 openVideo 的列表就绪轮询兜底(零回归)。
+    let sortSinceTs = 0
+    if (op === 'sort') {
+      // 排序复用搜索接口(都是 general/search,排序只多带 filter_selected)——故必须用与搜索【相同】的
+      // key 'search';否则两条 URL 模式相同的规则里 matchRule 只命中先登记的 'search','sort' 永远收不到
+      // 事件(netDebug 实测:eventKeys 全 search、attrs.sort=null)。判定=点排序后出现【新】search 回包(ts>点击时刻)。
+      await installNetObserver(api, tabId, [
+        { key: 'search', urlSource: 'aweme/v1/web/general/search/', captureBody: false },
+      ])
+      sortSinceTs = Date.now()
+    }
 
     let result: DouyinUiResult | undefined
     try {
@@ -53,7 +68,36 @@ export const douyinUiHandler = (deps: DouyinUiHandlerDeps): ActionHandler<Douyin
     if (!result || !result.ok) {
       throw new ActionFailureError('HANDLER_ERROR', 'douyin_ui(' + op + '): ' + (result?.detail || 'failed'), true)
     }
+    if (op === 'sort') {
+      // 排序结果重载接口回包即认为就绪(替代盲等 1.5s);拿不到信号→false,后端靠后续列表就绪轮询兜底。
+      // sortNetMs=等回包实际耗时(≈budget 即超时未命中);未命中时附 netDebug 诊断观察器状态(排查未命中根因)。
+      const t0 = Date.now()
+      const sortConfirmed = await waitSortNetConfirm(api, tabId, sortSinceTs, deadlineMs)
+      const sortNetMs = Date.now() - t0
+      const netDebug = sortConfirmed ? undefined : await netObserverDebug(api, tabId)
+      return { ok: true, elapsed_ms: 0, payload: { ...result, sortConfirmed, sortNetMs, netDebug } }
+    }
     return { ok: true, elapsed_ms: 0, payload: { ...result } }
+  }
+}
+
+/**
+ * 在有限预算内轮询"排序触发的结果重载接口(general/search)是否回包"。命中即返回 true(排序结果已重载)。
+ * 通常 1-2s 回包,预算封顶 6s(不超过下发 deadline 余量);超时返回 false,由后端靠后续列表就绪轮询兜底。
+ * 读 MAIN world 观察器写在 documentElement 的 data-mc-net-sort。
+ */
+async function waitSortNetConfirm(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  sinceTs: number,
+  deadlineMs: number,
+): Promise<boolean> {
+  const budget = deadlineMs && deadlineMs > 0 ? Math.min(4000, Math.max(1500, deadlineMs - 800)) : 4000
+  const until = Date.now() + budget
+  for (;;) {
+    if (await netSignalSince(chromeApi, tabId, 'search', sinceTs, { windowMs: 20_000 })) return true
+    if (Date.now() >= until) return false
+    await new Promise(resolve => setTimeout(resolve, 200))
   }
 }
 
@@ -171,9 +215,11 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
   }
 
   if (op === 'sort') {
-    // 【慢环境】筛选触发器也可能懒加载晚出,先等它出现(最多 ~6s)再 hover
+    // 【慢环境】筛选触发器懒加载晚出:后台 tab 渲染慢,跑太早扑空 → 后端退 CDP 兜底(没 sortConfirmed
+    // 接口验证、可能没等重排就点视频=排序假性失效)。故等久一点(最多 ~12s),宁可多等也要走 douyin_ui
+    // 路径拿到接口确认。一就绪即提前命中,不影响快网。
     let flt = byText('筛选')
-    for (let t = 0; t < 12 && !flt; t++) { await sleep(500); flt = byText('筛选') }
+    for (let t = 0; t < 24 && !flt; t++) { await sleep(500); flt = byText('筛选') }
     if (!flt) return { ok: false, op, detail: 'filter_trigger_not_found' }
     const want = label || '最多点赞'
     const alt = want === '最多点赞' ? '点赞最多' : want === '最新发布' ? '发布时间' : ''
@@ -190,9 +236,9 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
     }
     if (!opt) return { ok: false, op, detail: 'sort_option_not_found:' + want }
     click(opt)
-    // 点完排序选项后给重排留时间;固定 sleep(1500) 在快网足够,慢网这里不强等结果就绪
-    // (下一步 douyin_open_video 自带"等卡稳定+慢系数"轮询,会兜住列表重排的延迟)。
-    await sleep(1500)
+    // 点完排序选项后只给极短 settle 让重载请求发出;不再盲等 1.5s —— 由 SW 端观察器等 general/search
+    // 回包确认重载(waitSortNetConfirm),回包即继续,快网更快、慢网更准。
+    await sleep(200)
     return { ok: true, op, detail: 'sorted:' + want }
   }
 

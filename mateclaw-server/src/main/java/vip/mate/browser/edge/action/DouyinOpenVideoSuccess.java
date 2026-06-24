@@ -16,6 +16,8 @@ public record DouyinOpenVideoSuccess(
         Integer index,
         Integer total,
         String title,
-        String reason
+        String reason,
+        // 扩展据点开视频后评论首屏 comment/list 回包确认视频已打开(接口驱动)。null=旧扩展无此字段。
+        Boolean openVideoConfirmed
 ) implements ActionSuccessPayload {
 }

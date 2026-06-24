@@ -49,10 +49,21 @@ export const openAuthorFromCommentHandler = (
     // 后台打开作者主页：active:false 不抢用户焦点，用户可继续在原标签页做别的事。
     // 后台 tab 的 DOM/布局照常（实测 hidden 下按钮坐标不塌缩），CDP 指定 tabId 即可
     // observe/点击，无需把它切到前台。
+    // 关键:显式指定 windowId = 主 tab(opener)所在的"获客独立窗口",让作者主页开在同一个独立
+    // 窗口里,而不是用户当前焦点窗口。只靠 openerTabId 不可靠——Chrome 不指定 windowId 时会把新
+    // tab 建到当前活动窗口,再要求 opener 同窗口,否则报错并走下面 fallback(那会把 tab 丢进用户窗口)。
+    let openerWindowId: number | undefined
+    try {
+      const openerTab = await chromeApi.tabs.get?.(tabId)
+      if (typeof openerTab?.windowId === 'number') openerWindowId = openerTab.windowId
+    } catch {
+      // 拿不到 opener 窗口就退回不指定 windowId(老行为),保证可用性不回归。
+    }
     const createProps: chrome.tabs.CreateProperties = {
       url: payload.href,
       active: false,
       openerTabId: tabId,
+      ...(openerWindowId !== undefined ? { windowId: openerWindowId } : {}),
     }
     let created: chrome.tabs.Tab
     try {
@@ -61,6 +72,7 @@ export const openAuthorFromCommentHandler = (
       if (!String((error as Error)?.message || error).includes('opener')) {
         throw error
       }
+      // openerTabId 被拒:删掉它但保留 windowId —— 作者主页仍开在独立窗口,绝不掉进用户当前窗口。
       const fallbackProps = { ...createProps }
       delete fallbackProps.openerTabId
       created = await chromeApi.tabs.create(fallbackProps)

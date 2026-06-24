@@ -1,6 +1,7 @@
 import { ActionFailureError, type ActionHandler } from '../ActionExecutor'
 import type { DouyinOpenVideoParams } from '../types'
 import { ensureVisibilityOverride } from './visibility-keepalive'
+import { installNetObserver, netSignalSince } from '../net_observer'
 
 export interface DouyinOpenVideoHandlerDeps {
   /** Chrome API; injectable for tests. Defaults to global chrome. */
@@ -34,7 +35,7 @@ function throwIfAborted(signal?: AbortSignal): void {
  * Background-capable (chrome.scripting.executeScript, no CDP input).
  */
 export const douyinOpenVideoHandler = (deps: DouyinOpenVideoHandlerDeps): ActionHandler<DouyinOpenVideoParams> => {
-  return async (tabId, params, _deadlineMs, signal) => {
+  return async (tabId, params, deadlineMs, signal) => {
     const api = deps.chrome ?? globalThis.chrome
     if (!api?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting unavailable', true)
@@ -44,6 +45,14 @@ export const douyinOpenVideoHandler = (deps: DouyinOpenVideoHandlerDeps): Action
     // 后台保活:先让页面以为可见,使视频卡时长能正常渲染,避免第一个视频被当图文跳过而点到第二个
     await ensureVisibilityOverride(api, tabId)
     const index = Math.max(0, Math.floor(params?.index ?? 0))
+    // 接口确认:点封面卡【之前】先装观察器登记评论首屏接口(comment/list)。点开视频会现拉评论首屏,
+    // 据该接口回包确认"视频已打开并开始加载" —— 替代后端点击后 2.88s 硬睡 + 看 URL/播放器 DOM。
+    // 视频是页内 modal(SPA pushState,不整页导航),点击前注入即可持续捕获。best-effort,装不上则
+    // 回执无 openVideoConfirmed、后端原样硬睡 + DOM 判定(零回归)。
+    await installNetObserver(api, tabId, [
+      { key: 'open_video', urlSource: 'aweme/v1/web/comment/list', captureBody: false },
+    ])
+    const openSinceTs = Date.now()
     // 保活也是一次 await,可能跨过取消窗口——真正点击注入前再查一次。
     throwIfAborted(signal)
 
@@ -62,7 +71,32 @@ export const douyinOpenVideoHandler = (deps: DouyinOpenVideoHandlerDeps): Action
     if (!result || !result.clicked) {
       throw new ActionFailureError('HANDLER_ERROR', 'douyin_open_video: ' + (result?.reason || 'video_card_not_found'), true)
     }
-    return { ok: true, elapsed_ms: 0, payload: { ...result } }
+    // 已点中封面卡:在剩余预算内轮询评论首屏 comment/list 回包确认视频已打开;命中→回执
+    // openVideoConfirmed=true,后端跳过 2.88s 硬睡。未命中→ false,后端原样硬睡(零回归)。
+    const openVideoConfirmed = await waitOpenVideoNetConfirm(api, tabId, openSinceTs, signal, deadlineMs)
+    return { ok: true, elapsed_ms: 0, payload: { ...result, openVideoConfirmed } }
+  }
+}
+
+/**
+ * 在有限预算内轮询"点开视频后评论首屏(comment/list)是否回包"。命中即返回 true(视频已打开)。
+ * 通常 1-2s 回包,预算封顶 6s(不超过下发 deadline 余量);超时返回 false,由后端原样退回硬睡 + DOM
+ * 判定(零回归)。读 MAIN world 观察器写在 documentElement 的 data-mc-net-open_video。
+ */
+async function waitOpenVideoNetConfirm(
+  chromeApi: typeof globalThis.chrome,
+  tabId: number,
+  sinceTs: number,
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+): Promise<boolean> {
+  const budget = deadlineMs && deadlineMs > 0 ? Math.min(6000, Math.max(1500, deadlineMs - 800)) : 6000
+  const until = Date.now() + budget
+  for (;;) {
+    if (signal?.aborted) return false
+    if (await netSignalSince(chromeApi, tabId, 'open_video', sinceTs, { windowMs: 20_000 })) return true
+    if (Date.now() >= until) return false
+    await new Promise(resolve => setTimeout(resolve, 200))
   }
 }
 
