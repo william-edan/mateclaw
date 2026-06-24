@@ -350,38 +350,6 @@ function connectResidentLocal(): void {
 }
 
 /**
- * 探测本地常驻 bridge 是否在(auto 模式据此判桌面 vs 网页):限时打开 loopback WS,
- * 能 open 即视为"桌面 bridge 在场"→ client;否则(连不上/超时)→ web。探测连接随即关闭,
- * 不影响后续真正的 connectResidentLocal()。
- */
-function probeLocalBridge(timeoutMs = 800): Promise<boolean> {
-  return new Promise(resolve => {
-    let settled = false
-    let ws: WebSocket | null = null
-    const finish = (ok: boolean) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      try {
-        ws?.close()
-      } catch {
-        // ignore
-      }
-      resolve(ok)
-    }
-    const timer = setTimeout(() => finish(false), timeoutMs)
-    try {
-      ws = new WebSocket(LOCAL_BRIDGE_URL)
-      ws.onopen = () => finish(true)
-      ws.onerror = () => finish(false)
-      ws.onclose = () => finish(false)
-    } catch {
-      finish(false)
-    }
-  })
-}
-
-/**
  * Pairing-aware (re)connect used by startup + the keepalive alarm. Channel
  * priority (跨组契约4): direct 配对 (serverUrl+pat) > resident-local (when the
  * preferLocalBridge flag is on, default ON) > native "装好即连". With the flag
@@ -436,15 +404,10 @@ async function reconnectByPairing(): Promise<void> {
     await connectDirect(cfg.serverUrl, cfg.pat)
     return
   }
-  // server-direct:未配对时按连接模式分流(默认 auto)。
-  //   web    — 强制网页:不主动连本地 bridge,空闲等网页「点连接」推送 pair(externally_connectable)。
-  //   client — 强制桌面:走常驻 bridge / native(现状不变;preferLocalBridge 作为 client 内部
-  //            的 resident vs native 选择,保留)。
-  //   auto(默认)— 探测本地常驻 bridge:在则 client,不在则 web(空闲)。桌面/网页都无需手动切。
+  // server-direct:未配对时按连接方式分流(默认 web 网页端)。
+  //   web(默认)— 不主动连本地 bridge,空闲等网页「点连接」推送 pair(externally_connectable)。
+  //   client    — 走桌面常驻 bridge / native(preferLocalBridge 作为 client 内部 resident vs native 选择,保留)。
   const mode: ConnectionMode = await getConnectionMode(chrome.storage.local)
-  if (mode === 'web') {
-    return
-  }
   if (mode === 'client') {
     if (await preferLocalBridge()) {
       connectResidentLocal()
@@ -453,12 +416,7 @@ async function reconnectByPairing(): Promise<void> {
     connectNative()
     return
   }
-  // mode === 'auto'(默认):探测本地常驻 bridge,在则走桌面、不在则等网页 pair。
-  if (await probeLocalBridge()) {
-    connectResidentLocal()
-    return
-  }
-  // 探不到 bridge → web:空闲,等网页「点连接」。
+  // mode === 'web'(默认):空闲,等网页「点连接」。
 }
 
 /** Tear down the active transport (used by unpair). */
@@ -964,10 +922,9 @@ chrome.runtime.onMessage.addListener(
           .catch(e => sendResponse({ connected: false, error: String(e) }))
         return true
       case 'bridge.setMode': {
-        const mode: ConnectionMode =
-          r.mode === 'web' ? 'web' : r.mode === 'client' ? 'client' : 'auto'
+        const mode: ConnectionMode = r.mode === 'client' ? 'client' : 'web'
         setConnectionMode(chrome.storage.local, mode)
-          // 切模式后立即按新模式重连(web=空闲;client=连 bridge/native;auto=探测)。
+          // 切方式后立即按新方式重连(web=空闲等 pair;client=连 bridge/native)。
           .then(() => reconnectByPairing())
           .then(() => sendResponse({ ok: true, mode }))
           .catch(e => sendResponse({ ok: false, error: String(e) }))

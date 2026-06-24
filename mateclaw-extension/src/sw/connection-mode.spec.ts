@@ -18,24 +18,26 @@ function fakeStorage(initial: Record<string, unknown> = {}) {
 }
 
 describe('connection-mode', () => {
-  it('未设置时默认 auto', async () => {
-    expect(await getConnectionMode(fakeStorage())).toBe('auto')
+  it('未设置时默认 web(网页端)', async () => {
+    expect(await getConnectionMode(fakeStorage())).toBe('web')
   })
-  it('存了 web/client 原样返回', async () => {
-    expect(await getConnectionMode(fakeStorage({ [CONNECTION_MODE_KEY]: 'web' }))).toBe('web')
+  it('存了 client 就返回 client', async () => {
     expect(await getConnectionMode(fakeStorage({ [CONNECTION_MODE_KEY]: 'client' }))).toBe('client')
   })
-  it('非法值回退 auto', async () => {
-    expect(await getConnectionMode(fakeStorage({ [CONNECTION_MODE_KEY]: 'bogus' }))).toBe('auto')
+  it('存了 web 就返回 web', async () => {
+    expect(await getConnectionMode(fakeStorage({ [CONNECTION_MODE_KEY]: 'web' }))).toBe('web')
   })
-  it('读 storage 抛错也回退 auto', async () => {
+  it('非法值回退 web', async () => {
+    expect(await getConnectionMode(fakeStorage({ [CONNECTION_MODE_KEY]: 'bogus' }))).toBe('web')
+  })
+  it('读 storage 抛错也回退 web', async () => {
     const throwing = {
       get: async () => {
         throw new Error('boom')
       },
       set: async () => {},
     }
-    expect(await getConnectionMode(throwing)).toBe('auto')
+    expect(await getConnectionMode(throwing)).toBe('web')
   })
   it('setConnectionMode 落库', async () => {
     const s = fakeStorage()
