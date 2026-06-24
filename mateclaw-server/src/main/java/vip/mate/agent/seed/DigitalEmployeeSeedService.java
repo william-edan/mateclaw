@@ -146,6 +146,7 @@ public class DigitalEmployeeSeedService implements ApplicationRunner {
         agent.setIcon(fmString(fm, "icon", DEFAULT_ICON));
         agent.setTags(fmString(fm, "category", null)); // 业务分类 → single tag
         agent.setEnabled(true);
+        agent.setBuiltin(true); // 系统播种 = 内置：所有用户可见、仅 admin 可改
         agent.setWorkspaceId(DEFAULT_WORKSPACE_ID);
         agent.setDeleted(0);
         return agent;

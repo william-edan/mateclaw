@@ -56,21 +56,25 @@ public class AgentController {
     @RequireWorkspaceRole("viewer")
     public R<List<AgentEntity>> list(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
-            @RequestParam(value = "enabled", required = false) Boolean enabled) {
+            @RequestParam(value = "enabled", required = false) Boolean enabled,
+            Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         // enabled=true: chat selectors hide disabled agents.
         // enabled=null: admin management page sees enabled + disabled.
-        return R.ok(agentService.listAgentsByWorkspace(wsId, enabled));
+        // V146 可见性：内置对所有人可见，非内置仅创建者本人可见。
+        return R.ok(agentService.listVisibleAgents(wsId, enabled, resolveUserId(auth)));
     }
 
     @Operation(summary = "获取Agent详情")
     @GetMapping("/{id}")
     @RequireWorkspaceRole("viewer")
     public R<AgentEntity> get(@PathVariable Long id,
-                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                              Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
+        verifyAgentVisible(agent, auth);
         return R.ok(agent);
     }
 
@@ -79,10 +83,12 @@ public class AgentController {
     @RequireWorkspaceRole("viewer")
     public R<AgentCapabilitiesVO> capabilities(
             @PathVariable Long id,
-            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
+        verifyAgentVisible(agent, auth);
 
         ModelConfigEntity primary;
         try {
@@ -137,6 +143,8 @@ public class AgentController {
         agent.setWorkspaceId(wsId);
         // RFC-077 §4.4: 记录创建者，让 member 后续可删除自建 Agent
         agent.setCreatorUserId(resolveUserId(auth));
+        // V146: admin 创建的 = 内置（所有用户可见、仅 admin 可改）；普通用户创建的 = 私有。
+        agent.setBuiltin(isSystemAdmin(auth));
         AgentEntity created = agentService.createAgent(agent);
         auditEventService.record("CREATE", "AGENT", String.valueOf(created.getId()), created.getName(), null);
         return R.ok(created);
@@ -146,12 +154,22 @@ public class AgentController {
     @PutMapping("/{id}")
     @RequireWorkspaceRole("member")
     public R<AgentEntity> update(@PathVariable Long id, @RequestBody AgentEntity agent,
-                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                 Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity existing = agentService.getAgent(id);
         verifyResourceWorkspace(existing.getWorkspaceId(), wsId);
+        // V146: 内置仅 admin 可改，非内置仅创建者本人可改。
+        if (!agentService.canModify(existing, resolveUserId(auth), isSystemAdmin(auth))) {
+            throw new MateClawException("err.agent.update_forbidden", 403,
+                    Boolean.TRUE.equals(existing.getBuiltin())
+                            ? "内置 Agent 仅管理员可修改"
+                            : "仅创建者本人可修改该 Agent");
+        }
         agent.setId(id);
         agent.setWorkspaceId(existing.getWorkspaceId()); // 不允许跨 workspace 迁移
+        agent.setBuiltin(existing.getBuiltin());          // 内置标记不可经更新篡改
+        agent.setCreatorUserId(existing.getCreatorUserId()); // 创建者不可变
         AgentEntity updated = agentService.updateAgent(agent);
         auditEventService.record("UPDATE", "AGENT", String.valueOf(id), updated.getName(), null);
         return R.ok(updated);
@@ -167,15 +185,12 @@ public class AgentController {
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
 
-        // RFC-077 §4.4: 三选一鉴权 — 系统 admin / workspace admin+ / 创建者本人
-        Long userId = resolveUserId(auth);
-        boolean systemAdmin = isSystemAdmin(auth);
-        boolean workspaceAdmin = !systemAdmin
-                && workspaceService.hasPermission(agent.getWorkspaceId(), userId, "admin");
-        boolean isCreator = userId.equals(agent.getCreatorUserId());
-        if (!systemAdmin && !workspaceAdmin && !isCreator) {
+        // V146: 内置仅 admin 可删，非内置仅创建者本人可删。
+        if (!agentService.canModify(agent, resolveUserId(auth), isSystemAdmin(auth))) {
             throw new MateClawException("err.agent.delete_forbidden", 403,
-                    "Only the creator or a workspace admin can delete this Agent");
+                    Boolean.TRUE.equals(agent.getBuiltin())
+                            ? "内置 Agent 仅管理员可删除"
+                            : "仅创建者本人可删除该 Agent");
         }
 
         agentService.deleteAgent(id);
@@ -190,10 +205,12 @@ public class AgentController {
             @PathVariable Long id,
             @RequestParam String message,
             @RequestParam(defaultValue = "default") String conversationId,
-            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
 
         // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
@@ -231,10 +248,12 @@ public class AgentController {
     public R<String> chat(
             @PathVariable Long id,
             @RequestBody ChatRequest request,
-            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
         return R.ok(agentService.chat(id, request.getMessage(), request.getConversationId()));
     }
@@ -245,10 +264,12 @@ public class AgentController {
     public R<String> execute(
             @PathVariable Long id,
             @RequestBody ChatRequest request,
-            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
         return R.ok(agentService.execute(id, request.getMessage(), request.getConversationId()));
     }
@@ -257,10 +278,12 @@ public class AgentController {
     @GetMapping("/{id}/state")
     @RequireWorkspaceRole("viewer")
     public R<AgentState> getState(@PathVariable Long id,
-                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                                   Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentVisible(agent, auth);
         return R.ok(agentService.getAgentState(id));
     }
 

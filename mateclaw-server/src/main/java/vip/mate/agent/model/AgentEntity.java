@@ -63,6 +63,13 @@ public class AgentEntity {
     /** 是否启用 */
     private Boolean enabled;
 
+    /**
+     * 是否内置（V146）。true=内置：所有用户可见，仅 admin 可改（系统播种 / admin 创建）；
+     * false=用户私有：仅创建者本人可见、可改。默认内置；新建时由 AgentController 按
+     * 创建者角色赋值。
+     */
+    private Boolean builtin;
+
     /** 图标（emoji 或 URL） */
     private String icon;
 

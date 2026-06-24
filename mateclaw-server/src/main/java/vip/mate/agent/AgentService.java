@@ -100,6 +100,42 @@ public class AgentService {
         return agentMapper.selectList(q.orderByDesc(AgentEntity::getCreateTime));
     }
 
+    // ==================== 内置 / 可见性 / 编辑权限 (V146) ====================
+
+    /**
+     * 列出当前用户在工作区内「可见」的 Agent：内置(builtin=true) + 自己创建的。
+     * 非内置且非本人创建的对当前用户不可见。
+     */
+    public List<AgentEntity> listVisibleAgents(Long workspaceId, Boolean enabled, Long userId) {
+        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getWorkspaceId, workspaceId);
+        if (enabled != null) {
+            q.eq(AgentEntity::getEnabled, enabled);
+        }
+        // (builtin = TRUE OR creator_user_id = me)
+        q.and(w -> {
+            w.eq(AgentEntity::getBuiltin, true);
+            if (userId != null) {
+                w.or().eq(AgentEntity::getCreatorUserId, userId);
+            }
+        });
+        return agentMapper.selectList(q.orderByDesc(AgentEntity::getCreateTime));
+    }
+
+    /** 可见性：内置对所有人可见；非内置仅创建者本人可见。 */
+    public boolean canView(AgentEntity agent, Long userId) {
+        if (agent == null) return false;
+        if (Boolean.TRUE.equals(agent.getBuiltin())) return true;
+        return userId != null && userId.equals(agent.getCreatorUserId());
+    }
+
+    /** 编辑 / 删除权限：内置仅 admin；非内置仅创建者本人。 */
+    public boolean canModify(AgentEntity agent, Long userId, boolean isAdmin) {
+        if (agent == null) return false;
+        if (Boolean.TRUE.equals(agent.getBuiltin())) return isAdmin;
+        return userId != null && userId.equals(agent.getCreatorUserId());
+    }
+
     public AgentEntity getAgent(Long id) {
         AgentEntity entity = agentMapper.selectById(id);
         if (entity == null) {
