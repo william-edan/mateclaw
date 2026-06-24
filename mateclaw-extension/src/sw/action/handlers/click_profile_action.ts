@@ -70,7 +70,12 @@ export const clickProfileActionHandler = (
     //    激活 tab 解除节流、让抖音全速渲染,再轮询重试几次(每次 1.5s,约 6s 渲染余量)。
     if (payload?.ok !== true) {
       throwIfAborted(signal)
-      await activateTabForRender(chromeApi, tabId)
+      // 【不再强制前台】(用户要求不强制前台可见):作者 tab 已被 open_author 的 CDP
+      // setWebLifecycleState('active') 解冻 + ensureVisibilityOverride(本 handler 开头)伪造可见性,
+      // 关注/私信按钮后台照常 mount;下面轮询重试(executeScript 后台可用)即可命中,无需抢焦点。
+      // FORCE_FOREGROUND_ON_MISS=true 可恢复"扑空即切前台"的慢机兜底。
+      const FORCE_FOREGROUND_ON_MISS = false
+      if (FORCE_FOREGROUND_ON_MISS) await activateTabForRender(chromeApi, tabId)
       for (let i = 0; i < 4 && payload?.ok !== true; i++) {
         await new Promise(resolve => setTimeout(resolve, 1500))
         throwIfAborted(signal)

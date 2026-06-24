@@ -75,12 +75,16 @@ export const typeDmDraftHandler = (
     if (!chromeApi?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting.executeScript is unavailable', true)
     }
-    // 发送前台化(契约,用户已同意):真发(send=true)时,在【点发送按钮之前】把该 engagement tab
-    // 切到前台一次,让点击在前台 trusted 生效、不被 Chrome 后台渲染节流 + 抖音 visibilitychange 暂停
-    // 吞掉(根因:后台标签点击 no-op 但扩展仍自报 sent)。会闪一下,换可靠。键入草稿可仍后台,
-    // 但发送这一步必须前台。幂等:整条 handler 只激活一次;best-effort,激活失败不阻断后续。
+    // 发送【不再强制前台】(用户要求:打开主页/关注/私信都不强制前台可见,去掉"闪一下")。
+    // FORCE_FOREGROUND_SEND=false 时纯后台发送,依赖:① 发送=editable 上合成 Enter KeyboardEvent
+    // (抖音监听合成 keydown/keypress、不查 isTrusted/hasFocus)+ ensureVisibilityOverride 伪造
+    // visibilityState 让后台 React composer 不暂停 → 后台可触发发送;② 真发出唯一以 installDmSendProbe
+    // 的网络回包(data-mc-dm-sent,读 imapi message/send 真实回执)确认,后台也拿得到、不会假阳——
+    // 取代了当初靠"前台化"防的 DOM 草稿清空假阳。若实测后台发送不可靠,把本 flag 改回 true 即恢复前台化。
+    const FORCE_FOREGROUND_SEND = false
     let activatedForSend = false
     const activateBeforeSend = async (): Promise<void> => {
+      if (!FORCE_FOREGROUND_SEND) return
       if (activatedForSend) return
       activatedForSend = true
       await activateTabForRender(chromeApi, tabId)

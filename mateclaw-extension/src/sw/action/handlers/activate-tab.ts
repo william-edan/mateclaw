@@ -9,6 +9,13 @@
  * 策略:后台先试(静默),扑空才激活——快机/前台元素本就在,不会触发激活,行为不变;慢机
  * 激活后全速渲染、元素出来再操作。best-effort:激活失败绝不可让动作失败。
  */
+/**
+ * 是否允许 ensureRendered 在元素没渲染时把 tab 切到前台(activateTabForRender)。
+ * 用户要求"打开主页/关注/私信不强制前台可见",故默认 false=纯后台轮询等待(靠 CDP 解冻 + 可见性伪造)。
+ * 若慢机下浮层/按钮 mount 仍超时,改回 true 即恢复"没渲染就激活"的兜底。
+ */
+const ENSURE_RENDERED_ACTIVATE = false
+
 export async function activateTabForRender(
   api: typeof globalThis.chrome | undefined,
   tabId: number,
@@ -61,8 +68,13 @@ export async function ensureRendered(
   const chromeApi = api ?? globalThis.chrome
   if (!chromeApi?.scripting?.executeScript) return false
   if (await selectorPresent(chromeApi, tabId, selector)) return true
-  // 没渲染 → 慢机/后台节流,激活 tab 全速渲染后轮询等待。
-  await activateTabForRender(chromeApi, tabId)
+  // 【不再强制前台】(用户要求不强制前台可见):engagement tab 已被 open_author 的 CDP
+  // Page.setWebLifecycleState('active') 解冻 + 调用方 ensureVisibilityOverride 伪造可见性,后台 React
+  // 照常 mount 浮层/按钮;这里仅在预算内轮询(executeScript 后台可用),渲染出来即返回。
+  // ENSURE_RENDERED_ACTIVATE=true 可恢复"没渲染就激活 tab"的旧行为(慢机兜底)。
+  if (ENSURE_RENDERED_ACTIVATE) {
+    await activateTabForRender(chromeApi, tabId)
+  }
   const deadline = Date.now() + Math.max(0, timeoutMs)
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 600))

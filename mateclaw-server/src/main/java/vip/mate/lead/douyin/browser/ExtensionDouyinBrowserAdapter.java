@@ -2070,7 +2070,20 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
         String resultProfileUrl = firstNonBlank(comment.authorProfileUrl(), profile.url());
 
-        boolean alreadyFollowed = profileFollowConfirmed(profile);
+        // 后台/非聚焦 tab 的 a11y 恒空,作者主页 SPA 渲染慢 → 首次 clickProfileAction 必扑空(roots:0)再盲等 SPA
+        // (实测开页→首试 miss→重试命中 ~10s)。开页后先用 page DOM 探测主页根(#user_detail_element)就绪
+        // (后台可用,就绪即返回),关注/已关注探测与点击就都在已渲染的页上一次命中,省掉首试 miss。
+        // 守卫只看【a11y tree 是否空】:新开作者 tab 的 observation 带 url(故 isBlankObservation 因 url 非空=false
+        // 不触发,实测漏触发),但后台 tree 必空——tree 空才是"a11y 判不了、需 DOM 预等"的真实条件。
+        if (profile == null || profile.tree() == null || profile.tree().isBlank()) {
+            boolean profileReady = waitDomStateReadyEngagement(engagementTabId, "douyin.profile", 2, 400L);
+            log.info("[douyin.lead] author profile DOM ready before actions (a11y tree blank): ready={}, tabId={}", profileReady, engagementTabId);
+        }
+
+        // 后台/非聚焦 tab 的 a11y 树空 → profileFollowConfirmed(看 tree"已关注")恒 false,会把"其实已关注"
+        // 误判为未关注、白点一次关注。a11y 空时改用 page DOM 探测关注态(后台可用)。前台 a11y 可用时不探(零开销)。
+        boolean alreadyFollowed = profileFollowConfirmed(profile)
+                || (isBlankObservation(profile) && domStateReadyEngagement(engagementTabId, "douyin.follow-state"));
         boolean followClicked = false;
         boolean followNetConfirmed = false;
         if (!alreadyFollowed) {
@@ -2091,7 +2104,8 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
                 profile = waitForFollowConfirmation(engagementTabId, profile, slowAttempts(6), slowMs(700L));
             }
         }
-        boolean followConfirmed = alreadyFollowed || followNetConfirmed || profileFollowConfirmed(profile);
+        boolean followConfirmed = alreadyFollowed || followNetConfirmed || profileFollowConfirmed(profile)
+                || (isBlankObservation(profile) && domStateReadyEngagement(engagementTabId, "douyin.follow-state"));
 
         List<String> dmLabels = List.of("私信", "发私信", "Message", "发消息");
         if (!clickProfileAction(profile, "dm", dmLabels, engagementTabId).clicked()) {
@@ -2121,6 +2135,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         } else {
             log.info("[douyin.lead] dm observe blank/non-douyin (background); proceeding with DOM-anchored input on tab={}",
                     engagementTabId);
+            // 后台:点完私信后浮层/编辑器异步渲染,首次 type_dm_draft 常在浮层 mount 前扑空
+            // (cdp:draft_not_visible_before_send)再重试(实测 ~10s)。进 DM 循环前先用 page DOM 探测浮层
+            // (#imSaasContainerId / .messageEditorinputArea / 发送按钮)就绪(后台可用,就绪即返回),
+            // 让首次输入就落在已渲染的浮层上,省掉 attempt1 必失败 + 重试盲等。
+            boolean dmReady = waitDomStateReadyEngagement(engagementTabId, "douyin.dm-page", 3, 400L);
+            log.info("[douyin.lead] dm panel DOM ready before typing (background): ready={}, tabId={}", dmReady, engagementTabId);
         }
         JsonNode dmDraftAction = errorNode("NOT_RUN", "type_dm_draft not run");
         boolean typedByDmPrimitive = false;
@@ -2409,8 +2429,11 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         BrowserObservation active = observeEngagementTab(engagementTabId, "all");
         BrowserObservation retryBase = looksLikeDouyinUserProfile(active, comment) ? active
                 : (looksLikeDouyinUserProfile(profile, comment) ? profile : unconfirmed);
-        if (!looksLikeDouyinUserProfile(retryBase, comment)) {
-            log.warn("[douyin.lead] skip dom dm retry because current page is not confirmed profile: url={}, title={}, signals={}",
+        // a11y 判不出作者页(后台/非聚焦 tab 树空)时,用 page DOM 探测作者主页根(#user_detail_element)兜底
+        // (后台可用)。a11y 与 DOM 都判不是作者页才真正放弃 dom dm 重试,避免后台空被误判成"非作者页"而拦死。
+        if (!looksLikeDouyinUserProfile(retryBase, comment)
+                && !domStateReadyEngagement(engagementTabId, "douyin.profile")) {
+            log.warn("[douyin.lead] skip dom dm retry because current page is not confirmed profile (a11y + DOM both miss): url={}, title={}, signals={}",
                     active.url(), active.title(), dmPageSignals(active));
             return unconfirmed;
         }
@@ -2615,6 +2638,65 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
 
     private BrowserObservation observeEngagementTab(@Nullable Long engagementTabId, String filter) {
         return engagementTabId == null ? observeActive(filter) : observeTab(engagementTabId, filter);
+    }
+
+    /**
+     * DOM 页面状态探测(后台可用,替代后台/非聚焦 tab 必空的 a11y observe):调扩展 detect_region 的
+     * 状态键(strategy=dom,纯 page DOM),读 results[0].payload.ready。装不上/未就绪/异常一律 false ——
+     * 仅作"后台 a11y 空时的补充确认源",绝不导致误判失败(前台仍以 a11y 为准,零回归)。
+     */
+    private boolean domStateReadyMain(String stateKey) {
+        try {
+            return parseDomStateReady(browser.service_detect_region_main(stateKey, "dom"));
+        } catch (Exception e) {
+            log.debug("[douyin.lead] detect state(main) {} failed: {}", stateKey, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 同 {@link #domStateReadyMain} 但作用在 engagement tab(私信/作者页常在新开 tab,非 main)。 */
+    private boolean domStateReadyEngagement(@Nullable Long engagementTabId, String stateKey) {
+        try {
+            String json = engagementTabId == null
+                    ? browser.service_detect_region_active(stateKey, "dom")
+                    : browser.service_detect_region_tab(engagementTabId, stateKey, "dom");
+            return parseDomStateReady(json);
+        } catch (Exception e) {
+            log.debug("[douyin.lead] detect state(engagement) {} failed: {}", stateKey, e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean parseDomStateReady(@Nullable String json) {
+        if (json == null) {
+            return false;
+        }
+        try {
+            JsonNode root = parse(json);
+            if (!root.path("ok").asBoolean(false)) {
+                return false;
+            }
+            return root.path("results").path(0).path("payload").path("ready").asBoolean(false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 在后台/非聚焦 tab 上【主动等某 DOM 状态就绪】(此时 a11y observe 恒空,无法用 observe 轮询)。
+     * domStateReadyEngagement 单次已在页内轮询至多 ~4s 且【就绪即返回】,故 attempts 用小字面值封顶总时长;
+     * 就绪即提前返回(常见 1~3s),从不死等。用于"开作者页后等主页就绪""点私信后等浮层就绪"消掉首试 miss。
+     */
+    private boolean waitDomStateReadyEngagement(@Nullable Long engagementTabId, String stateKey, int attempts, long waitMs) {
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            if (domStateReadyEngagement(engagementTabId, stateKey)) {
+                return true;
+            }
+            if (i < attempts - 1) {
+                waitMs(waitMs);
+            }
+        }
+        return false;
     }
 
     private boolean openProfileMoreMenu(BrowserObservation profile, @Nullable Long engagementTabId) {
@@ -4115,6 +4197,12 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
         if (!isBlankObservation(observed) && !videoCandidatesFromObservation(observed).isEmpty()) {
             log.info("[douyin.lead] video result list ready (cards visible), proceeding to open");
+            return;
+        }
+        // 后台 a11y 看不到卡:用 page DOM 探测搜索结果就绪(后台可用)。已就绪则无需渲染宽限,直接交
+        // douyin_open_video 点开;未就绪才给一个小渲染宽限,随后由 douyin_open_video 在页内等卡+点。
+        if (domStateReadyMain("douyin.search-results")) {
+            log.info("[douyin.lead] search results ready via page DOM (background); proceeding to open without settle");
             return;
         }
         log.info("[douyin.lead] video list not visible via a11y (likely background); brief render settle then defer card-wait to douyin_open_video");

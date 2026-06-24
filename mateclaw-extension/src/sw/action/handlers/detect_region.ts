@@ -7,6 +7,20 @@ export interface DetectRegionHandlerDeps {
   chrome?: typeof globalThis.chrome
 }
 
+/**
+ * 状态探测家族:这些 regionKey 不是"找可点区域返回 rect",而是"判断页面是否处于某状态"。后端在
+ * 后台/非活动 tab 下 CDP a11y observe 必然返回空(snapshot blank、连 url 都空),无法判定;改调本
+ * 家族(strategy=dom,纯 page DOM,后台/非聚焦照常工作)即可拿到真实就绪状态。命中即 ready:true,
+ * 从不 register region、从不抛错(未就绪=ready:false,交后端按未就绪处理,零回归)。
+ */
+const STATE_REGION_KEYS = new Set<string>([
+  'douyin.search-results',
+  'douyin.video-open',
+  'douyin.dm-page',
+  'douyin.profile',
+  'douyin.follow-state',
+])
+
 export const detectRegionHandler = (deps: DetectRegionHandlerDeps): ActionHandler<DetectRegionParams> => {
   return async (tabId, params, deadlineMs) => {
     if (!isValidParams(params)) {
@@ -20,6 +34,40 @@ export const detectRegionHandler = (deps: DetectRegionHandlerDeps): ActionHandle
     const api = deps.chrome ?? globalThis.chrome
     if (!api?.scripting?.executeScript) {
       throw new ActionFailureError('HANDLER_ERROR', 'chrome.scripting is unavailable', true)
+    }
+
+    // 状态探测家族:走独立的自包含 detectStateInPage(纯 page DOM,后台可用),返回 { ready, url, signals }。
+    // 不 register region、不要求 rect、从不抛错——未就绪返回 ready:false 让后端按未就绪处理(零回归)。
+    if (STATE_REGION_KEYS.has(params.regionKey)) {
+      const statePollMs = Math.max(0, Math.min(4000, (deadlineMs ?? 3000) - 1000))
+      let state: DetectedState | undefined
+      try {
+        const stateResults = await api.scripting.executeScript({
+          target: { tabId, allFrames: false },
+          func: detectStateInPage,
+          args: [params.regionKey, statePollMs, 200],
+        })
+        state = stateResults?.[0]?.result as DetectedState | undefined
+      } catch (e) {
+        return {
+          ok: true,
+          elapsed_ms: 0,
+          // regionKey 必带:后端 DetectRegionSuccess record 要求 regionKey 非空,否则反序列化抛错。
+          payload: { regionKey: params.regionKey, ready: false, url: '', reason: 'state_probe_inject_failed:' + (e instanceof Error ? e.message : String(e)) },
+        }
+      }
+      return {
+        ok: true,
+        elapsed_ms: 0,
+        payload: {
+          regionKey: params.regionKey,
+          ready: state?.ready === true,
+          url: state?.url ?? '',
+          // reason = not_ready:<key> + 全量 signals(诊断用,塞进 reason 一并带回);后端 DetectRegionSuccess
+          // 只读 ready+url,故不再单发 signals 字段(避免依赖 FAIL_ON_UNKNOWN,虽其默认已关闭)。
+          reason: (state?.reason ?? '') + (state?.signals ? ' ' + JSON.stringify(state.signals) : ''),
+        },
+      }
     }
 
     // 页内轮询预算:评论列表异步渲染,后端单次探测易落空。给页内函数一段轮询窗口(留 1.2s 余量
@@ -519,4 +567,106 @@ async function detectRegionInPage(
     },
     source: `dom_detect:${best.reason}`,
   }
+}
+
+interface DetectedState {
+  ready: boolean
+  url: string
+  reason?: string
+  signals?: Record<string, boolean>
+}
+
+/**
+ * 自包含的页内【状态探测】函数(状态探测家族 STATE_REGION_KEYS)。
+ *
+ * ⚠️ 铁律:经 chrome.scripting.executeScript({func}) 序列化注入,页面里没有本模块作用域 —— 绝不能
+ * 引用任何模块级函数/变量,所有辅助必须内联(与 detectRegionInPage / typeDouyinDmDraftInPage 一致)。
+ *
+ * 与各动作 handler 的页内检测口径对齐(后端就绪/确认判定改调本函数替代后台必空的 a11y observe):
+ *   - douyin.search-results:结果区出现视频卡(封面在 header 之下且卡片文本含 MM:SS 时长,镜像
+ *     douyin_open_video.collectCards)或出现排序 chrome(筛选/综合排序/最多点赞)。
+ *   - douyin.video-open:URL 进入 /video//modal_id=/aweme_id= 或出现播放器节点(镜像 open_video.navigated)。
+ *   - douyin.dm-page:私信浮层锚点 #imSaasContainerId / im-dialog / messageEditorinputArea / 发送按钮可见。
+ *   - douyin.profile:作者主页根 #user_detail_element / [data-e2e=user-detail] 存在。
+ *   - douyin.follow-state:主页根内出现"已关注/互相关注/相互关注/已互关"按钮(=已关注,关注确认)。
+ * 短轮询到就绪或预算耗尽;附带全量 signals 供诊断。
+ */
+async function detectStateInPage(
+  stateKey: string,
+  pollMs?: number,
+  intervalMs?: number,
+): Promise<DetectedState> {
+  const vis = (e: Element | null | undefined): boolean => {
+    if (!(e instanceof HTMLElement)) return false
+    const b = e.getBoundingClientRect()
+    return b.width > 0 && b.height > 0
+  }
+  const norm = (s: string | null | undefined): string => String(s || '').replace(/\s+/g, '')
+  const anyVisible = (sel: string): boolean => Array.from(document.querySelectorAll(sel)).some(vis)
+
+  const hasSearchResults = (): boolean => {
+    const headerBottom = (() => {
+      const h = document.querySelector('header') as HTMLElement | null
+      return Math.max(80, h ? h.getBoundingClientRect().bottom : 0)
+    })()
+    const cardCount = Array.from(document.querySelectorAll<HTMLElement>('img, picture'))
+      .map(im => ({ im, b: im.getBoundingClientRect() }))
+      .filter(c => c.b.top > headerBottom)
+      .filter(c => {
+        let card: HTMLElement = c.im
+        for (let k = 0; k < 6 && card.parentElement; k++) card = card.parentElement
+        const text = card.innerText || ''
+        return /\b\d{1,2}:\d{2}\b/.test(text) && !/^\s*图文/.test(text)
+      }).length
+    if (cardCount > 0) return true
+    return Array.from(document.querySelectorAll<HTMLElement>('span,div,button,li,[role="button"]'))
+      .filter(vis)
+      .some(e => { const t = norm(e.textContent); return t === '筛选' || t === '综合排序' || t === '最多点赞' })
+  }
+  const hasVideoOpen = (): boolean =>
+    /\/video\//.test(location.href) ||
+    /[?&]modal_id=/.test(location.href) ||
+    /[?&]aweme_id=/.test(location.href) ||
+    !!document.querySelector('xg-video-container, .xgplayer, video[src], [data-e2e="feed-active-video"]')
+  const hasDmPage = (): boolean =>
+    anyVisible('#imSaasContainerId') ||
+    anyVisible('[data-e2e="im-dialog"]') ||
+    anyVisible('.messageEditorinputArea') ||
+    anyVisible('.e2e-send-msg-btn')
+  const hasProfile = (): boolean =>
+    anyVisible('#user_detail_element') || anyVisible('[data-e2e="user-detail"]')
+  const isFollowed = (): boolean => {
+    const root = document.querySelector('#user_detail_element,[data-e2e="user-detail"]') || document.body
+    if (!root) return false
+    return Array.from(root.querySelectorAll('button,[role="button"],div[tabindex],span[tabindex]'))
+      .some(el => ['已关注', '互相关注', '相互关注', '已互关'].includes(norm((el as HTMLElement).innerText || el.textContent)))
+  }
+
+  const evalKey = (): boolean => {
+    switch (stateKey) {
+      case 'douyin.search-results': return hasSearchResults()
+      case 'douyin.video-open': return hasVideoOpen()
+      case 'douyin.dm-page': return hasDmPage()
+      case 'douyin.profile': return hasProfile()
+      case 'douyin.follow-state': return isFollowed()
+      default: return false
+    }
+  }
+
+  const budget = typeof pollMs === 'number' && pollMs > 0 ? pollMs : 0
+  const step = typeof intervalMs === 'number' && intervalMs > 0 ? intervalMs : 200
+  const deadline = Date.now() + budget
+  let ready = evalKey()
+  while (!ready && Date.now() < deadline) {
+    await new Promise<void>(resolve => setTimeout(resolve, step))
+    ready = evalKey()
+  }
+  const signals: Record<string, boolean> = {
+    searchResults: hasSearchResults(),
+    videoOpen: hasVideoOpen(),
+    dmPage: hasDmPage(),
+    profile: hasProfile(),
+    followed: isFollowed(),
+  }
+  return { ready, url: location.href, reason: ready ? '' : 'not_ready:' + stateKey, signals }
 }

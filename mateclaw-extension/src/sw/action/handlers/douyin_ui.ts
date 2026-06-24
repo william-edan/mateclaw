@@ -218,8 +218,16 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
     // 【慢环境】筛选触发器懒加载晚出:后台 tab 渲染慢,跑太早扑空 → 后端退 CDP 兜底(没 sortConfirmed
     // 接口验证、可能没等重排就点视频=排序假性失效)。故等久一点(最多 ~12s),宁可多等也要走 douyin_ui
     // 路径拿到接口确认。一就绪即提前命中,不影响快网。
-    let flt = byText('筛选')
-    for (let t = 0; t < 24 && !flt; t++) { await sleep(500); flt = byText('筛选') }
+    // 筛选触发器:文案可能是"筛选"/"筛选 ▾"/带图标,byText 的 exact match(===)会漏 → filter_trigger_not_found
+    // (用户实测:筛选框出来了但点不到=触发器没匹配上)。容忍:可见 + 短文本(≤6字,排除大容器)且【含】"筛选",
+    // 取面积最小者(真触发器小、容器大)。慢环境懒加载晚出,轮询最多 ~12s。
+    const findFilterTrigger = (): HTMLElement | undefined =>
+      Array.from(document.querySelectorAll<HTMLElement>('span,div,button,li,[role="button"]'))
+        .filter(vis)
+        .filter(e => { const t = norm(e.textContent); return t.includes('筛选') && t.length <= 6 })
+        .sort((a, b) => { const A = a.getBoundingClientRect(), B = b.getBoundingClientRect(); return A.width * A.height - B.width * B.height })[0]
+    let flt = findFilterTrigger()
+    for (let t = 0; t < 24 && !flt; t++) { await sleep(500); flt = findFilterTrigger() }
     if (!flt) return { ok: false, op, detail: 'filter_trigger_not_found' }
     const want = label || '最多点赞'
     const alt = want === '最多点赞' ? '点赞最多' : want === '最新发布' ? '发布时间' : ''

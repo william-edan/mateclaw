@@ -882,6 +882,10 @@ public class ExtensionBrowserTool {
         return service_detect_region(new TabRef.Active(), regionKey, strategy);
     }
 
+    public String service_detect_region_tab(long tabId, String regionKey, String strategy) {
+        return service_detect_region(new TabRef.Explicit(tabId), regionKey, strategy);
+    }
+
     private String service_detect_region(TabRef tabRef, String regionKey, String strategy) {
         BrowserSession session = resolveSession();
         if (session == null) return noSession();

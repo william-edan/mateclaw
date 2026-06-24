@@ -232,7 +232,7 @@ if (usingOffscreen) {
 
 // SW 代码构建标记:随 SW 代码改动手动 bump。附加到 HELLO 的 agent_version,让后端能区分
 // "manifest 版本"(reload 不彻底时会虚高)与"实际运行的 SW 代码版本",用于排查 MV3 SW 顽固缓存。
-const SW_BUILD = 'd6'
+const SW_BUILD = 'e2'
 /** Resolve the extension version for the HELLO payload (含 SW 代码构建标记). */
 function agentVersion(): string {
   try {
