@@ -1,0 +1,152 @@
+
+> mateclaw-ui@2.0.5 dev D:\devfive\mateclaw\mateclaw-ui
+> vite
+
+
+  [32m[1mVITE[22m v7.3.3[39m  [2mready in [0m[1m1277[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m14:04:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:43:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:43:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:43:58[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:18[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:28[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:44:59[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:19[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:49[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:54[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:45:59[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:19[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:46:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:47:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/admin/agent-runtime/snapshot[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m14:47:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m15:00:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Agents.vue, /src/assets/main.css[22m
+[2m15:00:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Agents.vue, /src/assets/main.css[22m
+[2m15:00:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Agents.vue, /src/assets/main.css[22m
+[2m15:00:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Agents.vue, /src/assets/main.css[22m
+[2m15:00:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Home/index.vue, /src/assets/main.css[22m
+[2m15:00:59[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Home/index.vue, /src/assets/main.css[22m
+[2m15:01:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Home/index.vue, /src/assets/main.css[22m
+[2m15:01:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Home/index.vue, /src/assets/main.css[22m
+[2m15:01:12[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Home/index.vue?vue&type=style&index=0&scoped=a763a6ae&lang.css, /src/assets/main.css[22m
+[2m15:03:37[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Agents.vue?vue&type=style&index=0&scoped=a48da1cf&lang.css, /src/assets/main.css[22m

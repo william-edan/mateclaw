@@ -37,6 +37,16 @@
               <p>{{ t('home.market.subtitle') }}</p>
             </div>
           </div>
+          <div class="employee-filter-tabs">
+            <button
+              v-for="tab in EMPLOYEE_FILTER_TABS"
+              :key="tab.value"
+              type="button"
+              class="employee-filter-tab"
+              :class="{ active: categoryFilter === tab.value }"
+              @click="categoryFilter = tab.value"
+            >{{ tab.label }}</button>
+          </div>
           <div v-if="employees.length" class="employee-grid">
             <button
               v-for="agent in employees"
@@ -142,6 +152,7 @@ import { agentApi, dashboardApi } from '@/api'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import type { Agent } from '@/types/index'
 import { agentIconColor } from '@/utils/agentIconColor'
+import { EMPLOYEE_FILTER_TABS, DEFAULT_EMPLOYEE_FILTER, matchesEmployeeCategory } from '@/utils/employeeCategory'
 
 interface HomeBanner {
   id: string
@@ -169,7 +180,15 @@ const banners = ref<HomeBanner[]>([
 ])
 
 const activeBannerIndex = ref(0)
-const employees = ref<Agent[]>([])
+const allEmployees = ref<Agent[]>([])
+// 标签/分类筛选，默认「内置」
+const categoryFilter = ref(DEFAULT_EMPLOYEE_FILTER)
+// 首页橱窗：先按分类筛选，再截取前若干个
+const employees = computed(() =>
+  allEmployees.value
+    .filter((a) => matchesEmployeeCategory(a.tags, categoryFilter.value))
+    .slice(0, 12),
+)
 const recentRuns = ref<any[]>([])
 const loadingEmployees = ref(false)
 const loadingRuns = ref(false)
@@ -192,9 +211,9 @@ async function loadEmployees() {
   loadingEmployees.value = true
   try {
     const res: any = await agentApi.list({ enabled: true })
-    employees.value = (res.data || res || []).slice(0, 8)
+    allEmployees.value = res.data || res || []
   } catch {
-    employees.value = []
+    allEmployees.value = []
   } finally {
     loadingEmployees.value = false
   }
@@ -475,6 +494,36 @@ function calcDuration(run: any) {
   margin: 4px 0 0;
   color: var(--mc-text-secondary);
   font-size: 13px;
+}
+
+.employee-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.employee-filter-tab {
+  padding: 5px 14px;
+  border: 1px solid var(--home-surface-border);
+  border-radius: 999px;
+  background: var(--home-surface-bg);
+  color: var(--mc-text-secondary, #5b6b80);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.employee-filter-tab:hover {
+  border-color: var(--mc-primary-light);
+  color: var(--mc-primary, #2d53b4);
+}
+
+.employee-filter-tab.active {
+  border-color: var(--mc-primary, #2d53b4);
+  background: var(--mc-primary, #2d53b4);
+  color: #fff;
 }
 
 .employee-grid {

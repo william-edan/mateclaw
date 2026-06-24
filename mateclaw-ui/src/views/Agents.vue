@@ -56,6 +56,12 @@
                 {{ t(tab.key) }}
               </button>
             </div>
+            <div class="filter-tabs filter-tabs--category">
+              <button v-for="tab in EMPLOYEE_FILTER_TABS" :key="tab.value" class="filter-tab"
+                :class="{ active: categoryFilter === tab.value }" @click="categoryFilter = tab.value">
+                {{ tab.label }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -586,6 +592,7 @@ import {
 } from '@/utils/agentPromptProfile'
 import { agentIconColor } from '@/utils/agentIconColor'
 import { filterAgentBindingItems, filterAgentToolGroups } from '@/utils/agentBindingSearch'
+import { EMPLOYEE_FILTER_TABS, matchesEmployeeCategory } from '@/utils/employeeCategory'
 import { useSkillName } from '@/composables/useSkillName'
 
 const router = useRouter()
@@ -595,6 +602,8 @@ const { resolveSkillName } = useSkillName()
 const agents = ref<Agent[]>([])
 const searchText = ref('')
 const activeFilter = ref('all')
+// 标签/分类筛选，默认「内置」（tags 命中 6 个内置分类的员工）
+const categoryFilter = ref('builtin')
 const showModal = ref(false)
 const editingAgent = ref<Agent | null>(null)
 const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers'>('basic')
@@ -829,6 +838,7 @@ const filteredAgents = computed(() => {
   else if (activeFilter.value === 'plan_execute') list = list.filter(a => a.agentType === 'plan_execute')
   else if (activeFilter.value === 'enabled') list = list.filter(a => a.enabled)
   else if (activeFilter.value === 'disabled') list = list.filter(a => !a.enabled)
+  list = list.filter(a => matchesEmployeeCategory(a.tags, categoryFilter.value))
   return list
 })
 
@@ -1232,6 +1242,8 @@ html.dark .seg-count.warn {
 .search-box svg { color: var(--mc-text-tertiary); flex-shrink: 0; }
 .search-input { border: none; outline: none; font-size: 14px; color: var(--mc-text-primary); flex: 1; background: transparent; }
 .filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 分类/标签筛选独占一行，与上面的类型/状态 tab 分开 */
+.filter-tabs--category { flex-basis: 100%; }
 .filter-tab { padding: 8px 14px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); border-radius: 999px; font-size: 13px; color: var(--mc-text-secondary); cursor: pointer; transition: all 0.15s; font-weight: 600; }
 .filter-tab:hover { background: var(--mc-bg-sunken); }
 .filter-tab.active { background: var(--mc-primary-bg); border-color: var(--mc-primary); color: var(--mc-primary); font-weight: 500; }
