@@ -54,6 +54,8 @@ export interface Agent {
   modelName?: string
   maxIterations: number
   enabled: boolean
+  /** V146: 是否内置。true=内置（所有用户可见、仅 admin 可改）；false=用户私有。 */
+  builtin?: boolean
   icon?: string
   tags?: string
   workspaceBasePath?: string

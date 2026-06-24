@@ -107,16 +107,18 @@ public class AgentService {
      * 非内置且非本人创建的对当前用户不可见。
      */
     public List<AgentEntity> listVisibleAgents(Long workspaceId, Boolean enabled, Long userId) {
-        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<AgentEntity>()
-                .eq(AgentEntity::getWorkspaceId, workspaceId);
+        // 内置 Agent 为全局资源（跨工作区可见），不受请求工作区限制；
+        // 非内置仅在「当前工作区 + 本人创建」时可见。
+        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<>();
         if (enabled != null) {
             q.eq(AgentEntity::getEnabled, enabled);
         }
-        // (builtin = TRUE OR creator_user_id = me)
+        // builtin = TRUE  OR  (workspace_id = ws AND creator_user_id = me)
         q.and(w -> {
             w.eq(AgentEntity::getBuiltin, true);
             if (userId != null) {
-                w.or().eq(AgentEntity::getCreatorUserId, userId);
+                w.or(o -> o.eq(AgentEntity::getWorkspaceId, workspaceId)
+                        .eq(AgentEntity::getCreatorUserId, userId));
             }
         });
         return agentMapper.selectList(q.orderByDesc(AgentEntity::getCreateTime));

@@ -88,7 +88,7 @@
                 <SkillIcon :value="agent.icon" :size="40" :fallback="'🧑‍💼'" />
               </span>
               <div class="agent-card__identity">
-                <h3 class="agent-card__name">{{ agent.name }}</h3>
+                <h3 class="agent-card__name">{{ agent.name }}<span v-if="agent.builtin" class="builtin-badge">内置</span></h3>
                 <p class="agent-card__tagline">
                   {{ agentTagline(agent) || t('agents.messages.noTagline') }}
                 </p>
@@ -103,7 +103,7 @@
                 {{ t('agents.actions.chat') }}
               </button>
               <div class="agent-card__overflow">
-                <label class="toggle-switch toggle-switch--sm" :title="t('agents.fields.enabled')">
+                <label v-if="canEditAgent(agent)" class="toggle-switch toggle-switch--sm" :title="t('agents.fields.enabled')">
                   <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
                   <span class="toggle-slider"></span>
                 </label>
@@ -112,13 +112,13 @@
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
                   </svg>
                 </button>
-                <button class="action-btn" :title="t('agents.actions.edit')" @click="openEditModal(agent)">
+                <button v-if="canEditAgent(agent)" class="action-btn" :title="t('agents.actions.edit')" @click="openEditModal(agent)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                   </svg>
                 </button>
-                <button class="action-btn danger" :title="t('agents.actions.delete')" @click="deleteAgent(agent)">
+                <button v-if="canEditAgent(agent)" class="action-btn danger" :title="t('agents.actions.delete')" @click="deleteAgent(agent)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"/>
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
@@ -838,13 +838,17 @@ const filteredAgents = computed(() => {
   else if (activeFilter.value === 'plan_execute') list = list.filter(a => a.agentType === 'plan_execute')
   else if (activeFilter.value === 'enabled') list = list.filter(a => a.enabled)
   else if (activeFilter.value === 'disabled') list = list.filter(a => !a.enabled)
-  list = list.filter(a => matchesEmployeeCategory(a.tags, categoryFilter.value))
+  list = list.filter(a => matchesEmployeeCategory(a, categoryFilter.value))
   return list
 })
 
 // Roster ↔ Live view switch — admin only. The running/stuck counts feed the
 // segmented control's pulse + badge so you know whether Live is worth a look.
 const isAdminRole = computed(() => (localStorage.getItem('role') || 'user') === 'admin')
+// V146: 内置 Agent 仅 admin 可改/删/启停；非内置都是本人创建（列表已按可见性过滤），可改。
+function canEditAgent(agent: Agent) {
+  return !agent.builtin || isAdminRole.value
+}
 const view = ref<'roster' | 'live'>(
   route.query.view === 'live' && isAdminRole.value ? 'live' : 'roster',
 )
@@ -1244,6 +1248,7 @@ html.dark .seg-count.warn {
 .filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 /* 分类/标签筛选独占一行，与上面的类型/状态 tab 分开 */
 .filter-tabs--category { flex-basis: 100%; }
+.builtin-badge { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--mc-primary-bg); color: var(--mc-primary); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .filter-tab { padding: 8px 14px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); border-radius: 999px; font-size: 13px; color: var(--mc-text-secondary); cursor: pointer; transition: all 0.15s; font-weight: 600; }
 .filter-tab:hover { background: var(--mc-bg-sunken); }
 .filter-tab.active { background: var(--mc-primary-bg); border-color: var(--mc-primary); color: var(--mc-primary); font-weight: 500; }

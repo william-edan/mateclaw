@@ -186,7 +186,7 @@ const categoryFilter = ref(DEFAULT_EMPLOYEE_FILTER)
 // 首页橱窗：先按分类筛选，再截取前若干个
 const employees = computed(() =>
   allEmployees.value
-    .filter((a) => matchesEmployeeCategory(a.tags, categoryFilter.value))
+    .filter((a) => matchesEmployeeCategory(a, categoryFilter.value))
     .slice(0, 12),
 )
 const recentRuns = ref<any[]>([])

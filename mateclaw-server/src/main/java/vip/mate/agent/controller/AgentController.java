@@ -23,7 +23,6 @@ import vip.mate.auth.service.AuthService;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
-import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.io.IOException;
 import java.util.List;
@@ -45,7 +44,6 @@ public class AgentController {
     private final AgentService agentService;
     private final AuditEventService auditEventService;
     private final AuthService authService;
-    private final WorkspaceService workspaceService;
     private final ModelConfigService modelConfigService;
     private final ModelCapabilityService modelCapabilityService;
     private final SystemSettingService systemSettingService;
@@ -73,7 +71,7 @@ public class AgentController {
                               Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
         return R.ok(agent);
     }
@@ -87,7 +85,7 @@ public class AgentController {
             Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
 
         ModelConfigEntity primary;
@@ -158,7 +156,7 @@ public class AgentController {
                                  Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity existing = agentService.getAgent(id);
-        verifyResourceWorkspace(existing.getWorkspaceId(), wsId);
+        verifyAgentWorkspace(existing, wsId);
         // V146: 内置仅 admin 可改，非内置仅创建者本人可改。
         if (!agentService.canModify(existing, resolveUserId(auth), isSystemAdmin(auth))) {
             throw new MateClawException("err.agent.update_forbidden", 403,
@@ -183,7 +181,7 @@ public class AgentController {
                           Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent.getWorkspaceId(), wsId);
+        verifyAgentWorkspace(agent, wsId);
 
         // V146: 内置仅 admin 可删，非内置仅创建者本人可删。
         if (!agentService.canModify(agent, resolveUserId(auth), isSystemAdmin(auth))) {
@@ -209,7 +207,7 @@ public class AgentController {
             Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
 
@@ -252,7 +250,7 @@ public class AgentController {
             Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
         return R.ok(agentService.chat(id, request.getMessage(), request.getConversationId()));
@@ -268,7 +266,7 @@ public class AgentController {
             Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
         verifyAgentEnabled(agent);
         return R.ok(agentService.execute(id, request.getMessage(), request.getConversationId()));
@@ -282,7 +280,7 @@ public class AgentController {
                                    Authentication auth) {
         long wsId = requireWorkspaceId(workspaceId);
         AgentEntity agent = agentService.getAgent(id);
-        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, wsId);
+        verifyAgentWorkspace(agent, wsId);
         verifyAgentVisible(agent, auth);
         return R.ok(agentService.getAgentState(id));
     }
@@ -311,6 +309,17 @@ public class AgentController {
     }
 
     /**
+     * V146：内置 Agent 是全局资源，允许跨工作区访问（所有用户可见可用）；
+     * 非内置仍必须与请求工作区一致。
+     */
+    private void verifyAgentWorkspace(AgentEntity agent, long headerWorkspaceId) {
+        if (agent != null && Boolean.TRUE.equals(agent.getBuiltin())) {
+            return;
+        }
+        verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, headerWorkspaceId);
+    }
+
+    /**
      * Block runtime calls against an agent flagged as disabled.
      *
      * <p>{@code AgentService#getOrBuildAgent} also checks the flag, but only on
@@ -322,6 +331,17 @@ public class AgentController {
     private void verifyAgentEnabled(AgentEntity agent) {
         if (agent != null && !Boolean.TRUE.equals(agent.getEnabled())) {
             throw new MateClawException("err.agent.disabled", "Agent 已禁用: " + agent.getName());
+        }
+    }
+
+    /**
+     * V146 可见性校验：内置 Agent 对所有人可见；非内置仅创建者本人可见。
+     * 不可见时返回 404（而非 403），避免向他人泄露私有 Agent 的存在。
+     */
+    private void verifyAgentVisible(AgentEntity agent, Authentication auth) {
+        if (!agentService.canView(agent, resolveUserId(auth))) {
+            throw new MateClawException("err.agent.not_found", 404,
+                    "Agent不存在: " + (agent == null ? "" : agent.getId()));
         }
     }
 

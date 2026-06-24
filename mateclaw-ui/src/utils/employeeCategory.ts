@@ -44,14 +44,20 @@ export function primaryCategory(tags?: string | null): string {
     .filter(Boolean)[0] || ''
 }
 
-/** 是否为内置员工（主分类命中 6 个内置分类）。 */
-export function isBuiltinEmployee(tags?: string | null): boolean {
-  return (EMPLOYEE_CATEGORIES as readonly string[]).includes(primaryCategory(tags))
+/** 员工筛选用的最小字段集。 */
+export interface EmployeeLike {
+  builtin?: boolean | null
+  tags?: string | null
 }
 
-/** 给定一个筛选值，判断某员工的 tags 是否匹配。 */
-export function matchesEmployeeCategory(tags: string | null | undefined, filter: string): boolean {
+/**
+ * 判断某员工是否匹配给定筛选值：
+ *  - builtin：看后端 builtin 字段（V146，内置 = admin / 系统创建）
+ *  - 某分类：看 tags 的主分类
+ *  - all：全部
+ */
+export function matchesEmployeeCategory(agent: EmployeeLike, filter: string): boolean {
   if (!filter || filter === 'all') return true
-  if (filter === 'builtin') return isBuiltinEmployee(tags)
-  return primaryCategory(tags) === filter
+  if (filter === 'builtin') return agent?.builtin === true
+  return primaryCategory(agent?.tags) === filter
 }
