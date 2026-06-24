@@ -416,7 +416,10 @@ async function reconnectByPairing(): Promise<void> {
     connectNative()
     return
   }
-  // mode === 'web'(默认):空闲,等网页「点连接」。
+  // mode === 'web'(默认):未配对时不连任何地址。若之前在「客户端」模式连着本地 bridge,
+  // 必须主动断开 —— 否则 LocalBridgeClient 自带的自重连会一直去连 127.0.0.1:18077,切到
+  // 网页端也停不下来。配对成功(收到网页 pair)后由 connectDirect 接管,不受影响。
+  disconnectActive()
 }
 
 /** Tear down the active transport (used by unpair). */
