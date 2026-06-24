@@ -328,3 +328,1202 @@ AggregateError [ECONNREFUSED]:
 AggregateError [ECONNREFUSED]: 
     at internalConnectMultiple (node:net:1134:18)
     at afterConnectMultiple (node:net:1715:7)
+[2m16:15:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:07[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:37[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:15:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:07[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:16:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:40[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:40[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:40[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:40[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:40[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:17:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:41[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:41[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:41[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:41[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:41[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:19:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:11[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:11[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:11[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:11[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:11[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:33[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:47[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:47[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:47[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:47[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:47[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:49[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:20:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:29[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:32[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:33[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:33[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:33[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:33[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:21:34[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:22:37[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:22:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:22:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:22:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:22:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:23:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:23:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:23:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:23:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:23:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m16:33:00[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/i18n/locales/zh-CN.ts[22m
+[2m16:33:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/assets/main.css[22m
+[2m16:33:50[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Login.vue, /src/assets/main.css[22m
+[2m17:05:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:06:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:14:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:15:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:16:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:17:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:18:07[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:18:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:18:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:18:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:19:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:19:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:19:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:19:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:20:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:20:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:20:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:20:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:21:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:21:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:21:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:21:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:22:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:22:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:22:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:22:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:23:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:23:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:24:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:25:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:26:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:27:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:28:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:28:59[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:29:07[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:29:22[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:29:37[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:29:52[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:30:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:30:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:30:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:30:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:31:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:31:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:31:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:31:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:32:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:32:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:32:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:32:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:33:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:33:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:33:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:33:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:34:08[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:34:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:34:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:34:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:35:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:36:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:37:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:38:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:39:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:40:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:41:26[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:04[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:09[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/settings/language[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/notifications/summary[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/workspaces[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/auth/me[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/system/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m17:42:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/v1/approval/grants/active[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)

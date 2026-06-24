@@ -2794,7 +2794,7 @@ export default {
     modeLabel: 'Authentication mode',
     signIn: 'Sign In',
     register: 'Register',
-    hint: 'Default: <code>admin</code> / <code>admin123</code>',
+    hint: '',
     failed: 'Login failed. Please check your credentials.',
     registerFailed: 'Registration failed. Please check your phone and password.',
     passwordTooShort: 'Password must be at least 6 characters',

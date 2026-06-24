@@ -2806,7 +2806,7 @@ export default {
     modeLabel: '认证方式',
     signIn: '登录',
     register: '注册',
-    hint: '默认账号: <code>admin</code> / <code>admin123</code>',
+    hint: '',
     failed: '登录失败，请检查账号密码',
     registerFailed: '注册失败，请检查手机号和密码',
     passwordTooShort: '密码长度至少6位',

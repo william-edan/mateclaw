@@ -2,7 +2,7 @@
 
 -- Default admin (password: admin123, BCrypt encrypted)
 INSERT INTO mate_user (id, username, password, nickname, role, enabled, create_time, update_time, deleted)
-VALUES (1, 'admin', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2', 'MateClaw Admin', 'admin', TRUE, NOW(), NOW(), 0)
+VALUES (1, 'admin', '$2a$10$aaz2z7IW091Cw9geBSNAD.IFpMT0L4uY33vgS/YP0rJjDeCdGLf9u', 'MateClaw Admin', 'admin', TRUE, NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE username=VALUES(username), password=VALUES(password), nickname=VALUES(nickname), role=VALUES(role), enabled=VALUES(enabled), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- Default digital employee: General Assistant (ReAct mode)

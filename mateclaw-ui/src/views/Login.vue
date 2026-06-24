@@ -110,7 +110,7 @@
         </button>
       </form>
 
-      <p class="login-hint" v-html="t('login.hint')"></p>
+      <p v-if="t('login.hint')" class="login-hint" v-html="t('login.hint')"></p>
     </div>
   </div>
 </template>

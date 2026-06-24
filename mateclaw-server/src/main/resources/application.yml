@@ -17,7 +17,7 @@ spring:
     virtual:
       enabled: true
   profiles:
-    active: dev
+    active: dev,mysql
 
   # 数据源（默认 H2，生产切换为 mysql profile）
   datasource:
