@@ -19,6 +19,7 @@ import vip.mate.auth.repository.UserMapper;
 import vip.mate.auth.support.PhoneNumbers;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
+import vip.mate.auth.sms.VerificationCodeService;
 import vip.mate.workspace.core.service.WorkspaceService;
 
 import javax.crypto.SecretKey;
@@ -41,6 +42,7 @@ public class AuthService {
     private final BCryptPasswordEncoder passwordEncoder;
     private final WorkspaceService workspaceService;
     private final AccountEntitlementService accountEntitlementService;
+    private final VerificationCodeService verificationCodeService;
 
     @Value("${mateclaw.jwt.secret:MateClaw-Secret-Key-2024-Very-Long-String}")
     private String jwtSecret;
@@ -80,12 +82,19 @@ public class AuthService {
         if (request.getPassword().trim().length() < 6) {
             throw new MateClawException("err.auth.password_too_short", 400, "密码长度至少6位");
         }
+        String code = request.getCode() == null ? "" : request.getCode().trim();
+        if (code.isEmpty()) {
+            throw new MateClawException("err.auth.verification_code_required", 400, "请输入验证码");
+        }
 
         Long count = userMapper.selectCount(new LambdaQueryWrapper<UserEntity>()
                 .eq(UserEntity::getUsername, phone));
         if (count > 0) {
             throw new MateClawException("err.auth.username_exists", 409, "手机号已注册: " + phone);
         }
+
+        // 唯一性通过后再消费验证码，避免对已注册号码白白消费一个有效码。
+        verificationCodeService.verifyAndConsume(phone, code);
 
         UserEntity user = new UserEntity();
         user.setUsername(phone);
