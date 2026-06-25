@@ -147,7 +147,8 @@ class ActionSuccessPayloadTest {
                 "douyin.comments",
                 new RegisterRegionPayload.Rect(10, 20, 300, 400),
                 new DetectRegionSuccess.SafePoint(220, 260),
-                "dom_detect:comment-panel");
+                "dom_detect:comment-panel",
+                null, null, null);
 
         String json = mapper.writeValueAsString(success);
         DetectRegionSuccess back = mapper.readValue(json, DetectRegionSuccess.class);
@@ -194,7 +195,8 @@ class ActionSuccessPayloadTest {
                 "douyin.comments",
                 new RegisterRegionPayload.Rect(10, 20, 300, 400),
                 new DetectRegionSuccess.SafePoint(220, 260),
-                "dom"));
+                "dom",
+                null, null, null));
     }
 
     @Test

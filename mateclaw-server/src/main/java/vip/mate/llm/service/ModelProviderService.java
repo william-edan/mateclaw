@@ -55,12 +55,12 @@ public class ModelProviderService {
             "dashscope-default", "dashscope-compat-default", "deepseek-default");
 
     /**
-     * 新工作区注册时「默认启用」并注入平台 key 的云端 provider。其余 provider（含
-     * dashscope-compat-default、所有其它云端、本地）均会被种子化进新工作区并显示在
-     * 「添加提供商」目录里，但默认禁用——用户自行启用并填写自己的 key。
+     * 新工作区注册时「默认启用」并注入平台 key 的云端 provider——只有 dashscope-default。
+     * 其余 provider（含 deepseek-default、dashscope-compat-default、所有其它云端、本地）均会
+     * 被种子化进新工作区并显示在「添加提供商」目录里，但默认禁用——用户自行启用并填写自己的 key。
      */
     static final java.util.Set<String> REGISTRATION_CLOUD_PROVIDER_IDS = java.util.Set.of(
-            "dashscope-default", "deepseek-default");
+            "dashscope-default");
 
     static boolean isManagedDefaultProvider(String providerId) {
         return providerId != null && MANAGED_DEFAULT_PROVIDER_IDS.contains(providerId);
@@ -436,12 +436,14 @@ public class ModelProviderService {
                         .orderByAsc(ModelProviderEntity::getIsCustom)
                         .orderByAsc(ModelProviderEntity::getName));
         // 全部 provider 都种子化（都会显示在「添加提供商」目录里）；启用策略见
-        // copyProviderForWorkspace/applyRegistrationDefaultProviderKey：只有两个托管默认版默认启用。
+        // copyProviderForWorkspace/applyRegistrationDefaultProviderKey：只有 dashscope-default 默认启用。
         for (ModelProviderEntity template : templates) {
             modelProviderMapper.insert(copyProviderForWorkspace(template, workspaceId));
         }
         providerTokenQuotaService.ensureDefaultQuotas(workspaceId);
         modelConfigService.copyModelsToWorkspace(ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID, workspaceId);
+        // 整理 dashscope-default 下的模型：只启用并默认 deepseek-v3.2(chat) + text-embedding-v3(向量)。
+        modelConfigService.applyRegistrationDefaultModels(workspaceId);
         // Hand the freshly-seeded (enabled + default-keyed) providers to ProviderInitProbe.
         // Without this they stay Liveness.UNPROBED ("检测中") until an app restart, because the
         // init probe only runs on ApplicationReadyEvent or this event. ProviderInitProbe listens

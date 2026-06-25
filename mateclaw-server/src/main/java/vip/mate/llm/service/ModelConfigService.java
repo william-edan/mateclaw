@@ -33,6 +33,11 @@ public class ModelConfigService {
     @Autowired
     private ModelProviderService modelProviderService;
 
+    /** 注册种子化后，dashscope-default 下默认只启用并默认的 chat / embedding 模型。 */
+    static final String REG_DEFAULT_PROVIDER = "dashscope-default";
+    static final String REG_DEFAULT_CHAT_MODEL = "deepseek-v3.2";
+    static final String REG_DEFAULT_EMBEDDING_MODEL = "text-embedding-v3";
+
     public List<ModelConfigEntity> listModels() {
         return modelConfigMapper.selectList(new LambdaQueryWrapper<ModelConfigEntity>()
                 .eq(ModelConfigEntity::getWorkspaceId, ModelWorkspaceResolver.currentWorkspaceId())
@@ -311,6 +316,41 @@ public class ModelConfigService {
         for (ModelConfigEntity template : templates) {
             modelConfigMapper.insert(copyModelForWorkspace(template, targetWorkspaceId));
         }
+    }
+
+    /**
+     * 注册种子化后整理新工作区 {@link #REG_DEFAULT_PROVIDER} 下的模型：只启用并设为默认
+     * 一个 chat 模型（{@link #REG_DEFAULT_CHAT_MODEL}）和一个 embedding 模型
+     * （{@link #REG_DEFAULT_EMBEDDING_MODEL}），其余同 provider 模型一律禁用，使新用户
+     * 模型下拉只看到这两个、开箱即用。
+     *
+     * <p>防御：若目标 chat 模型在该工作区不存在（数据异常），跳过整理以免新工作区无默认
+     * chat 模型（保留 copyModelsToWorkspace 带来的原默认）。
+     */
+    public void applyRegistrationDefaultModels(Long workspaceId) {
+        if (workspaceId == null || workspaceId == ModelWorkspaceResolver.DEFAULT_WORKSPACE_ID) {
+            return;
+        }
+        List<ModelConfigEntity> models = modelConfigMapper.selectList(new LambdaQueryWrapper<ModelConfigEntity>()
+                .eq(ModelConfigEntity::getWorkspaceId, workspaceId)
+                .eq(ModelConfigEntity::getProvider, REG_DEFAULT_PROVIDER)
+                .eq(ModelConfigEntity::getDeleted, 0));
+        boolean hasChatTarget = models.stream()
+                .anyMatch(m -> REG_DEFAULT_CHAT_MODEL.equals(m.getModelName()) && isChatType(m));
+        if (!hasChatTarget) {
+            return;
+        }
+        for (ModelConfigEntity m : models) {
+            boolean keep = (REG_DEFAULT_CHAT_MODEL.equals(m.getModelName()) && isChatType(m))
+                    || (REG_DEFAULT_EMBEDDING_MODEL.equals(m.getModelName()) && "embedding".equals(m.getModelType()));
+            m.setEnabled(keep);
+            m.setIsDefault(keep);
+            modelConfigMapper.updateById(m);
+        }
+    }
+
+    private static boolean isChatType(ModelConfigEntity m) {
+        return m.getModelType() == null || "chat".equals(m.getModelType());
     }
 
     public ModelConfigEntity setDefaultModel(Long id) {

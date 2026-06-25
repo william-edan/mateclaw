@@ -173,10 +173,11 @@
 
     <!-- SECONDARY ACTIONS -->
     <div class="card-actions">
-      <button class="card-btn" @click="$emit('manage-models', provider)">
+      <!-- 平台托管默认版只读：不暴露管理模型/配置入口 -->
+      <button v-if="!provider.managedKey" class="card-btn" @click="$emit('manage-models', provider)">
         {{ t('settings.model.actions.manageModels') }}
       </button>
-      <button class="card-btn" @click="$emit('provider-settings', provider)">
+      <button v-if="!provider.managedKey" class="card-btn" @click="$emit('provider-settings', provider)">
         {{ t('settings.model.actions.providerSettings') }}
       </button>
       <button
