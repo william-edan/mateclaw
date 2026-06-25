@@ -112,15 +112,15 @@ class ModelProviderServiceWorkspaceIsolationTest {
     }
 
     @Test
-    void seedWorkspaceModelsSeedsAllProvidersButEnablesOnlyManagedDefaults() {
+    void seedWorkspaceModelsSeedsAllProvidersButEnablesOnlyDashscopeDefault() {
         // 新设计：全部 provider 都种子化进新工作区（都显示在「添加提供商」目录里）；
-        // 注册时只有 dashscope-default / deepseek-default 默认启用+注入平台 key，
-        // 其余（含 dashscope-compat-default、原版云端、其它云端、本地）一律默认禁用。
+        // 注册时只有 dashscope-default 一个默认启用+注入平台 key，
+        // 其余（含 deepseek-default、dashscope-compat-default、原版云端、其它云端、本地）一律默认禁用。
         when(providerMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of())
                 .thenReturn(List.of(
                         provider("dashscope-default", 1L, ""),
-                        provider("deepseek-default", 1L, ""),
+                        provider("deepseek-default", 1L, ""),           // 受管默认版 → 种子但禁用（不再默认启用）
                         provider("dashscope", 1L, ""),                  // 原版云端 → 种子但禁用
                         providerLocal("ollama", 1L),                    // 本地 → 种子但禁用
                         provider("openai", 1L, ""),                     // 其它云端 → 种子但禁用
@@ -140,26 +140,24 @@ class ModelProviderServiceWorkspaceIsolationTest {
                         .collect(java.util.stream.Collectors.toSet()),
                 "全部 provider 都应种子化进新工作区");
 
-        // 两个默认版：启用 + 注入平台 key
+        // 只有 dashscope-default：启用 + 注入平台 key
         ModelProviderEntity dashscopeDefault = copyByProvider(copies, "dashscope-default");
         assertEquals(20L, dashscopeDefault.getWorkspaceId());
         assertEquals("sk-test-dashscope-default", dashscopeDefault.getApiKey());
         assertTrue(dashscopeDefault.getEnabled());
 
-        ModelProviderEntity deepseekDefault = copyByProvider(copies, "deepseek-default");
-        assertEquals("sk-test-deepseek-default", deepseekDefault.getApiKey());
-        assertTrue(deepseekDefault.getEnabled());
-
-        // 其余全部默认禁用（含受管的 compat-default）
-        assertFalse(copyByProvider(copies, "dashscope-compat-default").getEnabled(),
-                "DashScope 兼容模式默认版应种子但默认禁用，不随两个默认版一起启用");
+        // 其余全部默认禁用（含 deepseek-default 与受管的 compat-default）
+        assertFalse(copyByProvider(copies, "deepseek-default").getEnabled(),
+                "deepseek-default 应种子但默认禁用，不再随注册默认启用");
+        assertFalse(copyByProvider(copies, "dashscope-compat-default").getEnabled());
         assertFalse(copyByProvider(copies, "dashscope").getEnabled());
         assertFalse(copyByProvider(copies, "openai").getEnabled());
         assertFalse(copyByProvider(copies, "ollama").getEnabled());
 
-        // 模型复制为全量（无 provider 过滤）
+        // 模型复制为全量（无 provider 过滤），随后整理 dashscope-default 下的默认模型
         verify(modelConfigService).copyModelsToWorkspace(
                 org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(20L));
+        verify(modelConfigService).applyRegistrationDefaultModels(20L);
 
         verify(quotaService).ensureDefaultQuotas(20L);
     }

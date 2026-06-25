@@ -16,11 +16,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 端到端：在真实 data-zh.sql 种子 + Flyway(含 V145 模型镜像) 之上，对一个全新工作区(id=2)
- * 调用 seedWorkspaceModels，验证「全种子化 + 仅两个托管默认版默认启用」的注册策略：
+ * 调用 seedWorkspaceModels，验证「全种子化 + 只启用 dashscope-default + 精选默认模型」的注册策略：
  * 所有 provider（云端 + 本地）都种子化进新工作区并显示在「添加提供商」目录里，但只有
- * dashscope-default / deepseek-default 默认启用并注入平台 key，其余（含 dashscope-compat-default、
- * 原版/其它云端、本地）默认禁用；默认 chat/embedding 模型在 dashscope-default；配额仅对两个
- * 默认版生效；管理员工作区(id=1)豁免配额。
+ * dashscope-default 默认启用并注入平台 key，其余（含 deepseek-default、dashscope-compat-default、
+ * 原版/其它云端、本地）默认禁用；dashscope-default 下只启用并默认 deepseek-v3.2(chat) 与
+ * text-embedding-v3(向量)，其余 qwen 模型禁用；配额对 dashscope-default(2M)/deepseek-default(3M)
+ * 建行；管理员工作区(id=1)豁免配额。
  * 因 surefire 默认不收 *IT，需用 -Dtest=NewWorkspaceRegistrationSeedIT 显式运行。
  */
 @SpringBootTest(
@@ -69,13 +70,32 @@ class NewWorkspaceRegistrationSeedIT {
     }
 
     @Test
-    @DisplayName("注册时只有 dashscope-default + deepseek-default 默认启用")
-    void onlyManagedDefaultsEnabledAtRegistration() {
+    @DisplayName("注册时只有 dashscope-default 一个默认启用")
+    void onlyDashscopeDefaultEnabledAtRegistration() {
         List<String> enabled = jdbcTemplate.queryForList(
                 "SELECT provider_id FROM mate_model_provider WHERE workspace_id = ? AND enabled = TRUE ORDER BY provider_id",
                 String.class, NEW_WS);
-        assertEquals(List.of("dashscope-default", "deepseek-default"), enabled,
-                "注册时只应启用两个托管默认版，实际: " + enabled);
+        assertEquals(List.of("dashscope-default"), enabled,
+                "注册时只应启用 dashscope-default，实际: " + enabled);
+    }
+
+    @Test
+    @DisplayName("dashscope-default 下只启用 deepseek-v3.2(chat) + text-embedding-v3(向量)")
+    void onlyTwoModelsEnabledUnderDashscopeDefault() {
+        List<String> enabledModels = jdbcTemplate.queryForList(
+                "SELECT model_name FROM mate_model_config " +
+                "WHERE workspace_id = ? AND provider = 'dashscope-default' AND enabled = TRUE AND deleted = 0 " +
+                "ORDER BY model_name",
+                String.class, NEW_WS);
+        assertEquals(List.of("deepseek-v3.2", "text-embedding-v3"), enabledModels,
+                "dashscope-default 下只应启用这两个模型，实际: " + enabledModels);
+
+        // 其它 qwen 模型应被禁用（它们存在但 enabled=FALSE）
+        Integer qwenEnabled = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mate_model_config " +
+                "WHERE workspace_id = ? AND provider = 'dashscope-default' AND model_name LIKE 'qwen%' AND enabled = TRUE AND deleted = 0",
+                Integer.class, NEW_WS);
+        assertEquals(0, qwenEnabled, "dashscope-default 下的 qwen 模型注册时应被禁用");
     }
 
     @Test
@@ -116,8 +136,8 @@ class NewWorkspaceRegistrationSeedIT {
     }
 
     @Test
-    @DisplayName("新工作区默认聊天模型挂在 dashscope-default/qwen-plus 上")
-    void defaultChatModelIsOnDashscopeDefault() {
+    @DisplayName("新工作区默认聊天模型挂在 dashscope-default/deepseek-v3.2 上")
+    void defaultChatModelIsDeepseekV32OnDashscopeDefault() {
         List<Map<String, Object>> defaults = jdbcTemplate.queryForList(
                 "SELECT provider, model_name FROM mate_model_config " +
                 "WHERE workspace_id = ? AND is_default = TRUE AND deleted = 0 " +
@@ -125,7 +145,8 @@ class NewWorkspaceRegistrationSeedIT {
                 NEW_WS);
         assertEquals(1, defaults.size(), "应有且仅有一个默认聊天模型，实际: " + defaults);
         assertEquals("dashscope-default", defaults.get(0).get("provider"));
-        assertEquals("qwen-plus", defaults.get(0).get("model_name"), "默认聊天模型应为 qwen-plus");
+        assertEquals("deepseek-v3.2", defaults.get(0).get("model_name"),
+                "默认聊天模型应为 deepseek-v3.2（注册整理后从 qwen-plus 改挂）");
     }
 
     @Test
