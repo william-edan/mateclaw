@@ -7,8 +7,6 @@ import com.aliyun.dysmsapi20170525.models.SendSmsResponseBody;
 import com.aliyun.teaopenapi.models.Config;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
 
 /**
  * 阿里云 dysmsapi 发送器：mock=false（默认）时装配。Client 懒加载，
@@ -17,8 +15,6 @@ import org.springframework.stereotype.Component;
  * @author MateClaw Team
  */
 @Slf4j
-@Component
-@ConditionalOnProperty(prefix = "mateclaw.sms", name = "mock", havingValue = "false", matchIfMissing = true)
 public class AliyunSmsCodeSender implements SmsCodeSender {
 
     private final SmsProperties props;
