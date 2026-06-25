@@ -10,7 +10,6 @@ import vip.mate.exception.MateClawException;
 import vip.mate.llm.service.ModelCapabilityService;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.system.service.SystemSettingService;
-import vip.mate.workspace.core.service.WorkspaceService;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,7 +29,6 @@ class AgentControllerWorkspaceIsolationTest {
                 agentService,
                 mock(AuditEventService.class),
                 mock(AuthService.class),
-                mock(WorkspaceService.class),
                 mock(ModelConfigService.class),
                 mock(ModelCapabilityService.class),
                 mock(SystemSettingService.class));
@@ -39,7 +37,7 @@ class AgentControllerWorkspaceIsolationTest {
     @Test
     void listFailsClosedWhenWorkspaceHeaderMissing() {
         MateClawException ex = assertThrows(MateClawException.class,
-                () -> controller.list(null, null));
+                () -> controller.list(null, null, null));
 
         assertEquals(400, ex.getCode());
         assertEquals("err.workspace.header_required", ex.getMsgKey());
@@ -49,7 +47,7 @@ class AgentControllerWorkspaceIsolationTest {
     @Test
     void getFailsClosedWhenWorkspaceHeaderMissing() {
         MateClawException ex = assertThrows(MateClawException.class,
-                () -> controller.get(42L, null));
+                () -> controller.get(42L, null, null));
 
         assertEquals(400, ex.getCode());
         assertEquals("err.workspace.header_required", ex.getMsgKey());
@@ -74,7 +72,7 @@ class AgentControllerWorkspaceIsolationTest {
         when(agentService.getAgent(42L)).thenReturn(agent);
 
         MateClawException ex = assertThrows(MateClawException.class,
-                () -> controller.get(42L, 1L));
+                () -> controller.get(42L, 1L, null));
 
         assertEquals(403, ex.getCode());
         assertEquals("err.common.wrong_workspace", ex.getMsgKey());
