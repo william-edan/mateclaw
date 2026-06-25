@@ -30,6 +30,7 @@ class SmsCodeSenderFactoryTest {
     void mockFalseAliyunWiresAliyun() {
         runner.withPropertyValues("mateclaw.sms.mock=false", "mateclaw.sms.provider=aliyun")
                 .run(ctx -> assertThat(ctx).hasNotFailed()
+                        .hasSingleBean(SmsCodeSender.class)
                         .getBean(SmsCodeSender.class).isInstanceOf(AliyunSmsCodeSender.class));
     }
 
