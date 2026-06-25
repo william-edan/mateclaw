@@ -25,4 +25,17 @@ class SmsPropertiesTest {
         assertEquals("", p.getAliyun().getAccessKeyId());
         assertEquals("", p.getAliyun().getAccessKeySecret());
     }
+
+    @Test
+    void providerAndTencentDefaults() {
+        SmsProperties p = new SmsProperties();
+        assertEquals("aliyun", p.getProvider(), "provider 默认 aliyun");
+        assertEquals("ap-guangzhou", p.getTencent().getRegion());
+        assertEquals("+86", p.getTencent().getDefaultCountryCode());
+        assertEquals("", p.getTencent().getSecretId());
+        assertEquals("", p.getTencent().getSecretKey());
+        assertEquals("", p.getTencent().getSdkAppId());
+        assertEquals("", p.getTencent().getSignName());
+        assertEquals("", p.getTencent().getTemplateId());
+    }
 }
