@@ -155,6 +155,14 @@
             <version>4.5.1</version>
         </dependency>
 
+        <!-- ===== Tencent Cloud SMS (短信专用子包，非全量 tencentcloud-sdk-java) =====
+             与阿里云 dysmsapi 并存，运行时由 mateclaw.sms.provider 选择。 -->
+        <dependency>
+            <groupId>com.tencentcloudapi</groupId>
+            <artifactId>tencentcloud-sdk-java-sms</artifactId>
+            <version>3.1.1451</version>
+        </dependency>
+
         <!-- ===== DingTalk Stream SDK (WebSocket long connection, no public IP required) ===== -->
         <dependency>
             <groupId>com.dingtalk.open</groupId>
