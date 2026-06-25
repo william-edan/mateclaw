@@ -31,9 +31,25 @@ public class SmsStartupValidator implements InitializingBean {
                     "[SMS] 生产环境(prod) 不允许 mateclaw.sms.mock=true（万能码必须关闭）");
         }
         if (!props.isMock()) {
-            if (isBlank(props.getAliyun().getAccessKeyId()) || isBlank(props.getAliyun().getAccessKeySecret())) {
-                throw new IllegalStateException(
-                        "[SMS] mock=false 但阿里云 AccessKey/Secret 未配置（ALIYUN_SMS_AK/SK），拒绝启动");
+            String provider = props.getProvider() == null ? "aliyun" : props.getProvider().trim().toLowerCase();
+            switch (provider) {
+                case "aliyun" -> {
+                    if (isBlank(props.getAliyun().getAccessKeyId()) || isBlank(props.getAliyun().getAccessKeySecret())) {
+                        throw new IllegalStateException(
+                                "[SMS] provider=aliyun 但 AccessKey/Secret 未配置（ALIYUN_SMS_AK/SK），拒绝启动");
+                    }
+                }
+                case "tencent" -> {
+                    SmsProperties.Tencent t = props.getTencent();
+                    if (isBlank(t.getSecretId()) || isBlank(t.getSecretKey()) || isBlank(t.getSdkAppId())
+                            || isBlank(t.getTemplateId()) || isBlank(t.getSignName())) {
+                        throw new IllegalStateException(
+                                "[SMS] provider=tencent 但凭据不全（需 TENCENT_SMS_SECRET_ID/SECRET_KEY/SDK_APP_ID"
+                                + "/TEMPLATE_ID/SIGN_NAME），拒绝启动");
+                    }
+                }
+                default -> throw new IllegalStateException(
+                        "[SMS] 未知短信 provider: '" + props.getProvider() + "'，仅支持 aliyun / tencent");
             }
         } else {
             log.warn("==== [SMS] mock=true：短信走 Mock 不真实发送，万能码可用。仅限非生产环境！ ====");
