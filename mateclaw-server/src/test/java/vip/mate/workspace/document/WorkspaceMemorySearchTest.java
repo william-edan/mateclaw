@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 import vip.mate.workspace.document.repository.WorkspaceFileMapper;
 
@@ -38,6 +40,7 @@ import static org.mockito.Mockito.when;
 class WorkspaceMemorySearchTest {
 
     @Mock private WorkspaceFileMapper fileMapper;
+    @Mock private AgentMapper agentMapper;
     private WorkspaceFileService service;
 
     @BeforeAll
@@ -51,7 +54,7 @@ class WorkspaceMemorySearchTest {
 
     @BeforeEach
     void setUp() {
-        service = new WorkspaceFileService(fileMapper);
+        service = new WorkspaceFileService(fileMapper, agentMapper);
     }
 
     // ---------- tokenize ----------
@@ -237,6 +240,8 @@ class WorkspaceMemorySearchTest {
     @DisplayName("Wrapper carries one content-LIKE per token plus the prefix group and LIMIT 50")
     void wrapperContainsTermsAndPrefixes() {
         when(fileMapper.selectList(any())).thenReturn(List.of());
+        // 非内置 Agent → 隔离工作区取其自身 workspace（此处 7L），使 workspace_id 绑定值确定。
+        when(agentMapper.selectById(42L)).thenReturn(agentInWorkspace(7L));
         Set<String> prefixes = new LinkedHashSet<>(List.of("memory/", "MEMORY.md"));
         service.searchSnippets(42L, "running shoes 跑步", prefixes, 10);
 
@@ -251,21 +256,30 @@ class WorkspaceMemorySearchTest {
         // on global underscore-camelCase config not present in this unit
         // test) and on the bound literal values.
         String sql = wrapper.getTargetSql();
-        // One equality on agent + two prefix LIKEs in an OR group + three
-        // content LIKEs, ANDed together, suffixed with the candidate cap.
+        // One equality on agent + one on workspace (V149 隔离) + two prefix LIKEs
+        // in an OR group + three content LIKEs, ANDed together, suffixed with the cap.
         assertThat(sql).contains("LIKE ? OR")
                 .contains("AND content")
                 .contains("LIMIT 50");
         assertThat(sql.chars().filter(ch -> ch == '?').count())
-                .as("one agentId + two prefix LIKEs + three content LIKEs = 6 bind params")
-                .isEqualTo(6);
+                .as("agentId + workspaceId + two prefix LIKEs + three content LIKEs = 7 bind params")
+                .isEqualTo(7);
 
         List<Object> values = new ArrayList<>(wrapper.getParamNameValuePairs().values());
         assertThat(values).contains(42L);
+        // V149：工作区隔离键作为 workspace_id = ? 绑定（此处非内置 Agent 的自身工作区 7L）。
+        assertThat(values).contains(7L);
         // Each content-LIKE term gets %term% by MyBatis-Plus's like().
         assertThat(values).contains("%running%", "%shoes%", "%跑步%");
         // likeRight produces "prefix%" — confirms both prefixes were bound.
         assertThat(values).contains("memory/%", "MEMORY.md%");
+    }
+
+    private static AgentEntity agentInWorkspace(long workspaceId) {
+        AgentEntity a = new AgentEntity();
+        a.setWorkspaceId(workspaceId);
+        a.setBuiltin(false);
+        return a;
     }
 
     // ---------- helpers ----------

@@ -18,7 +18,9 @@ import vip.mate.llm.service.ModelConfigService;
 import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.service.StructuredMemoryService;
 import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageEntity;
+import vip.mate.workspace.core.WorkspaceContextHolder;
 
 import java.time.Instant;
 import java.util.List;
@@ -71,11 +73,31 @@ public class MemoryNudgeService {
         }
 
         try {
-            doNudge(agentId, conversationId);
+            // @Async：ModelWorkspaceResolver 的 ThreadLocal 不跨线程，会回落默认工作区 1。
+            // 结构化记忆经 WorkspaceFileService(structured/*.md) 持久化，对内置(全局)Agent
+            // 必须按调用方工作区隔离写入，故从会话解析真实工作区并绑定。
+            Long convWorkspaceId = resolveConversationWorkspace(conversationId);
+            if (convWorkspaceId != null) {
+                WorkspaceContextHolder.runWith(convWorkspaceId, () -> doNudge(agentId, conversationId));
+            } else {
+                doNudge(agentId, conversationId);
+            }
             lastNudgeTimes.put(agentId, Instant.now());
         } catch (Exception e) {
             log.warn("[Nudge] Failed for agent={}, conv={}: {}",
                     agentId, conversationId, e.getMessage());
+        }
+    }
+
+    /** 从会话记录解析其所属工作区（= 发起对话用户的运行工作区）。失败返回 null。 */
+    private Long resolveConversationWorkspace(String conversationId) {
+        try {
+            ConversationEntity conv = conversationService.findByConversationId(conversationId);
+            return conv != null ? conv.getWorkspaceId() : null;
+        } catch (Exception e) {
+            log.debug("[Nudge] resolve conversation workspace failed for {}: {}",
+                    conversationId, e.getMessage());
+            return null;
         }
     }
 
