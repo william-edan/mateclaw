@@ -2816,6 +2816,7 @@ export default {
     getCode: '获取验证码',
     resendCountdown: '{n}s 后重发',
     codeRequired: '请输入验证码',
+    phoneRequired: '请输入手机号',
   },
   enterprise: {
     eyebrow: '企业场景',

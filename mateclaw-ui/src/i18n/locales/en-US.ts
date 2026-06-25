@@ -2804,6 +2804,7 @@ export default {
     getCode: 'Get code',
     resendCountdown: 'Resend in {n}s',
     codeRequired: 'Please enter the code',
+    phoneRequired: 'Please enter your phone number',
   },
   enterprise: {
     eyebrow: 'Enterprise',

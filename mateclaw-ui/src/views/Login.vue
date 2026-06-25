@@ -179,7 +179,7 @@ async function sendCode() {
   if (codeCountdown.value > 0 || sendingCode.value) return
   const phone = registerForm.phone.trim()
   if (!phone) {
-    errorMsg.value = t('login.placeholders.phone')
+    errorMsg.value = t('login.phoneRequired')
     return
   }
   sendingCode.value = true
