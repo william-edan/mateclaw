@@ -225,7 +225,10 @@ public class WorkspaceService {
             }
             AgentEntity agent = new AgentEntity();
             agent.setWorkspaceId(workspaceId);
-            agent.setName(i18n != null ? i18n.msg("workspace.default_agent.name") : "默认助手");
+            // msgOptional 缺失时返回 null（不是把 key 原样回写），再硬兜底为「默认助手」，
+            // 避免历史上 i18n key 缺失导致 name 变成字面量 "workspace.default_agent.name"。
+            String defaultName = i18n != null ? i18n.msgOptional("workspace.default_agent.name") : null;
+            agent.setName(defaultName != null && !defaultName.isBlank() ? defaultName : "默认助手");
             agent.setAgentType("react");
             agent.setEnabled(true);
             agent.setIcon("🤖");

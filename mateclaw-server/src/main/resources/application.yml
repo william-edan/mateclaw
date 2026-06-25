@@ -47,6 +47,9 @@ spring:
   # Flyway 数据库版本迁移
   flyway:
     enabled: true
+    # 迁移脚本含裸中文字面量（如 V148 的「默认助手」），显式锁定 UTF-8，
+    # 不依赖默认编码，避免异常 locale 的 CI 机器把中文解析坏。
+    encoding: UTF-8
     baseline-on-migrate: true
     baseline-version: "1"
     locations:

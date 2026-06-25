@@ -158,9 +158,12 @@ public class ChatController {
         log.info("SSE chat: agentId={}, conversationId={}, user={}", agentId, conversationId, username);
 
         // ---- Workspace 边界校验：确保 agent 属于当前 workspace ----
+        // 内置 Agent（builtin=true）为全局资源，跨工作区可用，不做工作区边界校验；
+        // 否则普通用户对内置数字员工发起对话会被误判为「不属于当前工作区」(V146)。
         if (agentId != null) {
             AgentEntity agent = agentService.getAgent(agentId);
-            if (agent != null && agent.getWorkspaceId() != null) {
+            if (agent != null && agent.getWorkspaceId() != null
+                    && !Boolean.TRUE.equals(agent.getBuiltin())) {
                 long wsId = workspaceId != null ? workspaceId : 1L;
                 if (!agent.getWorkspaceId().equals(wsId)) {
                     log.warn("Chat workspace mismatch: agent {} belongs to workspace {}, request workspace {}",
