@@ -69,10 +69,13 @@
           <div v-else class="no-agent-hint">{{ $t('chat.selectAgent') }}</div>
         </div>
         <div class="chat-header-right">
-          <!-- Model selector — Issue #81 v2 R3: always pass full providers + show-all-states
+          <!-- Model selector — 暂时隐藏：对话锁定使用工作区默认模型，不向用户暴露切换入口。
+               保留组件与绑定（v-if="false"），后续如需恢复直接放开即可。
+               Issue #81 v2 R3: always pass full providers + show-all-states
                so unhealthy rows render as dimmed entries with status chips and a Fix
                button instead of disappearing entirely. -->
           <ModelSelector
+            v-if="false"
             :providers="providers"
             :active-value="activeModelValue"
             :active-label="activeModelLabel"
