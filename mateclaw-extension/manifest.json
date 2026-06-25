@@ -1,17 +1,24 @@
 {
   "manifest_version": 3,
   "name": "化帆AI 浏览器助手",
-  "version": "0.1.41",
+  "version": "0.1.43",
   "description": "MateClaw Browser Agent — Phase 1 connectivity",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp4q3+BGtN22LCnOitTNwvBCcE0BhDxDETgpC5Yf7+t5itm283o2Oum7UFth6+PtPyVmp+t4weXc+MJmfsUlzy+R/+7AsPHkBBdR9dQRVtq/O7ZlPHIh4LH63A4q8a5heFM1deK5mBF6hj5hBeTtuTneUdVTEHZ2cX9bKRjplRAk/2EtWWhQSXIFG7jFOxtAREU2WE1OcFZfpY69RZCNTNh2iYJ12IaP8rmSyz2C0Hf5IedZFHLWSDU9qEIAd/TYlaU1pfcF30QU1ILqtmTp5P2pyMSsZqqLVW79MmV6UHCdtTCdsDNvZIWb+S+tPI/o79Hu3+s3uhiB8s4dqPIPNhQIDAQAB",
-  "icons": { "128": "icon-128.png" },
+  "icons": {
+    "128": "icon-128.png"
+  },
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
   },
-  "action": { "default_title": "化帆AI 助手", "default_popup": "sidepanel.html" },
-  "side_panel": { "default_path": "sidepanel.html" },
+  "action": {
+    "default_title": "化帆AI 助手",
+    "default_popup": "sidepanel.html"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "permissions": [
     "sidePanel",
     "storage",
@@ -25,7 +32,9 @@
     "tabGroups",
     "tabs"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "externally_connectable": {
     "matches": [
       "http://localhost:18088/*",
@@ -39,14 +48,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/a11y-tree.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/a11y-tree.js"
+      ],
       "all_frames": true,
       "run_at": "document_start"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/visual-indicator.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/visual-indicator.js"
+      ],
       "all_frames": false,
       "run_at": "document_idle"
     }

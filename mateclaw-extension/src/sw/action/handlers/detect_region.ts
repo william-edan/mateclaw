@@ -71,8 +71,10 @@ export const detectRegionHandler = (deps: DetectRegionHandlerDeps): ActionHandle
     }
 
     // 页内轮询预算:评论列表异步渲染,后端单次探测易落空。给页内函数一段轮询窗口(留 1.2s 余量
-    // 给注入/回传,封顶 3s),命中即返回——成功时零等待,渲染慢时也能等到。
-    const pollMs = Math.max(0, Math.min(3000, (deadlineMs ?? 3000) - 1200))
+    // 给注入/回传),命中即返回——成功时零等待,渲染慢时也能等到。封顶从 3s 抬到 8s:后端下发
+    // deadline 默认 15s,旧的 min(3000,…) 让动态余量分支永不生效、恒 3s 没吃满预算,慢渲染下评论
+    // 列表 >3s 才出会落空。8s 封顶吃满余量、又不逼近 deadline,纯增益。
+    const pollMs = Math.max(0, Math.min(8000, (deadlineMs ?? 3000) - 1200))
     const results = await api.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: detectRegionInPage,

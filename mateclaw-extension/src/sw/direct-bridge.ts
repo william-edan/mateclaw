@@ -202,10 +202,13 @@ export class DirectBridgeClient {
 
   private scheduleReconnect(): void {
     if (this.serverUrl === null || this.pat === null) return
-    const delay = Math.min(
+    // 连远端 edge WSS:指数退避叠加 half-to-full jitter,避免大量安装在服务端重启后相位锁定、
+    // 同一刻同时重连冲击(thundering herd)。下界保留 cap/2,避免抖动退化成 0 立即重连。
+    const cap = Math.min(
       BACKOFF_BASE_MS * 2 ** this.reconnectAttempt,
       BACKOFF_CAP_MS,
     )
+    const delay = cap / 2 + Math.random() * (cap / 2)
     this.reconnectAttempt += 1
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
