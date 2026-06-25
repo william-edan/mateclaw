@@ -16,6 +16,7 @@ import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.repository.UserMapper;
+import vip.mate.auth.sms.VerificationCodeService;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
@@ -37,7 +38,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import vip.mate.auth.sms.VerificationCodeService;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceRegisterTest {
@@ -200,6 +200,8 @@ class AuthServiceRegisterTest {
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
         assertEquals("err.auth.username_exists", ex.getMsgKey());
+        // 竞态：唯一性查询放行后 insert 才撞到唯一约束，此时验证码已被消费——属已接受的边界。
+        verify(verificationCodeService).verifyAndConsume("13800138000", "123456");
         verifyNoInteractions(workspaceService);
     }
 
