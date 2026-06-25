@@ -20,8 +20,10 @@ public class ProviderTokenQuotaService {
     private static final Map<String, Long> DEFAULT_LIMITS = java.util.LinkedHashMap.newLinkedHashMap(2);
 
     static {
-        DEFAULT_LIMITS.put("dashscope-default", 2_000_000L);
-        DEFAULT_LIMITS.put("deepseek-default", 3_000_000L);
+        DEFAULT_LIMITS.put("dashscope-default", 1_000_000L);
+        // deepseek-default 默认不发放免费额度：仍是受管 provider，但注册即种子出 0 额度行，
+        // 使其立即处于 exhausted 状态（用户需充值或切换模型）。0 并非笔误，勿改回正数。
+        DEFAULT_LIMITS.put("deepseek-default", 0L);
     }
 
     private final ProviderTokenQuotaMapper mapper;
