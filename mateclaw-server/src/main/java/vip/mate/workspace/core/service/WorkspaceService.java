@@ -200,44 +200,14 @@ public class WorkspaceService {
         // workspaces created post-upgrade.
         seedTasksConversation(entity.getId());
         seedModelConfiguration(entity.getId());
-        // A workspace with no agent leaves Chat / tools / automation / memory
-        // unusable; an unset basePath leaves the file-tool sandbox wide open.
-        seedDefaultAgent(entity.getId());
+        // 不再为每个工作区播种 per-workspace 默认 agent(V150):内置(全局)「通用助手」
+        // (workspace 1) + 数字员工已对所有工作区可见可用;per-workspace 默认 agent 会因
+        // builtin 全局可见而在各工作区重复显示(一堆「默认助手」)。新工作区直接用全局内置
+        // Agent。basePath 仍需播种以隔离文件沙箱。
         seedBasePath(entity);
 
         log.info("Created workspace: {} (slug={}, owner={})", entity.getName(), entity.getSlug(), creatorUserId);
         return entity;
-    }
-
-    /**
-     * Seed one default agent so a brand-new workspace can chat / use tools /
-     * run automations from day one. Idempotent: skips when the workspace
-     * already has any agent. Non-fatal — workspace creation still succeeds if
-     * the seed fails (the user can create an agent manually).
-     */
-    private void seedDefaultAgent(Long workspaceId) {
-        if (workspaceId == null) return;
-        try {
-            Long existing = agentMapper.selectCount(new LambdaQueryWrapper<AgentEntity>()
-                    .eq(AgentEntity::getWorkspaceId, workspaceId));
-            if (existing != null && existing > 0) {
-                return;
-            }
-            AgentEntity agent = new AgentEntity();
-            agent.setWorkspaceId(workspaceId);
-            // msgOptional 缺失时返回 null（不是把 key 原样回写），再硬兜底为「默认助手」，
-            // 避免历史上 i18n key 缺失导致 name 变成字面量 "workspace.default_agent.name"。
-            String defaultName = i18n != null ? i18n.msgOptional("workspace.default_agent.name") : null;
-            agent.setName(defaultName != null && !defaultName.isBlank() ? defaultName : "默认助手");
-            agent.setAgentType("react");
-            agent.setEnabled(true);
-            agent.setIcon("🤖");
-            agentMapper.insert(agent);
-            log.info("[WorkspaceService] Seeded default agent {} for workspace {}", agent.getId(), workspaceId);
-        } catch (Exception e) {
-            log.warn("[WorkspaceService] Failed to seed default agent for workspace {}: {}",
-                    workspaceId, e.getMessage());
-        }
     }
 
     /**
