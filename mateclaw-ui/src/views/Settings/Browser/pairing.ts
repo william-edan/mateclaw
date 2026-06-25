@@ -109,6 +109,10 @@ export function sendToExtension<T>(
  * @example deriveWsUrl('http://127.0.0.1:5173')        === 'ws://127.0.0.1:18088/api/v1/browser/edge'
  */
 export function deriveWsUrl(origin: string = location.origin): string {
+  // 生产可用 VITE_MATECLAW_WS_URL 钉死后端 WS 地址(如 wss://ai.devefive.com/api/v1/browser/edge);
+  // 未设置时按当前网页 origin 推导(本地 dev 走 localhost,部署到域名则自动用该域名)。
+  const pinned = import.meta.env.VITE_MATECLAW_WS_URL as string | undefined
+  if (pinned && pinned.trim()) return pinned.trim()
   const u = new URL(origin)
   if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && u.port === '5173') {
     u.port = '18088'
