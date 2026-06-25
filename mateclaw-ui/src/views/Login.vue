@@ -54,6 +54,27 @@
           />
         </div>
 
+        <div v-if="mode === 'register'" class="input-wrap code-row">
+          <input
+            v-model="registerForm.code"
+            type="text"
+            inputmode="numeric"
+            class="form-input"
+            :placeholder="t('login.placeholders.code')"
+            :aria-label="t('login.fields.code')"
+            autocomplete="one-time-code"
+            required
+          />
+          <button
+            type="button"
+            class="get-code-btn"
+            :disabled="codeCountdown > 0 || sendingCode"
+            @click="sendCode"
+          >
+            {{ codeCountdown > 0 ? t('login.resendCountdown', { n: codeCountdown }) : t('login.getCode') }}
+          </button>
+        </div>
+
         <div class="input-wrap">
           <input
             v-model="activePassword"
@@ -116,7 +137,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { authApi } from '@/api/index'
@@ -133,7 +154,10 @@ const showPassword = ref(false)
 const errorMsg = ref('')
 const mode = ref<'login' | 'register'>('login')
 const form = reactive({ username: '', password: '' })
-const registerForm = reactive({ phone: '', password: '', confirmPassword: '', nickname: '' })
+const registerForm = reactive({ phone: '', password: '', confirmPassword: '', nickname: '', code: '' })
+const codeCountdown = ref(0)
+const sendingCode = ref(false)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 const activePassword = computed({
   get: () => mode.value === 'login' ? form.password : registerForm.password,
@@ -150,6 +174,36 @@ function switchMode(nextMode: 'login' | 'register') {
   mode.value = nextMode
   errorMsg.value = ''
 }
+
+async function sendCode() {
+  if (codeCountdown.value > 0 || sendingCode.value) return
+  const phone = registerForm.phone.trim()
+  if (!phone) {
+    errorMsg.value = t('login.placeholders.phone')
+    return
+  }
+  sendingCode.value = true
+  errorMsg.value = ''
+  try {
+    await authApi.sendRegisterCode({ phone })
+    codeCountdown.value = 60
+    countdownTimer = setInterval(() => {
+      codeCountdown.value -= 1
+      if (codeCountdown.value <= 0 && countdownTimer) {
+        clearInterval(countdownTimer)
+        countdownTimer = null
+      }
+    }, 1000)
+  } catch (e: any) {
+    errorMsg.value = e?.message || t('login.registerFailed')
+  } finally {
+    sendingCode.value = false
+  }
+}
+
+onUnmounted(() => {
+  if (countdownTimer) clearInterval(countdownTimer)
+})
 
 async function finishAuth(data: LoginResponse, fallbackUsername: string) {
   localStorage.setItem('token', data.token)
@@ -198,6 +252,10 @@ async function handleLogin() {
 
 async function handleRegister() {
   if (!registerForm.phone || !registerForm.password || !registerForm.confirmPassword) return
+  if (!registerForm.code.trim()) {
+    errorMsg.value = t('login.codeRequired')
+    return
+  }
   if (registerForm.password.length < 6) {
     errorMsg.value = t('login.passwordTooShort')
     return
@@ -212,6 +270,7 @@ async function handleRegister() {
     const payload = {
       phone: registerForm.phone,
       password: registerForm.password,
+      code: registerForm.code.trim(),
       nickname: registerForm.nickname || undefined,
     }
     const res = await authApi.register(payload)
@@ -473,5 +532,37 @@ html.dark .login-page {
   .login-page {
     padding: 16px;
   }
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+}
+
+.code-row .form-input {
+  flex: 1;
+}
+
+.get-code-btn {
+  flex-shrink: 0;
+  padding: 0 14px;
+  border: 1.5px solid var(--mc-border);
+  border-radius: 12px;
+  background: var(--mc-bg-sunken);
+  color: var(--mc-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.2s, color 0.2s, opacity 0.2s;
+}
+
+.get-code-btn:hover:not(:disabled) {
+  border-color: var(--mc-primary);
+}
+
+.get-code-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 </style>
