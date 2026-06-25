@@ -62,7 +62,6 @@
                 <span class="employee-card__name">{{ agent.name }}</span>
               </span>
               <span class="employee-card__role">{{ employeeRole(agent) }}</span>
-              <span class="employee-card__goal">{{ employeeGoal(agent) }}</span>
               <span class="employee-card__desc">{{ employeeDesc(agent) }}</span>
               <span class="employee-card__cta">{{ t('home.market.startChat') }}</span>
             </button>
@@ -260,10 +259,6 @@ function shortText(value: string | undefined, limit: number, fallback = '') {
 function employeeRole(agent: Agent) {
   const firstTag = (agent.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean)[0]
   return shortText(firstTag, 10, t('home.market.defaultRole'))
-}
-
-function employeeGoal(agent: Agent) {
-  return shortText(agent.systemPrompt || agent.description, 14, t('home.market.defaultGoal'))
 }
 
 function employeeDesc(agent: Agent) {
@@ -596,13 +591,6 @@ function calcDuration(run: any) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.employee-card__goal {
-  color: var(--mc-text-primary);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.45;
 }
 
 .employee-card__desc {
