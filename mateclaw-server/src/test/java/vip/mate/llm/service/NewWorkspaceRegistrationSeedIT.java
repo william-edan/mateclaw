@@ -162,7 +162,7 @@ class NewWorkspaceRegistrationSeedIT {
     }
 
     @Test
-    @DisplayName("新工作区配额行：dashscope-default=200万, deepseek-default=300万")
+    @DisplayName("新工作区配额行：dashscope-default=100万, deepseek-default=0(无免费额度)")
     void quotaRowsSeededWithRequestedLimits() {
         Long ds = jdbcTemplate.queryForObject(
                 "SELECT limit_tokens FROM mate_provider_token_quota WHERE workspace_id = ? AND provider_id = 'dashscope-default'",
@@ -170,8 +170,8 @@ class NewWorkspaceRegistrationSeedIT {
         Long de = jdbcTemplate.queryForObject(
                 "SELECT limit_tokens FROM mate_provider_token_quota WHERE workspace_id = ? AND provider_id = 'deepseek-default'",
                 Long.class, NEW_WS);
-        assertEquals(2_000_000L, ds);
-        assertEquals(3_000_000L, de);
+        assertEquals(1_000_000L, ds);
+        assertEquals(0L, de);
     }
 
     @Test

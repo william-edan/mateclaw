@@ -36,17 +36,17 @@ class ProviderTokenQuotaServiceTest {
         ProviderTokenQuotaEntity dashscope = captor.getAllValues().get(0);
         assertEquals(20L, dashscope.getWorkspaceId());
         assertEquals("dashscope-default", dashscope.getProviderId());
-        assertEquals(2_000_000L, dashscope.getLimitTokens());
+        assertEquals(1_000_000L, dashscope.getLimitTokens());
         assertEquals(0L, dashscope.getUsedTokens());
 
         ProviderTokenQuotaEntity deepseek = captor.getAllValues().get(1);
         assertEquals("deepseek-default", deepseek.getProviderId());
-        assertEquals(3_000_000L, deepseek.getLimitTokens());
+        assertEquals(0L, deepseek.getLimitTokens());
     }
 
     @Test
     void assertNotExhaustedRejectsManagedDefaultProviderAtLimit() {
-        ProviderTokenQuotaEntity quota = quota("dashscope-default", 2_000_000L, 2_000_000L);
+        ProviderTokenQuotaEntity quota = quota("dashscope-default", 1_000_000L, 1_000_000L);
         when(mapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(quota);
 
         MateClawException ex = assertThrows(MateClawException.class,
@@ -58,7 +58,7 @@ class ProviderTokenQuotaServiceTest {
 
     @Test
     void recordUsageAddsPromptAndCompletionTokens() {
-        ProviderTokenQuotaEntity quota = quota("deepseek-default", 3_000_000L, 12L);
+        ProviderTokenQuotaEntity quota = quota("deepseek-default", 0L, 12L);
         when(mapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(quota);
 
         service.recordUsage(20L, "deepseek-default", 30, 40);
@@ -102,7 +102,7 @@ class ProviderTokenQuotaServiceTest {
         var captor = org.mockito.ArgumentCaptor.forClass(ProviderTokenQuotaEntity.class);
         verify(mapper).insert(captor.capture());
         assertEquals("dashscope-default", captor.getValue().getProviderId());
-        assertEquals(2_000_000L, captor.getValue().getLimitTokens());
+        assertEquals(1_000_000L, captor.getValue().getLimitTokens());
         verify(mapper).incrementUsedTokens(20L, "dashscope-default", 300L);
     }
 
