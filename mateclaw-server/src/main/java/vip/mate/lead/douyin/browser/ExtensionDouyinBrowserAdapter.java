@@ -189,19 +189,26 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
     // followAndDraft 时若该 dmKey 已在守卫集合中,直接走"跳过点发、只强制复核"路径,确保续跑绝不重复发私信。
     // 用并发安全集合:@Component 单例下可能有多个获客 run 并发(各自虚拟线程)。dmKey = hash(作者标识+草稿文本),
     // 与 followAndDraft 内既有口径完全一致;不同 run 对"同一作者+同一草稿"会共享同一 dmKey(与现状同质,见 notes)。
-    private final Set<String> clickedDmKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    // 守卫集合上限:单例长期运行下避免无限增长。守卫的有效窗口仅为"同一步 withReconnect 的数次重跑"
-    // (秒级),故达到上限直接清空是安全的——极端情况下最多丢失"恰好正在重跑中的某条 dmKey"守卫,
-    // 概率极低且仅退化为现状(单次调用内仍有本地 sentDmKeys 防重发)。
+    // 守卫集合上限:单例长期运行下避免无限增长。
     private static final int CLICKED_DM_KEYS_MAX = 4_096;
+    // 有界 LRU(按插入序淘汰最旧):改自早期"满即整体 clear"。整体清空会在极小概率下连带清掉
+    // "恰好正处于 withReconnect 重跑窗口(秒级)里"的新近 dmKey,理论上可致重复发私信;改成达到上限
+    // 只淘汰最久之前插入的一条(它早已过了重跑窗口),绝不淘汰新近条目,零残留风险。
+    // LinkedHashMap(removeEldestEntry) 非线程安全,用 synchronizedSet 兜底(@Component 单例下多 run 并发,
+    // 各自虚拟线程);仅 add/contains 两种用法,粗粒度锁开销可忽略。
+    private final Set<String> clickedDmKeys = java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(
+                    new java.util.LinkedHashMap<String, Boolean>(512, 0.75f, false) {
+                        @Override
+                        protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+                            return size() > CLICKED_DM_KEYS_MAX;
+                        }
+                    }));
 
-    /** 记录"已点过发送"的 dmKey 到实例级守卫,带上限清理,防止单例长期运行下集合无限增长。 */
+    /** 记录"已点过发送"的 dmKey 到实例级守卫;有界 LRU 自动淘汰最旧,无需手动清空。 */
     private void recordClickedDmKey(String dmKey) {
         if (dmKey == null) {
             return;
-        }
-        if (clickedDmKeys.size() >= CLICKED_DM_KEYS_MAX) {
-            clickedDmKeys.clear();
         }
         clickedDmKeys.add(dmKey);
     }
@@ -3047,9 +3054,14 @@ public class ExtensionDouyinBrowserAdapter implements DouyinBrowserAdapter {
         }
     }
 
+    /** drain 用专用短 deadline:正常读扩展侧已捕获缓冲 sub-second 返回,把"取消恰卡在 drain RPC"
+     *  的响应窗口从 15s+ 压到 ~3s;偶发截断也不丢评论(缓冲带 TTL,下次 drain 重读)。 */
+    private static final long COMMENT_DRAIN_DEADLINE_MS = 3_000L;
+
     private ExtractedComments drainNetworkComments(String videoKey, @Nullable NetworkCollectionState network) {
         try {
-            String result = browser.service_douyin_comment_network_main("drain", null, null, null);
+            String result = browser.service_douyin_comment_network_main(
+                    "drain", null, null, null, COMMENT_DRAIN_DEADLINE_MS);
             logCommentNetworkAction("drain", result);
             JsonNode root = parse(result);
             if (!root.path("ok").asBoolean(false)) {

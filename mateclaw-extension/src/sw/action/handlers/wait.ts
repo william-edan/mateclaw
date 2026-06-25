@@ -51,15 +51,22 @@ function success(start: number, clock: () => number) {
 async function withDeadline<T>(
   work: Promise<T>,
   deadlineMs: number,
-  sleep: (ms: number) => Promise<void>,
+  _sleep: (ms: number) => Promise<void>,
 ): Promise<T> {
   const timeoutMs = assertNonNegativeNumber(deadlineMs, 'deadline_ms')
-  return Promise.race([
-    work,
-    sleep(timeoutMs).then(() => {
-      throw actionFailure('TIMEOUT_PAGE_LOAD', `wait timed out after ${timeoutMs}ms`, true)
-    }),
-  ])
+  // 用本地可取消定时器替代 sleep(timeoutMs).then(throw):work(导航事件)先赢时,在 finally
+  // clearTimeout 清掉超时计时器,避免底层 timer 无人清理、一直挂到 deadline 才空跑触发并向已 settle
+  // 的 race 抛出(EX-H5)。镜像 ActionExecutor.runWithDeadline 的写法。
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(actionFailure('TIMEOUT_PAGE_LOAD', `wait timed out after ${timeoutMs}ms`, true)),
+      timeoutMs,
+    )
+  })
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
 }
 
 function waitForMainFrameEvent(

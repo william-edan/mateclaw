@@ -712,7 +712,13 @@ public class AgentService {
     private BaseAgent getOrBuildAgent(Long agentId, String modelProvider, String modelName) {
         boolean pinned = modelProvider != null && !modelProvider.isBlank()
                 && modelName != null && !modelName.isBlank();
-        String modelKey = pinned ? modelProvider + "::" + modelName : "";
+        // 缓存键加入运行工作区维度（V149）。build() 在构图时会把工作区记忆(MEMORY.md
+        // 等)、模型/Provider 凭证、文件沙箱 basePath 一并烘焙进实例；内置(全局)Agent
+        // 可被多个工作区调用，若按 agentId 单维缓存，首个调用方工作区的记忆/凭证会被
+        // 固化并发给所有人——跨租户串台。按工作区分桶后每个工作区各自 build。
+        // 对非内置 Agent，currentWorkspaceId 恒等于其自身工作区，键值稳定、行为不变。
+        long ws = ModelWorkspaceResolver.currentWorkspaceId();
+        String modelKey = "ws" + ws + "::" + (pinned ? modelProvider + "::" + modelName : "");
         return agentInstances
                 .computeIfAbsent(agentId, id -> new ConcurrentHashMap<>())
                 .computeIfAbsent(modelKey, key -> {

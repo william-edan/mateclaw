@@ -144,6 +144,27 @@ async function douyinUiInPage(op: string, label: string): Promise<DouyinUiResult
       return hasList()
     }
     if (hasList()) return { ok: true, op, detail: 'already_open' }
+    // 侧栏可能停在非评论 tab(详情 / TA的作品 —— 常见于前序点过作者头像/昵称),此时评论列表
+    // 不可见,而单点视频评论图标未必把面板切回评论 tab,导致后续检测/采集落到「TA的作品」九宫格。
+    // 先在侧栏找「评论」tab 点一下切回评论,再等列表;找不到 tab(面板未展开)再走评论图标路径。
+    const findCommentTab = (): HTMLElement | null => {
+      const cands = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"], span, div'))
+        .filter(vis)
+        .filter(el => {
+          const txt = (el.textContent || '').replace(/\s+/g, '')
+          // 仅匹配「评论」或「评论58」「评论1.2万」这类短 tab 文本;排除「全部评论」「评论区」与输入框占位
+          if (!/^评论(?:[\d.,]+万?|万)?$/u.test(txt)) return false
+          const r = el.getBoundingClientRect()
+          return r.width > 8 && r.width < 160 && r.height > 8 && r.height < 60
+        })
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+      return cands[0] || null
+    }
+    const commentTab = findCommentTab()
+    if (commentTab) {
+      click(commentTab)
+      if (await waitForList(20)) return { ok: true, op, detail: 'opened_comment_tab' }
+    }
     // 【慢环境】评论图标本身也可能懒加载晚出,先等它出现再点(最多 ~6s),避免一上来就 comment_icon_not_found
     const findBtn = (): HTMLElement | null =>
       document.querySelector<HTMLElement>('[data-e2e="feed-comment-icon"],[data-e2e="comment-icon"],[data-e2e="video-comment"],[aria-label*="评论"]')

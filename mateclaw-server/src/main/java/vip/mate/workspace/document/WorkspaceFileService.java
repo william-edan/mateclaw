@@ -5,6 +5,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.repository.AgentMapper;
+import vip.mate.llm.service.ModelWorkspaceResolver;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 import vip.mate.workspace.document.repository.WorkspaceFileMapper;
 
@@ -31,6 +34,29 @@ import java.util.stream.Collectors;
 public class WorkspaceFileService {
 
     private final WorkspaceFileMapper fileMapper;
+    /** 用于解析 agent 的隔离工作区（内置 vs 非内置），叶依赖不成环。 */
+    private final AgentMapper agentMapper;
+
+    /**
+     * 解析该 agent 的工作区文件应隔离到哪个工作区（V149）。
+     * <p>
+     * 非内置 Agent 只属于单一工作区，始终用其自身 workspace —— 不依赖运行时
+     * {@link ModelWorkspaceResolver}，使异步 dream/archive 等 resolver 未设置的
+     * 路径也不会把非内置 Agent 的记忆误落到默认工作区（零回归）。
+     * <p>
+     * 内置(全局)Agent 可被任意工作区调用，用当前运行工作区作为隔离键，使各工作区
+     * 与同一内置数字员工的记忆互不串台。
+     */
+    private long effectiveWorkspaceId(Long agentId) {
+        if (agentId != null) {
+            AgentEntity agent = agentMapper.selectById(agentId);
+            if (agent != null && !Boolean.TRUE.equals(agent.getBuiltin())
+                    && agent.getWorkspaceId() != null) {
+                return agent.getWorkspaceId();
+            }
+        }
+        return ModelWorkspaceResolver.currentWorkspaceId();
+    }
 
     /**
      * 列出 Agent 的所有工作区文件（按排序 + 文件名排列）
@@ -39,6 +65,7 @@ public class WorkspaceFileService {
         List<WorkspaceFileEntity> files = fileMapper.selectList(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
                         .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId))
                         .orderByAsc(WorkspaceFileEntity::getSortOrder)
                         .orderByAsc(WorkspaceFileEntity::getFilename));
         // 返回列表时不包含 content（减少传输）
@@ -50,9 +77,14 @@ public class WorkspaceFileService {
      * 读取单个文件（含内容）
      */
     public WorkspaceFileEntity getFile(Long agentId, String filename) {
+        return getFile(agentId, effectiveWorkspaceId(agentId), filename);
+    }
+
+    private WorkspaceFileEntity getFile(Long agentId, long workspaceId, String filename) {
         return fileMapper.selectOne(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
                         .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, workspaceId)
                         .eq(WorkspaceFileEntity::getFilename, filename));
     }
 
@@ -61,7 +93,8 @@ public class WorkspaceFileService {
      */
     @Transactional
     public WorkspaceFileEntity saveFile(Long agentId, String filename, String content) {
-        WorkspaceFileEntity existing = getFile(agentId, filename);
+        long ws = effectiveWorkspaceId(agentId);
+        WorkspaceFileEntity existing = getFile(agentId, ws, filename);
         long size = content != null ? content.getBytes(StandardCharsets.UTF_8).length : 0;
 
         if (existing != null) {
@@ -72,6 +105,7 @@ public class WorkspaceFileService {
         } else {
             WorkspaceFileEntity entity = new WorkspaceFileEntity();
             entity.setAgentId(agentId);
+            entity.setWorkspaceId(ws);
             entity.setFilename(filename);
             entity.setContent(content);
             entity.setFileSize(size);
@@ -90,6 +124,7 @@ public class WorkspaceFileService {
         fileMapper.delete(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
                         .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId))
                         .eq(WorkspaceFileEntity::getFilename, filename));
     }
 
@@ -100,6 +135,7 @@ public class WorkspaceFileService {
         return fileMapper.selectList(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
                         .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId))
                         .eq(WorkspaceFileEntity::getEnabled, true)
                         .orderByAsc(WorkspaceFileEntity::getSortOrder))
                 .stream()
@@ -117,7 +153,8 @@ public class WorkspaceFileService {
     public void setPromptFiles(Long agentId, List<String> filenames) {
         List<WorkspaceFileEntity> allFiles = fileMapper.selectList(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
-                        .eq(WorkspaceFileEntity::getAgentId, agentId));
+                        .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId)));
 
         for (WorkspaceFileEntity file : allFiles) {
             int index = filenames.indexOf(file.getFilename());
@@ -215,6 +252,7 @@ public class WorkspaceFileService {
 
         LambdaQueryWrapper<WorkspaceFileEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(WorkspaceFileEntity::getAgentId, agentId);
+        wrapper.eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId));
 
         if (filenamePrefixes != null && !filenamePrefixes.isEmpty()) {
             // Group prefix conditions inside a single AND-bracketed OR chain
@@ -436,6 +474,7 @@ public class WorkspaceFileService {
         List<WorkspaceFileEntity> enabledFiles = fileMapper.selectList(
                 new LambdaQueryWrapper<WorkspaceFileEntity>()
                         .eq(WorkspaceFileEntity::getAgentId, agentId)
+                        .eq(WorkspaceFileEntity::getWorkspaceId, effectiveWorkspaceId(agentId))
                         .eq(WorkspaceFileEntity::getEnabled, true)
                         .orderByAsc(WorkspaceFileEntity::getSortOrder));
 

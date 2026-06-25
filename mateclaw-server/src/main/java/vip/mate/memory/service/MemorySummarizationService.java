@@ -16,7 +16,9 @@ import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.memory.MemoryProperties;
 import vip.mate.workspace.conversation.ConversationService;
+import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageEntity;
+import vip.mate.workspace.core.WorkspaceContextHolder;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -73,10 +75,33 @@ public class MemorySummarizationService {
         }
 
         try {
-            doAnalyzeAndUpdate(agentId, conversationId);
+            // 本方法由 @Async 的 PostConversationMemoryListener 触发，ModelWorkspaceResolver
+            // 的 ThreadLocal 不跨线程，会回落到默认工作区 1。对内置(全局)Agent，记忆必须
+            // 按调用方工作区隔离写入，因此从会话解析真实工作区并显式绑定，使
+            // WorkspaceFileService.effectiveWorkspaceId() 及摘要用的默认模型解析都落到正确工作区。
+            // 非内置 Agent 的隔离键取其自身工作区，绑定与否都正确（此处一并修正其摘要模型工作区）。
+            Long convWorkspaceId = resolveConversationWorkspace(conversationId);
+            if (convWorkspaceId != null) {
+                WorkspaceContextHolder.runWith(convWorkspaceId,
+                        () -> doAnalyzeAndUpdate(agentId, conversationId));
+            } else {
+                doAnalyzeAndUpdate(agentId, conversationId);
+            }
             lastRunTimes.put(agentId, Instant.now());
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 从会话记录解析其所属工作区（= 发起对话用户的运行工作区）。失败返回 null。 */
+    private Long resolveConversationWorkspace(String conversationId) {
+        try {
+            ConversationEntity conv = conversationService.findByConversationId(conversationId);
+            return conv != null ? conv.getWorkspaceId() : null;
+        } catch (Exception e) {
+            log.debug("[Memory] resolve conversation workspace failed for {}: {}",
+                    conversationId, e.getMessage());
+            return null;
         }
     }
 

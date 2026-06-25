@@ -1075,6 +1075,21 @@ public class ExtensionBrowserTool {
             Integer maxPages,
             Integer maxBodyBytes,
             Integer ttlMs) {
+        return service_douyin_comment_network_main(op, maxPages, maxBodyBytes, ttlMs, DEFAULT_DEADLINE_MS);
+    }
+
+    /**
+     * 同上,可指定 deadlineMs。drain 这类"读扩展侧已捕获缓冲"的幂等只读 op 正常 sub-second 返回,
+     * 给它更短 deadline(见 ExtensionDouyinBrowserAdapter.COMMENT_DRAIN_DEADLINE_MS)可把"取消时恰
+     * 卡在 drain RPC"的响应窗口从 15s+ 压到秒级,而不走 interrupt(NIO 中断会关 H2 FileChannel)。
+     * 即便偶发 deadline 截断,扩展侧捕获缓冲带 TTL 仍在,下次 drain 可重读,不丢评论。
+     */
+    public String service_douyin_comment_network_main(
+            String op,
+            Integer maxPages,
+            Integer maxBodyBytes,
+            Integer ttlMs,
+            long deadlineMs) {
         BrowserSession session = resolveSession();
         if (session == null) return noSession();
 
@@ -1083,7 +1098,7 @@ public class ExtensionBrowserTool {
                 new TabRef.Main(),
                 ActionKind.DOUYIN_COMMENT_NETWORK,
                 new DouyinCommentNetworkPayload(op, maxPages, maxBodyBytes, ttlMs),
-                DEFAULT_DEADLINE_MS);
+                deadlineMs);
         return executePlan(session, List.of(req));
     }
 

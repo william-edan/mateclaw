@@ -20,6 +20,12 @@ public class WorkspaceFileEntity {
     /** 关联的 Agent ID */
     private Long agentId;
 
+    /**
+     * 隔离工作区 ID（V149）。非内置 Agent = 该 Agent 自身工作区；内置(全局)Agent
+     * = 调用方运行工作区，使内置数字员工的记忆按工作区各存各的、不跨租户串台。
+     */
+    private Long workspaceId;
+
     /** 文件名（如 AGENTS.md、SOUL.md） */
     private String filename;
 
