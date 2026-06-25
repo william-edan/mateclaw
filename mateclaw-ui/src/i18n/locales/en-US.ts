@@ -2783,6 +2783,7 @@ export default {
       phone: 'Phone',
       confirmPassword: 'Confirm password',
       nickname: 'Nickname',
+      code: 'Verification code',
     },
     placeholders: {
       username: 'Enter username',
@@ -2790,6 +2791,7 @@ export default {
       phone: 'Enter phone number',
       confirmPassword: 'Re-enter password',
       nickname: 'Nickname (optional)',
+      code: 'SMS code',
     },
     modeLabel: 'Authentication mode',
     signIn: 'Sign In',
@@ -2799,6 +2801,9 @@ export default {
     registerFailed: 'Registration failed. Please check your phone and password.',
     passwordTooShort: 'Password must be at least 6 characters',
     passwordMismatch: 'The two passwords do not match',
+    getCode: 'Get code',
+    resendCountdown: 'Resend in {n}s',
+    codeRequired: 'Please enter the code',
   },
   enterprise: {
     eyebrow: 'Enterprise',

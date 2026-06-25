@@ -2795,6 +2795,7 @@ export default {
       phone: '手机号',
       confirmPassword: '确认密码',
       nickname: '昵称',
+      code: '验证码',
     },
     placeholders: {
       username: '请输入用户名',
@@ -2802,6 +2803,7 @@ export default {
       phone: '请输入手机号',
       confirmPassword: '请再次输入密码',
       nickname: '昵称（可选）',
+      code: '短信验证码',
     },
     modeLabel: '认证方式',
     signIn: '登录',
@@ -2811,6 +2813,9 @@ export default {
     registerFailed: '注册失败，请检查手机号和密码',
     passwordTooShort: '密码长度至少6位',
     passwordMismatch: '两次输入的密码不一致',
+    getCode: '获取验证码',
+    resendCountdown: '{n}s 后重发',
+    codeRequired: '请输入验证码',
   },
   enterprise: {
     eyebrow: '企业场景',
