@@ -50,7 +50,6 @@ public class AuthController {
         return R.ok(authService.register(request));
     }
 
-    @Deprecated // 注册已不再需要验证码，保留以便日后做"可选验证码"开关。
     @Operation(summary = "发送注册验证码")
     @PostMapping("/send-register-code")
     public R<Void> sendRegisterCode(@RequestBody SendCodeRequest request, HttpServletRequest httpRequest) {
