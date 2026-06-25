@@ -129,6 +129,7 @@ mateclaw:
     expiration: 86400000
   sms:
     mock: ${SMS_MOCK:false}                         # fail-safe；生产强制 false（启动校验）
+    provider: ${SMS_PROVIDER:aliyun}                # 短信服务商：aliyun | tencent（启动时确定）
     universal-code: ${SMS_UNIVERSAL_CODE:888888}    # 仅 mock=true 生效
     code-ttl-seconds: 300
     resend-interval-seconds: 60
@@ -143,6 +144,14 @@ mateclaw:
       endpoint: dysmsapi.aliyuncs.com
       sign-name: ${ALIYUN_SMS_SIGN_NAME:迪伍科技}
       template-code: ${ALIYUN_SMS_TEMPLATE_CODE:SMS_508735089}
+    tencent:
+      secret-id: ${TENCENT_SMS_SECRET_ID:}                  # 仅环境变量，禁止入库
+      secret-key: ${TENCENT_SMS_SECRET_KEY:}                # 仅环境变量，禁止入库
+      sdk-app-id: ${TENCENT_SMS_SDK_APP_ID:}
+      sign-name: ${TENCENT_SMS_SIGN_NAME:}
+      template-id: ${TENCENT_SMS_TEMPLATE_ID:}
+      region: ${TENCENT_SMS_REGION:ap-guangzhou}
+      default-country-code: ${TENCENT_SMS_CC:+86}
   # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
   mcp:

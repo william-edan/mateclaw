@@ -16,6 +16,7 @@ import vip.mate.auth.model.LoginResponse;
 import vip.mate.auth.model.RegisterRequest;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.repository.UserMapper;
+import vip.mate.auth.sms.VerificationCodeService;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
@@ -29,8 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -50,6 +53,9 @@ class AuthServiceRegisterTest {
 
     @Mock
     private AccountEntitlementService entitlementService;
+
+    @Mock
+    private VerificationCodeService verificationCodeService;
 
     @InjectMocks
     private AuthService authService;
@@ -103,6 +109,7 @@ class AuthServiceRegisterTest {
         verify(workspaceService).create(workspaceCaptor.capture(), eq(99L));
         WorkspaceEntity workspace = workspaceCaptor.getValue();
         assertTrue(workspace.getName().contains("13800138000"));
+        verify(verificationCodeService).verifyAndConsume("13800138000", "123456");
     }
 
     @Test
@@ -139,7 +146,7 @@ class AuthServiceRegisterTest {
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
         assertEquals("err.auth.invalid_phone", ex.getMsgKey());
-        verifyNoInteractions(userMapper, passwordEncoder, workspaceService);
+        verifyNoInteractions(userMapper, passwordEncoder, workspaceService, verificationCodeService);
     }
 
     @Test
@@ -171,7 +178,7 @@ class AuthServiceRegisterTest {
     }
 
     @Test
-    void registerRejectsDuplicatePhone() {
+    void registerRejectsDuplicatePhoneWithoutConsumingCode() {
         RegisterRequest request = validRequest();
         when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1L);
 
@@ -179,6 +186,7 @@ class AuthServiceRegisterTest {
 
         assertEquals("err.auth.username_exists", ex.getMsgKey());
         verify(userMapper, never()).insert(any(UserEntity.class));
+        verify(verificationCodeService, never()).verifyAndConsume(anyString(), anyString());
         verifyNoInteractions(workspaceService);
     }
 
@@ -192,6 +200,8 @@ class AuthServiceRegisterTest {
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
         assertEquals("err.auth.username_exists", ex.getMsgKey());
+        // 竞态：唯一性查询放行后 insert 才撞到唯一约束，此时验证码已被消费——属已接受的边界。
+        verify(verificationCodeService).verifyAndConsume("13800138000", "123456");
         verifyNoInteractions(workspaceService);
     }
 
@@ -203,8 +213,7 @@ class AuthServiceRegisterTest {
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
         assertEquals("err.auth.password_required", ex.getMsgKey());
-        verify(userMapper, never()).insert(any(UserEntity.class));
-        verifyNoInteractions(workspaceService);
+        verifyNoInteractions(userMapper, passwordEncoder, workspaceService, verificationCodeService);
     }
 
     @Test
@@ -215,6 +224,30 @@ class AuthServiceRegisterTest {
         MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
 
         assertEquals("err.auth.password_too_short", ex.getMsgKey());
+        verifyNoInteractions(userMapper, passwordEncoder, workspaceService, verificationCodeService);
+    }
+
+    @Test
+    void registerRejectsMissingCode() {
+        RegisterRequest request = validRequest();
+        request.setCode("  ");
+
+        MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
+
+        assertEquals("err.auth.verification_code_required", ex.getMsgKey());
+        verifyNoInteractions(userMapper, passwordEncoder, workspaceService, verificationCodeService);
+    }
+
+    @Test
+    void registerRejectsWrongCode() {
+        RegisterRequest request = validRequest();
+        when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+        doThrow(new MateClawException("err.auth.invalid_verification_code", 400, "验证码错误"))
+                .when(verificationCodeService).verifyAndConsume("13800138000", "123456");
+
+        MateClawException ex = assertThrows(MateClawException.class, () -> authService.register(request));
+
+        assertEquals("err.auth.invalid_verification_code", ex.getMsgKey());
         verify(userMapper, never()).insert(any(UserEntity.class));
         verifyNoInteractions(workspaceService);
     }
@@ -258,6 +291,7 @@ class AuthServiceRegisterTest {
         RegisterRequest request = new RegisterRequest();
         request.setPhone("13800138000");
         request.setPassword("pass1234");
+        request.setCode("123456");
         return request;
     }
 }

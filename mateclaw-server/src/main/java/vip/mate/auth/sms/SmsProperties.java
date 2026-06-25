@@ -39,7 +39,12 @@ public class SmsProperties {
     /** 全平台滚动 60s 发送上限（账单熔断）。 */
     private int globalLimitPerMinute = 200;
 
+    /** 短信服务商：aliyun | tencent。启动时确定，切换需重启。 */
+    private String provider = "aliyun";
+
     private Aliyun aliyun = new Aliyun();
+
+    private Tencent tencent = new Tencent();
 
     @Data
     public static class Aliyun {
@@ -50,5 +55,21 @@ public class SmsProperties {
         private String endpoint = "dysmsapi.aliyuncs.com";
         private String signName = "迪伍科技";
         private String templateCode = "SMS_508735089";
+    }
+
+    @Data
+    public static class Tencent {
+        /** 仅环境变量注入，禁止入库。 */
+        private String secretId = "";
+        /** 仅环境变量注入，禁止入库。 */
+        private String secretKey = "";
+        /** 短信应用 SdkAppId（控制台），如 1400xxxxxx。 */
+        private String sdkAppId = "";
+        private String signName = "";
+        private String templateId = "";
+        /** 地域，默认广州。 */
+        private String region = "ap-guangzhou";
+        /** 裸号码默认补的国家码（E.164）。 */
+        private String defaultCountryCode = "+86";
     }
 }
