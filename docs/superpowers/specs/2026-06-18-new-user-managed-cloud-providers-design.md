@@ -132,3 +132,17 @@ DEFAULT_LIMITS.put("deepseek-default", 3_000_000L);
 - 回退 `seedWorkspaceModels` 的白名单过滤——改为复制全部 provider + 全量 `copyModelsToWorkspace`（移除按 provider 过滤的重载，回退原 2 参方法）。
 - `REGISTRATION_CLOUD_PROVIDER_IDS = {dashscope-default, deepseek-default}` 改用途为"注册时**默认启用**集"；`applyRegistrationDefaultProviderKey` 只对该集合启用+注入平台 key，其余一律 `enabled=false`（含受管的 `dashscope-compat-default`）。
 - 测试：`ModelProviderServiceWorkspaceIsolationTest` 改为断言"全种子化、仅两个默认版启用、其余禁用、2 参全量复制"；端到端 IT 重命名为 `NewWorkspaceRegistrationSeedIT`，断言"全部云端种子化 / 仅两个启用 / compat-default 与本地种子但禁用 / 全量模型复制 / 默认 chat+embedding 在 dashscope-default / 配额 2M·3M / 管理员豁免"；删除 `ModelConfigServiceCopyModelsTest`（过滤重载已移除）。
+
+## 10. 修订 (2026-06-25)：只启用 dashscope-default + 精选默认模型
+
+用户进一步收紧注册默认：
+
+- **provider**：注册时**只默认启用 `dashscope-default` 一个**（`deepseek-default` 与其余一样：种子但默认禁用）。`REGISTRATION_CLOUD_PROVIDER_IDS` 收窄为 `{dashscope-default}`。
+- **模型**：`dashscope-default` 下**只启用并设为默认**两个模型——chat 用现有 **`deepseek-v3.2`**（DashScope 托管，V145 已镜像到 dashscope-default）、向量用 **`text-embedding-v3`**；其余 qwen 等同 provider 模型一律禁用，模型下拉只看到这两个。
+- **配额不变**：仍只对 `dashscope-default`(2M)/`deepseek-default`(3M) 建配额行；deepseek-default 虽默认禁用，配额行保留（用户手动启用后即生效）。
+
+**实现差异**（相对 §9）：
+- `seedWorkspaceModels` 在 `copyModelsToWorkspace` 之后新增一步 `modelConfigService.applyRegistrationDefaultModels(workspaceId)`。
+- 新增 `ModelConfigService.applyRegistrationDefaultModels(workspaceId)`：对新工作区 `dashscope-default` 下的模型，只启用并默认 `deepseek-v3.2`(chat) + `text-embedding-v3`(embedding)，其余禁用；目标 chat 模型不存在时跳过（防御，避免无默认 chat）；默认工作区(id=1)豁免。常量 `REG_DEFAULT_PROVIDER/CHAT_MODEL/EMBEDDING_MODEL`。
+- 测试：种子单测改为"仅 dashscope-default 启用 + 验证 applyRegistrationDefaultModels 被调用"；新增 `ModelConfigServiceRegistrationDefaultsTest`；IT 增改断言"仅 dashscope-default 启用 / 其下只 deepseek-v3.2+text-embedding-v3 启用 / 默认 chat=deepseek-v3.2"。
+- **数据备注**：`data-mysql-zh.sql`（MySQL 运行期）与 `data-zh.sql`（H2 测试）模型集不完全同步——"DeepSeek V4 Pro"(`deepseek-v4-pro`) 仅存在于 `data-zh/en` 的原版 `deepseek` provider 下、且不在 MySQL 种子里，故本次未采用，改用两份种子都有、且已在 dashscope-default 下的 `deepseek-v3.2`。
