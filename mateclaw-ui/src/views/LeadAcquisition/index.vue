@@ -21,9 +21,28 @@
               <el-icon><ChatDotRound /></el-icon>
               <span>用对话启动</span>
             </button>
-            <button class="ghost-button" type="button" @click="openBrowserPanel">
-              <el-icon><Connection /></el-icon>
+            <a
+              class="ghost-button ghost-button--soft"
+              href="/downloads/mateclaw-extension.zip"
+              download="mateclaw-extension.zip"
+            >
+              <el-icon><Download /></el-icon>
+              <span>下载插件</span>
+            </a>
+            <button class="ghost-button ghost-button--soft" type="button" @click="openHelpPanel">
+              <el-icon><QuestionFilled /></el-icon>
+              <span>使用说明</span>
+            </button>
+            <button
+              class="ghost-button conn-button"
+              :class="browserConnected ? 'is-connected' : 'is-disconnected'"
+              type="button"
+              :title="browserConnected ? '浏览器扩展已连接' : '浏览器扩展未连接，点击配对'"
+              @click="openBrowserPanel"
+            >
+              <span class="conn-dot" aria-hidden="true"></span>
               <span>浏览器连接</span>
+              <span class="conn-state">{{ browserConnected ? '已连接' : '未连接' }}</span>
             </button>
           </div>
         </header>
@@ -56,6 +75,60 @@
             </div>
             <div class="browser-pairing-body">
               <BrowserPairingPanel embedded compact />
+            </div>
+          </section>
+        </Transition>
+
+        <Transition name="browser-scrim">
+          <div
+            v-if="helpPanelOpen"
+            class="browser-pairing-scrim"
+            aria-hidden="true"
+            @click="closeHelpPanel"
+          ></div>
+        </Transition>
+        <Transition name="browser-panel">
+          <section
+            v-if="helpPanelOpen"
+            ref="helpPanelRef"
+            class="browser-pairing-popover help-popover"
+            role="dialog"
+            aria-modal="true"
+            aria-label="使用说明"
+            tabindex="-1"
+            @keydown.esc="closeHelpPanel"
+          >
+            <div class="browser-pairing-popover__head">
+              <div>
+                <h2>使用说明</h2>
+                <p>安装插件并连接浏览器</p>
+              </div>
+              <button class="text-button" type="button" @click="closeHelpPanel">关闭</button>
+            </div>
+            <div class="browser-pairing-body help-body">
+              <ol class="help-steps">
+                <li>
+                  点右上角 <strong>下载插件</strong> 下载 <code>mateclaw-extension.zip</code>，
+                  解压到一个<strong>固定文件夹</strong>（之后别删除或移动）。
+                </li>
+                <li>
+                  打开 Chrome / Edge 浏览器，地址栏输入 <code>chrome://extensions</code>
+                  （Edge 为 <code>edge://extensions</code>），打开右上角的 <strong>开发者模式</strong>。
+                </li>
+                <li>
+                  点 <strong>「加载已解压的扩展程序」</strong>，选择刚解压出来的文件夹
+                  （文件夹里能看到 <code>manifest.json</code>）。
+                </li>
+                <li>
+                  装好后回到本页，点 <strong>浏览器连接</strong> 完成配对；当按钮显示
+                  <span class="conn-status is-on"><i class="conn-dot"></i>已连接</span>
+                  即可开始获客。
+                </li>
+              </ol>
+              <p class="help-note">
+                注意：请走「加载已解压的扩展程序」，<strong>不要</strong>用「打包扩展程序」生成的
+                <code>.crx</code> 或直接拖入 zip —— Chrome 会以「无法验证来源」为由禁用。
+              </p>
             </div>
           </section>
         </Transition>
@@ -462,9 +535,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Connection, Promotion, QuestionFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, Download, Promotion, QuestionFilled } from '@element-plus/icons-vue'
 import { leadAcquisitionApi } from '@/api'
 import type {
   DouyinLeadAcquisitionRunResponse,
@@ -535,6 +608,12 @@ const currentRun = ref<DouyinLeadAcquisitionRunResponse | null>(null)
 const launchError = ref('')
 const browserPanelRef = ref<HTMLElement | null>(null)
 const browserPanelOpen = ref(false)
+const helpPanelRef = ref<HTMLElement | null>(null)
+const helpPanelOpen = ref(false)
+// 浏览器扩展连接状态(头部「浏览器连接」按钮显示 已连接/未连接)。真相源:服务端是否有 extensionAttached
+// 的实时会话(与 submitDouyinRun 同口径)。轮询刷新,关连接面板时也刷新。
+const browserConnected = ref(false)
+let browserConnTimer: ReturnType<typeof setInterval> | null = null
 const recentRuns = ref<DouyinLeadRunListItem[]>([])
 const recentLoading = ref(false)
 const historyRunLoading = ref(false)
@@ -744,7 +823,25 @@ onMounted(() => {
   loadLeadPool()
   loadLeadStats()
   loadTemplates()
+  void refreshBrowserConnected()
+  browserConnTimer = setInterval(() => { void refreshBrowserConnected() }, 15000)
 })
+
+onUnmounted(() => {
+  if (browserConnTimer) {
+    clearInterval(browserConnTimer)
+    browserConnTimer = null
+  }
+})
+
+async function refreshBrowserConnected() {
+  try {
+    const r = await browserPairingApi.listSessions()
+    browserConnected.value = Array.isArray(r?.data) && r.data.some(s => s.extensionAttached !== false)
+  } catch {
+    browserConnected.value = false
+  }
+}
 
 function defaultForm(): LeadForm {
   const preset = matchPreset(DEFAULT_MATCH_PROFILE)
@@ -1116,6 +1213,17 @@ async function openBrowserPanel() {
 
 function closeBrowserPanel() {
   browserPanelOpen.value = false
+  void refreshBrowserConnected()
+}
+
+async function openHelpPanel() {
+  helpPanelOpen.value = true
+  await nextTick()
+  helpPanelRef.value?.focus({ preventScroll: true })
+}
+
+function closeHelpPanel() {
+  helpPanelOpen.value = false
 }
 
 function openRunDetail() {
@@ -1910,6 +2018,160 @@ function buildChatPrompt(): string {
   padding: 0 15px;
   border-radius: 6px;
   font-weight: 650;
+}
+
+/* 「下载插件」用 <a> 套 ghost-button,去链接下划线 */
+a.ghost-button {
+  text-decoration: none;
+}
+
+/* —— 头部工具栏精炼:更紧凑尺寸 + 视觉层级 —— */
+.lead-header__actions .ghost-button {
+  min-height: 36px;
+  padding: 0 13px;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lead-header__actions .ghost-button .el-icon {
+  font-size: 15px;
+  color: var(--mc-text-tertiary);
+  transition: color .18s ease;
+}
+
+.lead-header__actions .ghost-button:hover .el-icon {
+  color: var(--mc-primary);
+}
+
+/* 次要/引导按钮(下载插件、使用说明):弱化,无边框 + 浅底 */
+.ghost-button--soft {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mc-text-primary) 5%, var(--mc-bg-container));
+  color: var(--mc-text-secondary);
+}
+
+.ghost-button--soft:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mc-primary) 10%, var(--mc-bg-container));
+  color: var(--mc-primary);
+}
+
+/* 浏览器连接:整按钮按连接状态着色 + 状态点;标签中性,点+状态词用强调色 */
+.conn-button {
+  gap: 7px;
+  color: var(--mc-text-primary);
+}
+
+.conn-button .conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: var(--mc-text-tertiary);
+}
+
+.conn-button .conn-state {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.conn-button.is-connected {
+  border-color: color-mix(in srgb, var(--mc-success, #16a34a) 46%, var(--mc-border));
+  background: color-mix(in srgb, var(--mc-success, #16a34a) 10%, var(--mc-bg-container));
+}
+
+.conn-button.is-connected .conn-dot {
+  background: var(--mc-success, #16a34a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mc-success, #16a34a) 20%, transparent);
+}
+
+.conn-button.is-connected .conn-state {
+  color: var(--mc-success, #16a34a);
+}
+
+.conn-button.is-disconnected {
+  border-color: color-mix(in srgb, var(--mc-warning, #d97706) 42%, var(--mc-border));
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 9%, var(--mc-bg-container));
+}
+
+.conn-button.is-disconnected .conn-dot {
+  background: var(--mc-warning, #d97706);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mc-warning, #d97706) 18%, transparent);
+}
+
+.conn-button.is-disconnected .conn-state {
+  color: var(--mc-warning, #d97706);
+}
+
+.conn-button:hover {
+  border-color: color-mix(in srgb, var(--mc-primary) 40%, var(--mc-border));
+}
+
+/* 使用说明弹层(行内状态药丸 + 步骤) */
+.help-popover {
+  width: 520px;
+}
+
+.conn-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.conn-status .conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.conn-status.is-on {
+  color: var(--mc-success, #16a34a);
+  background: color-mix(in srgb, var(--mc-success, #16a34a) 12%, transparent);
+}
+
+.help-body {
+  color: var(--mc-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.help-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.help-steps li,
+.help-steps strong {
+  color: var(--mc-text-primary);
+}
+
+.help-body code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mc-text-primary) 8%, transparent);
+  font-size: 12px;
+}
+
+.help-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 36%, var(--mc-border));
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 8%, transparent);
+  color: var(--mc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .primary-button {
