@@ -131,7 +131,7 @@ mateclaw:
     secret: ${JWT_SECRET:MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production}
     expiration: 86400000
   sms:
-    mock: ${SMS_MOCK:false}                         # fail-safe；生产强制 false（启动校验）
+    mock: ${SMS_MOCK:true}                         # fail-safe；生产强制 false（启动校验）
     provider: ${SMS_PROVIDER:aliyun}                # 短信服务商：aliyun | tencent（启动时确定）
     universal-code: ${SMS_UNIVERSAL_CODE:888888}    # 仅 mock=true 生效
     code-ttl-seconds: 300
