@@ -534,8 +534,11 @@ html.dark .login-page {
   }
 }
 
-.code-row {
+/* 同时带 .input-wrap，用更高特异性覆盖其 align-items: center，
+   让获取验证码按钮拉伸到与输入框等高。 */
+.input-wrap.code-row {
   display: flex;
+  align-items: stretch;
   gap: 8px;
 }
 
@@ -545,7 +548,10 @@ html.dark .login-page {
 
 .get-code-btn {
   flex-shrink: 0;
-  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
   border: 1.5px solid var(--mc-border);
   border-radius: 12px;
   background: var(--mc-bg-sunken);
